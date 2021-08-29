@@ -1,4 +1,4 @@
-module Elm.Qualifiedness exposing
+module Elm.TypeInference.Qualifiedness exposing
     ( PossiblyQualified(..)
     , Qualified(..)
     )

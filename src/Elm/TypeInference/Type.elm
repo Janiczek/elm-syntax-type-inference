@@ -1,124 +1,70 @@
-module Elm.Type exposing
-    ( Type(..), TypeOrId(..), Id
-    , isParametric, mapType, mapTypeOrId
-    , varName, varName_, varNames, varNames_
-    , getId, getType
-    , combineType, combineTypeOrId
+module Elm.TypeInference.Type exposing
+    ( Id
+    , Type
+    , TypeOrId
+    , TypeOrId_(..)
+    , Type_(..)
+    , combineType
+    , combineTypeOrId
+    , getId
+    , getType
+    , isParametric
+    , mapType
+    , mapTypeOrId
+    , varName
+    , varName_
+    , varNames
+    , varNames_
     )
 
 {-| A data structure representing the Elm types.
 
-The main confusion point here is "what is the
-
-@docs Type, TypeOrId, Id
-@docs isParametric, mapType, mapTypeOrId
-@docs varName, varName_, varNames, varNames_
-@docs getId, getType
-@docs combineType, combineTypeOrId
+Module is not `Elm.Type` because that already exists in elm/project-metadata-utils.
 
 -}
 
 import Dict exposing (Dict)
 import Dict.ExtraExtra as Dict
+import Elm.TypeInference.Qualifiedness exposing (Qualified)
 import Elm.TypeInference.VarName exposing (VarName)
 import List.ExtraExtra as List
 import Result.Extra as Result
 import Transform
 
 
-{-| -}
-type TypeOrId qualifiedness
+type TypeOrId_ qualifiedness
     = Id Id
-    | Type (Type qualifiedness)
+    | Type (Type_ qualifiedness)
 
 
 type alias Id =
     Int
 
 
-{-| The `a` here is the same as the `qualifiedness` in `TypeOrId` above.
-(We're shortening it to `a` for convenience.) See `Elm.Data.Qualifiedness`!
+type alias Type =
+    Type_ Qualified
 
-An example:
 
-`MyModule.MyDataStructure` is a qualified type reference, so it will first be:
+type alias TypeOrId =
+    TypeOrId_ Qualified
 
-    UserDefinedType
-        { qualifiedness = PossiblyQualified (Just "MyModule")
-        , name = "MyDataStructure"
-        , args = []
-        }
-      : Type PossiblyQualified
 
-in the Frontend stage, and then change into:
-
-    UserDefinedType
-        { qualifiedness = Qualified "MyModule"
-        , name = "MyDataStructure"
-        , args = []
-        }
-      : Type Qualified
-
-On the other hand, a `MyDataStructure` type in your source code begins as:
-
-    UserDefinedType
-        { qualifiedness = PossiblyQualified Nothing
-        , name = "MyDataStructure"
-        , args = []
-        }
-      : Type PossiblyQualified
-
-in the Frontend stage, and only then, when desugaring, has the module found for
-it (or error message raised) and becomes:
-
-    UserDefinedType
-        { qualifiedness = Qualified "MyModule"
-        , name = "MyDataStructure"
-        , args = []
-        }
-      : Type Qualified
-
-We hold this possibility of not being optional in the type level (phantom types
-FTW), to make tasks in the stages after desugaring easier (impossible states
-become impossible, and a part of the desugaring task is:
-
-    Type PossiblyQualified -> Type Qualified
-
--}
-type Type a
-    = {- Example of a `TypeVar`:
-
-             foo : a -> Int
-
-         will be parsed as
-
-            TypeAnnotation
-                { name = "foo"
-                , type_ =
-                    Function
-                        { from = TypeVar "a"
-                        , to = Int
-                        }
-                }
-
-         These are the type variables user has given name to. (There are also
-         `Id 0`-like values which are being given names by the compiler.)
-      -}
-      TypeVar String
+type Type_ a
+    = TypeVar String
     | Function
-        { from : TypeOrId a
-        , to : TypeOrId a
+        { from : TypeOrId_ a
+        , to : TypeOrId_ a
         }
     | Int
     | Float
     | Char
     | String
     | Bool
-    | List (TypeOrId a)
+    | List (TypeOrId_ a)
     | Unit
-    | Tuple (TypeOrId a) (TypeOrId a)
-    | Tuple3 (TypeOrId a) (TypeOrId a) (TypeOrId a)
-    | Record (Dict VarName (TypeOrId a))
+    | Tuple (TypeOrId_ a) (TypeOrId_ a)
+    | Tuple3 (TypeOrId_ a) (TypeOrId_ a) (TypeOrId_ a)
+    | Record (Dict VarName (TypeOrId_ a))
     | {- The actual definitions of type aliases and custom types are elsewhere
          (in the Declaration module), this is just a "pointer", "var".
 
@@ -131,13 +77,13 @@ type Type a
       UserDefinedType
         { qualifiedness : a
         , name : String
-        , args : List (TypeOrId a)
+        , args : List (TypeOrId_ a)
         }
 
 
 {-| Unwrap the string inside the type variable
 -}
-varName : Type a -> Maybe String
+varName : Type_ a -> Maybe String
 varName type_ =
     case type_ of
         TypeVar string ->
@@ -149,7 +95,7 @@ varName type_ =
 
 {-| Unwrap the string inside the type variable
 -}
-varName_ : TypeOrId a -> Maybe String
+varName_ : TypeOrId_ a -> Maybe String
 varName_ typeOrId =
     case typeOrId of
         Id _ ->
@@ -159,7 +105,7 @@ varName_ typeOrId =
             varName type_
 
 
-getId : TypeOrId a -> Maybe Int
+getId : TypeOrId_ a -> Maybe Int
 getId typeOrId =
     case typeOrId of
         Id id ->
@@ -169,7 +115,7 @@ getId typeOrId =
             Nothing
 
 
-getType : TypeOrId a -> Maybe (Type a)
+getType : TypeOrId_ a -> Maybe (Type_ a)
 getType typeOrId =
     case typeOrId of
         Id _ ->
@@ -181,7 +127,7 @@ getType typeOrId =
 
 {-| Does it contain lower-case type parameters?
 -}
-isParametric : TypeOrId a -> Bool
+isParametric : TypeOrId_ a -> Bool
 isParametric typeOrId =
     let
         f =
@@ -233,14 +179,14 @@ isParametric typeOrId =
                     List.any f args
 
 
-varNames : Type a -> List String
+varNames : Type_ a -> List String
 varNames type_ =
     type_
         |> Transform.children recursiveChildren
         |> List.filterMap varName
 
 
-varNames_ : TypeOrId a -> List String
+varNames_ : TypeOrId_ a -> List String
 varNames_ typeOrId =
     typeOrId
         |> Transform.children recursiveChildren_
@@ -249,10 +195,10 @@ varNames_ typeOrId =
 
 {-| Find all the children of this expression (and their children, etc...)
 -}
-recursiveChildren : (Type a -> List (Type a)) -> Type a -> List (Type a)
+recursiveChildren : (Type_ a -> List (Type_ a)) -> Type_ a -> List (Type_ a)
 recursiveChildren fn type_ =
     let
-        fn_ : TypeOrId a -> List (Type a)
+        fn_ : TypeOrId_ a -> List (Type_ a)
         fn_ typeOrId =
             case typeOrId of
                 Id _ ->
@@ -304,7 +250,7 @@ recursiveChildren fn type_ =
 
 {-| Find all the children of this expression (and their children, etc...)
 -}
-recursiveChildren_ : (TypeOrId a -> List (TypeOrId a)) -> TypeOrId a -> List (TypeOrId a)
+recursiveChildren_ : (TypeOrId_ a -> List (TypeOrId_ a)) -> TypeOrId_ a -> List (TypeOrId_ a)
 recursiveChildren_ fn typeOrId =
     case typeOrId of
         Id _ ->
@@ -350,7 +296,7 @@ recursiveChildren_ fn typeOrId =
             List.fastConcatMap fn args
 
 
-mapTypeOrId : (a -> b) -> TypeOrId a -> TypeOrId b
+mapTypeOrId : (a -> b) -> TypeOrId_ a -> TypeOrId_ b
 mapTypeOrId fn typeOrId =
     case typeOrId of
         Id id ->
@@ -360,7 +306,7 @@ mapTypeOrId fn typeOrId =
             Type <| mapType fn type_
 
 
-mapType : (a -> b) -> Type a -> Type b
+mapType : (a -> b) -> Type_ a -> Type_ b
 mapType fn type_ =
     let
         f =
@@ -419,7 +365,7 @@ mapType fn type_ =
                 }
 
 
-combineType : Type (Result err a) -> Result err (Type a)
+combineType : Type_ (Result err a) -> Result err (Type_ a)
 combineType type_ =
     let
         f =
@@ -495,7 +441,7 @@ combineType type_ =
                 )
 
 
-combineTypeOrId : TypeOrId (Result err a) -> Result err (TypeOrId a)
+combineTypeOrId : TypeOrId_ (Result err a) -> Result err (TypeOrId_ a)
 combineTypeOrId typeOrId =
     case typeOrId of
         Id id ->

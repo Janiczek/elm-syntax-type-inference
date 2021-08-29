@@ -1,9 +1,10 @@
-module Elm.TypeInference.Error exposing (TypeInferenceError(..))
+module Elm.TypeInference.Error exposing (Error(..))
 
-import Elm.Qualifiedness exposing (Qualified)
-import Elm.Type exposing (TypeOrId)
+import Elm.Syntax.ExpressionV2 exposing (TypedExpr)
+import Elm.TypeInference.Type exposing (TypeOrId)
 
 
-type TypeInferenceError
-    = TypeMismatch (TypeOrId Qualified) (TypeOrId Qualified)
-    | OccursCheckFailed Int (TypeOrId Qualified)
+type Error
+    = TypeMismatch TypeOrId TypeOrId
+    | OccursCheckFailed Int TypeOrId
+    | ImpossibleAstPattern TypedExpr
