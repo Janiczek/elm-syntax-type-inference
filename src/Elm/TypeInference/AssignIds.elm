@@ -9,13 +9,13 @@ import Elm.Syntax.ExpressionV2
         , LocatedExpr
         , RecordSetter
         , TypedExpr
-        , TypedMeta
         )
 import Elm.Syntax.NodeV2 as NodeV2
     exposing
         ( LocatedMeta
         , LocatedNode
         , NodeV2(..)
+        , TypedMeta
         )
 import Elm.Syntax.PatternV2
     exposing
@@ -53,11 +53,15 @@ assignIds (NodeV2 { range } expr) =
         list exprs =
             State.traverse f exprs
 
-        letDeclarations : List (LocatedNode (LetDeclaration LocatedMeta)) -> TIState (List (LocatedNode (LetDeclaration TypedMeta)))
+        letDeclarations :
+            List (LocatedNode (LetDeclaration LocatedMeta))
+            -> TIState (List (LocatedNode (LetDeclaration TypedMeta)))
         letDeclarations declarations =
             State.traverse letDeclaration declarations
 
-        letDeclaration : LocatedNode (LetDeclaration LocatedMeta) -> TIState (LocatedNode (LetDeclaration TypedMeta))
+        letDeclaration :
+            LocatedNode (LetDeclaration LocatedMeta)
+            -> TIState (LocatedNode (LetDeclaration TypedMeta))
         letDeclaration node =
             let
                 meta =
@@ -108,7 +112,9 @@ assignIds (NodeV2 { range } expr) =
                         \e1_ ->
                             State.pure ( p1_, e1_ )
 
-        recordSetter : NodeV2 LocatedMeta (RecordSetter LocatedMeta) -> TIState (NodeV2 LocatedMeta (RecordSetter TypedMeta))
+        recordSetter :
+            NodeV2 LocatedMeta (RecordSetter LocatedMeta)
+            -> TIState (NodeV2 LocatedMeta (RecordSetter TypedMeta))
         recordSetter (NodeV2 meta ( field, e1 )) =
             State.do (f e1) <|
                 \e1_ ->

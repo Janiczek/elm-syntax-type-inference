@@ -1,12 +1,14 @@
 module Elm.Syntax.ExpressionV2 exposing
     ( Case
     , Cases
+    , ExprWith
     , ExpressionV2(..)
+    , FunctionImplementationV2
+    , FunctionV2
     , LetDeclaration(..)
     , LocatedExpr
     , RecordSetter
     , TypedExpr
-    , TypedMeta
     , fromExpression
     , getType
     , mapType
@@ -24,6 +26,8 @@ import Elm.Syntax.NodeV2 as NodeV2
         ( LocatedMeta
         , LocatedNode
         , NodeV2(..)
+        , TypedMeta
+        , TypedNode
         )
 import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.PatternV2 as PatternV2 exposing (LocatedPattern, PatternV2)
@@ -43,10 +47,6 @@ type alias LocatedExpr =
 
 type alias TypedExpr =
     ExprWith TypedMeta
-
-
-type alias TypedMeta =
-    { range : Range, type_ : TypeOrId }
 
 
 getType : TypedExpr -> TypeOrId
@@ -117,18 +117,18 @@ type alias LetBlock meta =
 
 
 type LetDeclaration meta
-    = LetFunction (Function meta)
+    = LetFunction (FunctionV2 meta)
     | LetDestructuring (NodeV2 meta (PatternV2 meta)) (ExprWith meta)
 
 
-type alias Function meta =
+type alias FunctionV2 meta =
     { documentation : Maybe (LocatedNode Documentation)
     , signature : Maybe (LocatedNode Signature)
-    , declaration : LocatedNode (FunctionImplementation meta)
+    , declaration : LocatedNode (FunctionImplementationV2 meta)
     }
 
 
-type alias FunctionImplementation meta =
+type alias FunctionImplementationV2 meta =
     { name : LocatedNode String
     , arguments : List (NodeV2 meta (PatternV2 meta))
     , expression : ExprWith meta
@@ -178,7 +178,7 @@ fromExpression expr =
                                     (f b)
                     )
 
-        convertFnImplementation : Expression.FunctionImplementation -> FunctionImplementation LocatedMeta
+        convertFnImplementation : Expression.FunctionImplementation -> FunctionImplementationV2 LocatedMeta
         convertFnImplementation impl =
             { name = NodeV2.fromNode impl.name
             , arguments = List.map PatternV2.fromNodePattern impl.arguments

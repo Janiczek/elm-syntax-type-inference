@@ -1,23 +1,30 @@
 module Elm.Syntax.PatternV2 exposing
     ( LocatedPattern
     , PatternV2(..)
+    , PatternWith
     , TypedPattern
     , fromNodePattern
     )
 
 import Elm.Syntax.Node as Node exposing (Node)
-import Elm.Syntax.NodeV2 as NodeV2 exposing (LocatedMeta, LocatedNode, NodeV2(..))
+import Elm.Syntax.NodeV2 as NodeV2
+    exposing
+        ( LocatedMeta
+        , LocatedNode
+        , NodeV2(..)
+        , TypedMeta
+        )
 import Elm.Syntax.Pattern as Pattern exposing (Pattern, QualifiedNameRef)
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Type exposing (TypeOrId)
 
 
 type alias LocatedPattern =
-    PatternWith { range : Range }
+    PatternWith LocatedMeta
 
 
 type alias TypedPattern =
-    PatternWith { range : Range, type_ : TypeOrId }
+    PatternWith TypedMeta
 
 
 type alias PatternWith meta =

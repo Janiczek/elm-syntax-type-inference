@@ -2,19 +2,22 @@ module Elm.Syntax.NodeV2 exposing
     ( LocatedMeta
     , LocatedNode
     , NodeV2(..)
+    , TypedMeta
+    , TypedNode
     , combine
     , fromNode
     , map
     , mapMeta
     , meta
     , range
+    , type_
     , value
     )
 
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Range as Range exposing (Range)
 import Elm.TypeInference.Qualifiedness exposing (Qualified)
-import Elm.TypeInference.Type as Type exposing (Type)
+import Elm.TypeInference.Type as Type exposing (Type, TypeOrId)
 
 
 type NodeV2 meta value
@@ -25,8 +28,18 @@ type alias LocatedMeta =
     { range : Range }
 
 
+type alias TypedMeta =
+    { range : Range
+    , type_ : TypeOrId
+    }
+
+
 type alias LocatedNode value =
     NodeV2 LocatedMeta value
+
+
+type alias TypedNode value =
+    NodeV2 TypedMeta value
 
 
 meta : NodeV2 meta value -> meta
@@ -39,11 +52,14 @@ value (NodeV2 _ value_) =
     value_
 
 
-{-| TODO should this live in Elm.Syntax.Range? And where should type\_ live?
--}
 range : NodeV2 { meta | range : Range } value -> Range
 range (NodeV2 meta_ _) =
     meta_.range
+
+
+type_ : NodeV2 { meta | type_ : TypeOrId } value -> TypeOrId
+type_ (NodeV2 meta_ _) =
+    meta_.type_
 
 
 combine :

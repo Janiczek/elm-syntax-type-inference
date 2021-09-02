@@ -1,11 +1,8 @@
-module Elm.TypeInference exposing (stub)
+module Elm.TypeInference exposing (infer)
 
 {-| TODO write docs
 
-
-# Stub
-
-@docs stub
+@docs infer
 
 -}
 
@@ -15,6 +12,8 @@ import Elm.Syntax.ExpressionV2 as ExpressionV2
         ( LocatedExpr
         , TypedExpr
         )
+import Elm.Syntax.File exposing (File)
+import Elm.Syntax.FileV2 exposing (TypedFile)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.AssignIds as AssignIds
@@ -32,11 +31,9 @@ import Elm.TypeInference.Type
 import Elm.TypeInference.Unify as Unify
 
 
-{-| TODO stub
--}
-stub : ()
-stub =
-    ()
+infer : Dict ModuleName File -> Result (List Error) (Dict ModuleName TypedFile)
+infer files =
+    Debug.todo "infer"
 
 
 inferExpr : Dict ( ModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
@@ -60,7 +57,6 @@ inferExpr_ expr =
     State.do (Unify.unifyMany (exprEquations ++ varEquations)) <| \() ->
     State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
     State.pure betterExpr
-
 --elm-format-ignore-end
 
 
