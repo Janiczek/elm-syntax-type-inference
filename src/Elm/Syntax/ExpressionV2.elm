@@ -1,5 +1,7 @@
 module Elm.Syntax.ExpressionV2 exposing
-    ( ExpressionV2(..)
+    ( Case
+    , Cases
+    , ExpressionV2(..)
     , LetDeclaration(..)
     , LocatedExpr
     , TypedExpr

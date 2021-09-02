@@ -2,7 +2,9 @@ module Elm.TypeInference.AssignIds exposing (assignIds)
 
 import Elm.Syntax.ExpressionV2
     exposing
-        ( ExpressionV2(..)
+        ( Case
+        , Cases
+        , ExpressionV2(..)
         , LetDeclaration(..)
         , LocatedExpr
         , TypedExpr
@@ -92,6 +94,18 @@ assignIds (NodeV2 { range } expr) =
                             State.do (p pattern) <|
                                 \pattern_ ->
                                     State.pure <| NodeV2 meta <| LetDestructuring pattern_ p1_
+
+        cases : Cases LocatedMeta -> TIState (Cases TypedMeta)
+        cases cases_ =
+            State.traverse case_ cases_
+
+        case_ : Case LocatedMeta -> TIState (Case TypedMeta)
+        case_ ( p1, e1 ) =
+            State.do (p p1) <|
+                \p1_ ->
+                    State.do (f e1) <|
+                        \e1_ ->
+                            State.pure ( p1_, e1_ )
     in
     case expr of
         UnitExpr ->
@@ -168,10 +182,10 @@ assignIds (NodeV2 { range } expr) =
                                     , expression = expression_
                                     }
 
-        CaseExpression { expression, cases } ->
-            State.do (f expression) <|
+        CaseExpression caseBlock ->
+            State.do (f caseBlock.expression) <|
                 \expression_ ->
-                    State.do (Debug.todo "assign: case: cases") <|
+                    State.do (cases caseBlock.cases) <|
                         \cases_ ->
                             finish <|
                                 CaseExpression
