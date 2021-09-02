@@ -1,6 +1,6 @@
 module Elm.TypeInference.AssignIds exposing (assignIds)
 
-import Elm.Syntax.ExpressionV2 as ExpressionV2
+import Elm.Syntax.ExpressionV2
     exposing
         ( ExpressionV2(..)
         , LocatedExpr
@@ -9,8 +9,8 @@ import Elm.Syntax.ExpressionV2 as ExpressionV2
         )
 import Elm.Syntax.NodeV2 exposing (NodeV2(..))
 import Elm.Syntax.Range exposing (Range)
-import Elm.TypeInference.State as State exposing (State, TIState)
-import Elm.TypeInference.Type as Type exposing (Id, TypeOrId_(..))
+import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.Type exposing (TypeOrId_(..))
 
 
 

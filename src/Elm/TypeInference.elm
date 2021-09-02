@@ -10,21 +10,25 @@ module Elm.TypeInference exposing (stub)
 -}
 
 import Dict exposing (Dict)
-import Elm.Syntax.ExpressionV2 as ExpressionV2
+import Elm.Syntax.ExpressionV2
     exposing
-        ( ExpressionV2
-        , LocatedExpr
+        ( LocatedExpr
         , TypedExpr
         )
-import Elm.Syntax.File as File exposing (File)
-import Elm.Syntax.ModuleName as ModuleName exposing (ModuleName)
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.AssignIds as AssignIds
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.GenerateEquations as GenerateEquations
-import Elm.TypeInference.Qualifiedness exposing (Qualified)
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (Id, Type, TypeOrId, TypeOrId_(..), Type_(..))
+import Elm.TypeInference.Type
+    exposing
+        ( Id
+        , Type
+        , TypeOrId
+        , TypeOrId_(..)
+        , Type_(..)
+        )
 import Elm.TypeInference.Unify as Unify
 
 
@@ -80,7 +84,7 @@ substituteTypesInError idTypes error =
         OccursCheckFailed id type_ ->
             OccursCheckFailed id (getBetterType idTypes type_)
 
-        ImpossibleAstPattern expr ->
+        ImpossibleAstPattern _ ->
             error
 
 

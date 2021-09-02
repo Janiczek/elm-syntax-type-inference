@@ -5,7 +5,7 @@ module Elm.Syntax.PatternV2 exposing
     )
 
 import Elm.Syntax.NodeV2 as NodeV2 exposing (LocatedNode, NodeV2(..))
-import Elm.Syntax.Pattern as Pattern exposing (QualifiedNameRef)
+import Elm.Syntax.Pattern exposing (QualifiedNameRef)
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Type exposing (TypeOrId)
 

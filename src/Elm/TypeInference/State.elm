@@ -59,7 +59,6 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.Type exposing (Id, Type, TypeOrId, TypeOrId_(..))
-import Result.Extra as Result
 
 
 
@@ -222,21 +221,14 @@ tickId =
     modify (\state -> { state | nextId = state.nextId + 1 })
 
 
-getNextId : TIState Id
-getNextId =
-    get |> map .nextId
 
-
+--elm-format-ignore-begin
 getNextIdAndTick : TIState Id
 getNextIdAndTick =
-    do get <|
-        \{ nextId } ->
-            do tickId <|
-                \() ->
-                    pure nextId
-
-
-
+    do get <| \{ nextId } ->
+    do tickId <| \() ->
+    pure nextId
+--elm-format-ignore-end
 -- VAR TYPES
 
 

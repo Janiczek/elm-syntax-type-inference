@@ -24,8 +24,7 @@ import Elm.Syntax.NodeV2 as NodeV2
 import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.PatternV2 exposing (LocatedPattern, PatternV2)
 import Elm.Syntax.Range exposing (Range)
-import Elm.Syntax.Signature as Signature exposing (Signature)
-import Elm.TypeInference.Qualifiedness exposing (Qualified)
+import Elm.Syntax.Signature exposing (Signature)
 import Elm.TypeInference.Type exposing (TypeOrId)
 import Transform
 

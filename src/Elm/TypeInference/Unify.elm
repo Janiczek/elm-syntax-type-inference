@@ -3,11 +3,11 @@ module Elm.TypeInference.Unify exposing
     , unifyMany
     )
 
-import Dict exposing (Dict)
+import Dict
 import Elm.TypeInference.Qualifiedness exposing (Qualified(..))
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type as Type exposing (Id, Type, TypeOrId, TypeOrId_(..), Type_(..))
-import Elm.TypeInference.TypeEquation as Eq exposing (TypeEquation)
+import Elm.TypeInference.Type exposing (Id, Type, TypeOrId, TypeOrId_(..), Type_(..))
+import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 
 
 unifyMany : List TypeEquation -> TIState ()
