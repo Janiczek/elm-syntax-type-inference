@@ -22,7 +22,7 @@ import Elm.Syntax.NodeV2 as NodeV2
         , NodeV2(..)
         )
 import Elm.Syntax.Pattern exposing (Pattern)
-import Elm.Syntax.PatternV2 exposing (LocatedPattern, PatternV2)
+import Elm.Syntax.PatternV2 as PatternV2 exposing (LocatedPattern, PatternV2)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.TypeInference.Type exposing (TypeOrId)
@@ -151,15 +151,6 @@ fromExpression expr =
         f =
             fromNodeExpression
 
-        convertPattern : Node Pattern -> LocatedPattern
-        convertPattern patternNode =
-            patternNode
-                |> NodeV2.fromNode
-                |> NodeV2.map
-                    (\pattern ->
-                        Debug.todo "convert pattern"
-                    )
-
         convertLetDeclaration : Node Expression.LetDeclaration -> LocatedNode (LetDeclaration LocatedMeta)
         convertLetDeclaration declNode =
             declNode
@@ -179,20 +170,20 @@ fromExpression expr =
 
                             Expression.LetDestructuring a b ->
                                 LetDestructuring
-                                    (convertPattern a)
+                                    (PatternV2.fromNodePattern a)
                                     (f b)
                     )
 
         convertFnImplementation : Expression.FunctionImplementation -> FunctionImplementation LocatedMeta
         convertFnImplementation impl =
             { name = NodeV2.fromNode impl.name
-            , arguments = List.map convertPattern impl.arguments
+            , arguments = List.map PatternV2.fromNodePattern impl.arguments
             , expression = f impl.expression
             }
 
         convertCase : Expression.Case -> Case LocatedMeta
         convertCase ( pattern, expr_ ) =
-            ( convertPattern pattern
+            ( PatternV2.fromNodePattern pattern
             , f expr_
             )
 
@@ -262,7 +253,7 @@ fromExpression expr =
 
         Expression.LambdaExpression { args, expression } ->
             LambdaExpression
-                { args = List.map convertPattern args
+                { args = List.map PatternV2.fromNodePattern args
                 , expression = f expression
                 }
 
