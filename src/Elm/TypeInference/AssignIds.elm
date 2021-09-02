@@ -3,22 +3,29 @@ module Elm.TypeInference.AssignIds exposing (assignIds)
 import Elm.Syntax.ExpressionV2
     exposing
         ( ExpressionV2(..)
+        , LetDeclaration(..)
         , LocatedExpr
         , TypedExpr
         , TypedMeta
         )
-import Elm.Syntax.NodeV2 exposing (NodeV2(..))
+import Elm.Syntax.NodeV2 as NodeV2
+    exposing
+        ( LocatedMeta
+        , LocatedNode
+        , NodeV2(..)
+        )
+import Elm.Syntax.PatternV2
+    exposing
+        ( LocatedPattern
+        , PatternV2(..)
+        , TypedPattern
+        )
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type exposing (TypeOrId_(..))
 
 
-
---elm-format-ignore-begin
---elm-format-ignore-end
-
-
-assignId : Range -> ExpressionV2 TypedMeta -> TIState TypedExpr
+assignId : Range -> value -> TIState (NodeV2 TypedMeta value)
 assignId range expr =
     State.getNextIdAndTick
         |> State.map (\id -> NodeV2 { range = range, type_ = Id id } expr)
@@ -26,11 +33,14 @@ assignId range expr =
 
 assignIds : LocatedExpr -> TIState TypedExpr
 assignIds (NodeV2 { range } expr) =
-    -- TODO format manually and exempt
     let
         f : LocatedExpr -> TIState TypedExpr
         f =
             assignIds
+
+        p : LocatedPattern -> TIState TypedPattern
+        p =
+            assignIdsToPattern
 
         finish : ExpressionV2 TypedMeta -> TIState TypedExpr
         finish e =
@@ -39,6 +49,49 @@ assignIds (NodeV2 { range } expr) =
         list : List LocatedExpr -> TIState (List TypedExpr)
         list exprs =
             State.traverse f exprs
+
+        letDeclarations : List (LocatedNode (LetDeclaration LocatedMeta)) -> TIState (List (LocatedNode (LetDeclaration TypedMeta)))
+        letDeclarations declarations =
+            State.traverse letDeclaration declarations
+
+        letDeclaration : LocatedNode (LetDeclaration LocatedMeta) -> TIState (LocatedNode (LetDeclaration TypedMeta))
+        letDeclaration node =
+            let
+                meta =
+                    NodeV2.meta node
+
+                declaration =
+                    NodeV2.value node
+            in
+            case declaration of
+                LetFunction letFn ->
+                    let
+                        (NodeV2 declarationMeta declarationImpl) =
+                            letFn.declaration
+                    in
+                    State.do (f declarationImpl.expression) <|
+                        \expression ->
+                            State.do (State.traverse p declarationImpl.arguments) <|
+                                \arguments ->
+                                    State.pure <|
+                                        NodeV2 meta <|
+                                            LetFunction
+                                                { documentation = letFn.documentation
+                                                , signature = letFn.signature
+                                                , declaration =
+                                                    NodeV2 declarationMeta
+                                                        { name = declarationImpl.name
+                                                        , arguments = arguments
+                                                        , expression = expression
+                                                        }
+                                                }
+
+                LetDestructuring pattern p1 ->
+                    State.do (f p1) <|
+                        \p1_ ->
+                            State.do (p pattern) <|
+                                \pattern_ ->
+                                    State.pure <| NodeV2 meta <| LetDestructuring pattern_ p1_
     in
     case expr of
         UnitExpr ->
@@ -50,7 +103,6 @@ assignIds (NodeV2 { range } expr) =
                     finish <| Application exprs_
 
         OperatorApplication a b e1 e2 ->
-            -- TODO possibly andMap?
             State.do (f e1) <|
                 \e1_ ->
                     State.do (f e2) <|
@@ -106,7 +158,7 @@ assignIds (NodeV2 { range } expr) =
                     finish <| ParenthesizedExpression e1_
 
         LetExpression { declarations, expression } ->
-            State.do (Debug.todo "assign: let: declarations") <|
+            State.do (letDeclarations declarations) <|
                 \declarations_ ->
                     State.do (f expression) <|
                         \expression_ ->
@@ -163,3 +215,79 @@ assignIds (NodeV2 { range } expr) =
 
         GLSLExpression a ->
             finish <| GLSLExpression a
+
+
+assignIdsToPattern : LocatedPattern -> TIState TypedPattern
+assignIdsToPattern (NodeV2 { range } pattern) =
+    let
+        f : LocatedPattern -> TIState TypedPattern
+        f =
+            assignIdsToPattern
+
+        finish : PatternV2 TypedMeta -> TIState TypedPattern
+        finish p =
+            assignId range p
+
+        list : List LocatedPattern -> TIState (List TypedPattern)
+        list patterns =
+            State.traverse f patterns
+    in
+    case pattern of
+        AllPattern ->
+            finish AllPattern
+
+        UnitPattern ->
+            finish UnitPattern
+
+        CharPattern a ->
+            finish <| CharPattern a
+
+        StringPattern a ->
+            finish <| StringPattern a
+
+        IntPattern a ->
+            finish <| IntPattern a
+
+        HexPattern a ->
+            finish <| HexPattern a
+
+        FloatPattern a ->
+            finish <| FloatPattern a
+
+        TuplePattern patterns ->
+            State.do (list patterns) <|
+                \patterns_ ->
+                    finish <| TuplePattern patterns_
+
+        RecordPattern fields ->
+            finish <| RecordPattern fields
+
+        UnConsPattern p1 p2 ->
+            State.do (f p1) <|
+                \p1_ ->
+                    State.do (f p2) <|
+                        \p2_ ->
+                            finish <| UnConsPattern p1_ p2_
+
+        ListPattern patterns ->
+            State.do (list patterns) <|
+                \patterns_ ->
+                    finish <| ListPattern patterns_
+
+        VarPattern a ->
+            finish <| VarPattern a
+
+        NamedPattern a patterns ->
+            State.do (list patterns) <|
+                \patterns_ ->
+                    finish <| NamedPattern a patterns_
+
+        AsPattern p1 a ->
+            State.do (f p1) <|
+                \p1_ ->
+                    finish <| AsPattern p1_ a
+
+        ParenthesizedPattern p1 ->
+            State.do (f p1) <|
+                \p1_ ->
+                    finish <| ParenthesizedPattern p1_
