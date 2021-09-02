@@ -4,6 +4,7 @@ module Elm.Syntax.ExpressionV2 exposing
     , ExpressionV2(..)
     , LetDeclaration(..)
     , LocatedExpr
+    , RecordSetter
     , TypedExpr
     , TypedMeta
     , fromExpression

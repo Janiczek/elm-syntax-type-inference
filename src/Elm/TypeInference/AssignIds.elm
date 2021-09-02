@@ -7,6 +7,7 @@ import Elm.Syntax.ExpressionV2
         , ExpressionV2(..)
         , LetDeclaration(..)
         , LocatedExpr
+        , RecordSetter
         , TypedExpr
         , TypedMeta
         )
@@ -106,6 +107,12 @@ assignIds (NodeV2 { range } expr) =
                     State.do (f e1) <|
                         \e1_ ->
                             State.pure ( p1_, e1_ )
+
+        recordSetter : NodeV2 LocatedMeta (RecordSetter LocatedMeta) -> TIState (NodeV2 LocatedMeta (RecordSetter TypedMeta))
+        recordSetter (NodeV2 meta ( field, e1 )) =
+            State.do (f e1) <|
+                \e1_ ->
+                    State.pure (NodeV2 meta ( field, e1_ ))
     in
     case expr of
         UnitExpr ->
@@ -205,7 +212,7 @@ assignIds (NodeV2 { range } expr) =
                                     }
 
         RecordExpr setters ->
-            State.do (Debug.todo "assign: record: setters") <|
+            State.do (State.traverse recordSetter setters) <|
                 \setters_ ->
                     finish <| RecordExpr setters_
 
@@ -223,7 +230,7 @@ assignIds (NodeV2 { range } expr) =
             finish <| RecordAccessFunction a
 
         RecordUpdateExpression a setters ->
-            State.do (Debug.todo "assign: record update: setters") <|
+            State.do (State.traverse recordSetter setters) <|
                 \setters_ ->
                     finish <| RecordUpdateExpression a setters_
 
