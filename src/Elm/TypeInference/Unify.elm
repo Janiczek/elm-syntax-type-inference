@@ -3,11 +3,12 @@ module Elm.TypeInference.Unify exposing
     , unifyMany
     )
 
-import Dict
+import Dict exposing (Dict)
 import Elm.TypeInference.Qualifiedness exposing (Qualified(..))
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type exposing (Id, Type, TypeOrId, TypeOrId_(..), Type_(..))
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
+import Elm.TypeInference.VarName exposing (VarName)
 
 
 unifyMany : List TypeEquation -> TIState ()
@@ -44,6 +45,21 @@ unifyTypes t1 t2 =
         typeMismatch : TIState ()
         typeMismatch =
             State.typeMismatch (Type t1) (Type t2)
+
+        recordBindings : Dict VarName TypeOrId -> Dict VarName TypeOrId -> TIState ()
+        recordBindings bindings1 bindings2 =
+            if Dict.keys bindings1 /= Dict.keys bindings2 then
+                typeMismatch
+
+            else
+                let
+                    fieldEquations : List TypeEquation
+                    fieldEquations =
+                        List.map2 Tuple.pair
+                            (Dict.values bindings1)
+                            (Dict.values bindings2)
+                in
+                unifyMany fieldEquations
     in
     case ( t1, t2 ) of
         ( TypeVar name1, TypeVar name2 ) ->
@@ -128,18 +144,7 @@ unifyTypes t1 t2 =
             typeMismatch
 
         ( Record bindings1, Record bindings2 ) ->
-            if Dict.keys bindings1 /= Dict.keys bindings2 then
-                typeMismatch
-
-            else
-                let
-                    fieldEquations : List TypeEquation
-                    fieldEquations =
-                        List.map2 Tuple.pair
-                            (Dict.values bindings1)
-                            (Dict.values bindings2)
-                in
-                unifyMany fieldEquations
+            recordBindings bindings1 bindings2
 
         ( Record _, _ ) ->
             typeMismatch
@@ -165,6 +170,17 @@ unifyTypes t1 t2 =
 
                         Just aliasedType ->
                             unifyTypes aliasedType t2
+
+        ( WebGLShader webgl1, WebGLShader webgl2 ) ->
+            State.traverse (\( bindings1, bindings2 ) -> recordBindings bindings1 bindings2)
+                [ ( webgl1.attributes, webgl2.attributes )
+                , ( webgl1.uniforms, webgl2.uniforms )
+                , ( webgl1.varyings, webgl2.varyings )
+                ]
+                |> State.map (\_ -> ())
+
+        ( WebGLShader _, _ ) ->
+            typeMismatch
 
 
 unifyVariable : Id -> TypeOrId -> TIState ()
@@ -214,6 +230,13 @@ occurs id typeOrId =
             list
                 |> State.combine
                 |> State.map (List.any identity)
+
+        recordBindings : Dict VarName TypeOrId -> TIState Bool
+        recordBindings bindings =
+            bindings
+                |> Dict.values
+                |> List.map f
+                |> or
     in
     case typeOrId of
         Id id_ ->
@@ -267,12 +290,16 @@ occurs id typeOrId =
                         ]
 
                 Record bindings ->
-                    bindings
-                        |> Dict.values
-                        |> List.map f
-                        |> or
+                    recordBindings bindings
 
                 UserDefinedType { args } ->
                     args
                         |> List.map f
                         |> or
+
+                WebGLShader { attributes, uniforms, varyings } ->
+                    or
+                        [ recordBindings attributes
+                        , recordBindings uniforms
+                        , recordBindings varyings
+                        ]

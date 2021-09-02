@@ -79,6 +79,11 @@ type Type_ a
         , name : String
         , args : List (TypeOrId_ a)
         }
+    | WebGLShader
+        { attributes : Dict VarName (TypeOrId_ a)
+        , uniforms : Dict VarName (TypeOrId_ a)
+        , varyings : Dict VarName (TypeOrId_ a)
+        }
 
 
 {-| Unwrap the string inside the type variable
@@ -132,6 +137,10 @@ isParametric typeOrId =
     let
         f =
             isParametric
+
+        recordBindings : Dict VarName (TypeOrId_ a) -> Bool
+        recordBindings bindings =
+            List.any f (Dict.values bindings)
     in
     case typeOrId of
         Id _ ->
@@ -173,10 +182,15 @@ isParametric typeOrId =
                     f t1 || f t2 || f t3
 
                 Record bindings ->
-                    List.any f (Dict.values bindings)
+                    recordBindings bindings
 
                 UserDefinedType { args } ->
                     List.any f args
+
+                WebGLShader { attributes, uniforms, varyings } ->
+                    recordBindings attributes
+                        || recordBindings uniforms
+                        || recordBindings varyings
 
 
 varNames : Type_ a -> List String
@@ -206,6 +220,9 @@ recursiveChildren fn type_ =
 
                 Type t ->
                     fn t
+
+        recordBindings bindings =
+            List.fastConcatMap fn_ (Dict.values bindings)
     in
     case type_ of
         TypeVar _ ->
@@ -242,16 +259,25 @@ recursiveChildren fn type_ =
             fn_ t1 ++ fn_ t2 ++ fn_ t3
 
         Record bindings ->
-            List.fastConcatMap fn_ (Dict.values bindings)
+            recordBindings bindings
 
         UserDefinedType { args } ->
             List.fastConcatMap fn_ args
+
+        WebGLShader { attributes, uniforms, varyings } ->
+            recordBindings attributes
+                ++ recordBindings uniforms
+                ++ recordBindings varyings
 
 
 {-| Find all the children of this expression (and their children, etc...)
 -}
 recursiveChildren_ : (TypeOrId_ a -> List (TypeOrId_ a)) -> TypeOrId_ a -> List (TypeOrId_ a)
 recursiveChildren_ fn typeOrId =
+    let
+        recordBindings bindings =
+            List.fastConcatMap fn (Dict.values bindings)
+    in
     case typeOrId of
         Id _ ->
             []
@@ -290,10 +316,15 @@ recursiveChildren_ fn typeOrId =
             fn t1 ++ fn t2 ++ fn t3
 
         Type (Record bindings) ->
-            List.fastConcatMap fn (Dict.values bindings)
+            recordBindings bindings
 
         Type (UserDefinedType { args }) ->
             List.fastConcatMap fn args
+
+        Type (WebGLShader { attributes, uniforms, varyings }) ->
+            recordBindings attributes
+                ++ recordBindings uniforms
+                ++ recordBindings varyings
 
 
 mapTypeOrId : (a -> b) -> TypeOrId_ a -> TypeOrId_ b
@@ -364,12 +395,25 @@ mapType fn type_ =
                 , args = List.map f r.args
                 }
 
+        WebGLShader { attributes, uniforms, varyings } ->
+            WebGLShader
+                { attributes = Dict.map (always f) attributes
+                , uniforms = Dict.map (always f) uniforms
+                , varyings = Dict.map (always f) varyings
+                }
+
 
 combineType : Type_ (Result err a) -> Result err (Type_ a)
 combineType type_ =
     let
         f =
             combineTypeOrId
+
+        recordBindings : Dict VarName (TypeOrId_ (Result err a)) -> Result err (Dict VarName (TypeOrId_ a))
+        recordBindings bindings =
+            bindings
+                |> Dict.map (always f)
+                |> Dict.combineResult
     in
     case type_ of
         TypeVar string ->
@@ -420,9 +464,7 @@ combineType type_ =
                 (f c)
 
         Record bindings ->
-            bindings
-                |> Dict.map (always f)
-                |> Dict.combineResult
+            recordBindings bindings
                 |> Result.map Record
 
         UserDefinedType { qualifiedness, name, args } ->
@@ -439,6 +481,19 @@ combineType type_ =
                     |> List.map f
                     |> Result.combine
                 )
+
+        WebGLShader { attributes, uniforms, varyings } ->
+            Result.map3
+                (\a u v ->
+                    WebGLShader
+                        { attributes = a
+                        , uniforms = u
+                        , varyings = v
+                        }
+                )
+                (recordBindings attributes)
+                (recordBindings uniforms)
+                (recordBindings varyings)
 
 
 combineTypeOrId : TypeOrId_ (Result err a) -> Result err (TypeOrId_ a)

@@ -143,12 +143,20 @@ getBetterType idTypes typeOrId =
                     Tuple3 e1 e2 e3 ->
                         Type <| Tuple3 (f e1) (f e2) (f e3)
 
+                    Record bindings ->
+                        Type <|
+                            Record <|
+                                Dict.map (always f) bindings
+
                     UserDefinedType ut ->
                         Type <|
                             UserDefinedType
                                 { ut | args = List.map f ut.args }
 
-                    Record bindings ->
+                    WebGLShader { attributes, uniforms, varyings } ->
                         Type <|
-                            Record <|
-                                Dict.map (\_ binding -> f binding) bindings
+                            WebGLShader
+                                { attributes = Dict.map (always f) attributes
+                                , uniforms = Dict.map (always f) uniforms
+                                , varyings = Dict.map (always f) varyings
+                                }
