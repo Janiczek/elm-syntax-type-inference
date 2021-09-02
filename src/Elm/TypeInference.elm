@@ -10,7 +10,7 @@ module Elm.TypeInference exposing (stub)
 -}
 
 import Dict exposing (Dict)
-import Elm.Syntax.ExpressionV2
+import Elm.Syntax.ExpressionV2 as ExpressionV2
     exposing
         ( LocatedExpr
         , TypedExpr
