@@ -22,9 +22,8 @@ import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.AssignIds as AssignIds
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.GenerateEquations as GenerateEquations
-import Elm.TypeInference.IdTypes as IdTypes exposing (IdTypes)
 import Elm.TypeInference.Qualifiedness exposing (Qualified)
-import Elm.TypeInference.State exposing (TIState)
+import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type exposing (Id, Type, TypeOrId, TypeOrId_(..), Type_(..))
 import Elm.TypeInference.Unify as Unify
 
@@ -36,46 +35,42 @@ stub =
     ()
 
 
-inferExpr : LocatedExpr -> TIState TypedExpr
-inferExpr aliases { idTypes, nextId, declarationTypes } expr =
+inferExpr : Dict ( ModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
+inferExpr typeAliases expr =
+    -- TODO probably not do State.init here?
     let
-        ( exprWithIds, nextId1 ) =
-            AssignIds.assignIds nextId expr
-
-        ( nextId2, declarationTypes1, localTypeEquations ) =
-            GenerateEquations.generateLocalEquations nextId1 declarationTypes exprWithIds
-
-        typeEquationsLinkingDeclarationsToUsages =
-            GenerateEquations.generateEquationsLinkingDeclarationsToUsages declarationTypes1
-
-        allTypeEquations =
-            localTypeEquations ++ typeEquationsLinkingDeclarationsToUsages
-
-        newIdTypes : Result ( Error, IdTypes ) IdTypes
-        newIdTypes =
-            Unify.unifyAllEquations allTypeEquations aliases idTypes
+        ( result, state ) =
+            State.run (State.init typeAliases) (inferExpr_ expr)
     in
-    newIdTypes
-        |> Result.map
-            (\map ->
-                let
-                    substituted =
-                        substituteAllInExpr exprWithIds map
-                in
-                ( substituted, ( map, nextId2, declarationTypes1 ) )
-            )
-        |> Result.mapError substituteAllInError
+    State.fromTuple ( result, state )
+        |> State.mapError (substituteTypesInError state.idTypes)
 
 
-substituteAllInExpr : IdTypes -> TypedExpr -> TypedExpr
-substituteAllInExpr idTypes expr =
-    ExpressionV2.transformOnce
-        (ExpressionV2.mapType (getBetterType idTypes))
-        expr
+
+--elm-format-ignore-begin
+inferExpr_ : LocatedExpr -> TIState TypedExpr
+inferExpr_ expr =
+    State.do (AssignIds.assignIds expr) <| \exprWithIds ->
+    State.do (GenerateEquations.generateLocalEquations exprWithIds) <| \exprEquations ->
+    State.do GenerateEquations.generateVarEquations <| \varEquations ->
+    State.do (Unify.unifyMany (exprEquations ++ varEquations)) <| \() ->
+    State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
+    State.pure betterExpr
+
+--elm-format-ignore-end
 
 
-substituteAllInError : IdTypes -> Error -> Error
-substituteAllInError idTypes error =
+substituteTypesInExpr : TypedExpr -> TIState TypedExpr
+substituteTypesInExpr expr =
+    State.do State.getIdTypes <|
+        \idTypes ->
+            expr
+                |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
+                |> State.pure
+
+
+substituteTypesInError : Dict Id TypeOrId -> Error -> Error
+substituteTypesInError idTypes error =
     case error of
         TypeMismatch t1 t2 ->
             TypeMismatch
@@ -85,17 +80,24 @@ substituteAllInError idTypes error =
         OccursCheckFailed id type_ ->
             OccursCheckFailed id (getBetterType idTypes type_)
 
+        ImpossibleAstPattern expr ->
+            error
 
-getBetterType : IdTypes -> TypeOrId -> TypeOrId
+
+getBetterType : Dict Id TypeOrId -> TypeOrId -> TypeOrId
 getBetterType idTypes typeOrId =
-    if IdTypes.isEmpty idTypes then
+    if Dict.isEmpty idTypes then
         typeOrId
 
     else
+        let
+            f =
+                getBetterType idTypes
+        in
         case typeOrId of
             Id id ->
-                IdTypes.get id idTypes
-                    |> Maybe.map (getBetterType idTypes)
+                Dict.get id idTypes
+                    |> Maybe.map f
                     |> Maybe.withDefault typeOrId
 
             Type type_ ->
@@ -121,37 +123,28 @@ getBetterType idTypes typeOrId =
                     Function { from, to } ->
                         Type <|
                             Function
-                                { from = getBetterType idTypes from
-                                , to = getBetterType idTypes to
+                                { from = f from
+                                , to = f to
                                 }
 
                     List param ->
-                        Type <|
-                            List <|
-                                getBetterType idTypes param
+                        Type <| List <| f param
 
                     Unit ->
                         typeOrId
 
                     Tuple e1 e2 ->
-                        Type <|
-                            Tuple
-                                (getBetterType idTypes e1)
-                                (getBetterType idTypes e2)
+                        Type <| Tuple (f e1) (f e2)
 
                     Tuple3 e1 e2 e3 ->
-                        Type <|
-                            Tuple3
-                                (getBetterType idTypes e1)
-                                (getBetterType idTypes e2)
-                                (getBetterType idTypes e3)
+                        Type <| Tuple3 (f e1) (f e2) (f e3)
 
                     UserDefinedType ut ->
                         Type <|
                             UserDefinedType
-                                { ut | args = List.map (getBetterType idTypes) ut.args }
+                                { ut | args = List.map f ut.args }
 
                     Record bindings ->
                         Type <|
                             Record <|
-                                Dict.map (\_ binding -> getBetterType idTypes binding) bindings
+                                Dict.map (\_ binding -> f binding) bindings

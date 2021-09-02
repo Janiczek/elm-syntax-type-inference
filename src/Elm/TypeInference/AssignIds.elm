@@ -50,6 +50,7 @@ assignIds (NodeV2 { range } expr) =
                     finish <| Application exprs_
 
         OperatorApplication a b e1 e2 ->
+            -- TODO possibly andMap?
             State.do (f e1) <|
                 \e1_ ->
                     State.do (f e2) <|
