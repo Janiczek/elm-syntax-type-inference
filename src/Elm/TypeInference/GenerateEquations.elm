@@ -175,7 +175,18 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
             Debug.todo "generate eqs: record update expression"
 
         GLSLExpression _ ->
-            Debug.todo "generate eqs: GLSL"
+            -- TODO will we need to parse the GLSL language ourselves?
+            simple
+                [ ( type_
+                  , Type
+                        (WebGLShader
+                            { attributes = Debug.todo "generate eqs: webgl: attributes"
+                            , uniforms = Debug.todo "generate eqs: webgl: uniforms"
+                            , varyings = Debug.todo "generate eqs: webgl: varyings"
+                            }
+                        )
+                  )
+                ]
 
 
 
