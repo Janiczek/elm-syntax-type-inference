@@ -201,7 +201,7 @@ assignIds (NodeV2 { range } expr) =
                                     }
 
         LambdaExpression { args, expression } ->
-            State.do (Debug.todo "assign: lambda: args") <|
+            State.do (State.traverse p args) <|
                 \args_ ->
                     State.do (f expression) <|
                         \expression_ ->
