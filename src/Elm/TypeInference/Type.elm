@@ -6,6 +6,7 @@ module Elm.TypeInference.Type exposing
     , Type_(..)
     , combineType
     , combineTypeOrId
+    , fromTypeAnnotation
     , getId
     , getType
     , isParametric
@@ -25,7 +26,13 @@ Module is not `Elm.Type` because that already exists in elm/project-metadata-uti
 
 import Dict exposing (Dict)
 import Dict.ExtraExtra as Dict
-import Elm.TypeInference.Qualifiedness exposing (Qualified)
+import Elm.Syntax.Node as Node
+import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
+import Elm.TypeInference.Qualifiedness as Qualifiedness
+    exposing
+        ( PossiblyQualified
+        , Qualified
+        )
 import Elm.TypeInference.VarName exposing (VarName)
 import List.ExtraExtra as List
 import Result.Extra as Result
@@ -505,3 +512,54 @@ combineTypeOrId typeOrId =
         Type type_ ->
             combineType type_
                 |> Result.map Type
+
+
+fromTypeAnnotation : TypeAnnotation -> Maybe Type
+fromTypeAnnotation typeAnnotation =
+    let
+        f : TypeAnnotation -> Maybe Type
+        f =
+            fromTypeAnnotation
+    in
+    case typeAnnotation of
+        TypeAnnotation.GenericType name ->
+            Just <| TypeVar name
+
+        TypeAnnotation.Typed name annotations ->
+            let
+                ( moduleName, typeName ) =
+                    Node.value name
+
+                args : List (TypeOrId_ PossiblyQualified)
+                args =
+                    annotations
+                        |> List.filterMap (Node.value >> f)
+                        |> List.map Type
+            in
+            Just <|
+                UserDefinedType
+                    { qualifiedness = Qualifiedness.fromModuleName moduleName
+                    , name = typeName
+                    , args = annotations
+                    }
+
+        TypeAnnotation.Unit ->
+            Just Unit
+
+        TypeAnnotation.Tupled [ a, b ] ->
+            Maybe.map2 Tuple a b
+
+        TypeAnnotation.Tupled [ a, b, c ] ->
+            Maybe.map3 Tuple3 a b c
+
+        TypeAnnotation.Tupled _ ->
+            Nothing
+
+        TypeAnnotation.Record a ->
+            5
+
+        TypeAnnotation.GenericRecord a b ->
+            6
+
+        TypeAnnotation.FunctionTypeAnnotation a b ->
+            7

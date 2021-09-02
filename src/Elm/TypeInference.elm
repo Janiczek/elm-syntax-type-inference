@@ -7,6 +7,7 @@ module Elm.TypeInference exposing (infer)
 -}
 
 import Dict exposing (Dict)
+import Elm.Syntax.Declaration as Declaration
 import Elm.Syntax.ExpressionV2 as ExpressionV2
     exposing
         ( LocatedExpr
@@ -15,6 +16,7 @@ import Elm.Syntax.ExpressionV2 as ExpressionV2
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FileV2 exposing (TypedFile)
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.Node as Node
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.AssignIds as AssignIds
 import Elm.TypeInference.Error exposing (Error(..))
@@ -29,11 +31,47 @@ import Elm.TypeInference.Type
         , Type_(..)
         )
 import Elm.TypeInference.Unify as Unify
+import List.ExtraExtra as List
 
 
 infer : Dict ModuleName File -> Result (List Error) (Dict ModuleName TypedFile)
 infer files =
+    let
+        typeAliases : Dict ( ModuleName, VarName ) Type
+        typeAliases =
+            gatherTypeAliases files
+    in
     Debug.todo "infer"
+
+
+gatherTypeAliases : Dict ModuleName File -> Dict ( ModuleName, VarName ) Type
+gatherTypeAliases files =
+    files
+        |> Dict.toList
+        |> List.fastConcatMap
+            (\( moduleName, file ) ->
+                file.declarations
+                    |> List.filterMap
+                        (\declarationNode ->
+                            case Node.value declarationNode of
+                                Declaration.AliasDeclaration typeAlias ->
+                                    let
+                                        type_ : Type
+                                        type_ =
+                                            typeAlias.typeAnnotation
+                                                |> Node.value
+                                                |> Type.fromTypeAnnotation
+                                    in
+                                    Just
+                                        ( ( moduleName, Node.value typeAlias.name )
+                                        , type_
+                                        )
+
+                                _ ->
+                                    Nothing
+                        )
+            )
+        |> Dict.fromList
 
 
 inferExpr : Dict ( ModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
