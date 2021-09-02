@@ -101,7 +101,7 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
             Debug.todo "generate eqs: prefix operator"
 
         Operator _ ->
-            Debug.todo "generate eqs: operator"
+            impossibleAstPattern
 
         Integer _ ->
             -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
