@@ -229,10 +229,6 @@ tickId =
     modify (\state -> { state | nextId = state.nextId + 1 })
 
 
-
---elm-format-ignore-begin
-
-
 getNextIdAndTick : TIState Id
 getNextIdAndTick =
     do get <| \{ nextId } ->
@@ -241,7 +237,6 @@ getNextIdAndTick =
 
 
 
---elm-format-ignore-end
 -- VAR TYPES
 
 
