@@ -85,8 +85,6 @@ inferExpr typeAliases expr =
         |> State.mapError (substituteTypesInError state.idTypes)
 
 
-
---elm-format-ignore-begin
 inferExpr_ : LocatedExpr -> TIState TypedExpr
 inferExpr_ expr =
     State.do (AssignIds.assignIds expr) <| \exprWithIds ->
@@ -95,16 +93,14 @@ inferExpr_ expr =
     State.do (Unify.unifyMany (exprEquations ++ varEquations)) <| \() ->
     State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
     State.pure betterExpr
---elm-format-ignore-end
 
 
 substituteTypesInExpr : TypedExpr -> TIState TypedExpr
 substituteTypesInExpr expr =
-    State.do State.getIdTypes <|
-        \idTypes ->
-            expr
-                |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
-                |> State.pure
+    State.do State.getIdTypes <| \idTypes ->
+    expr
+        |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
+        |> State.pure
 
 
 substituteTypesInError : Dict Id TypeOrId -> Error -> Error

@@ -14,13 +14,8 @@ import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import List.ExtraExtra as List
 
 
-single : TypeEquation -> TIState (List TypeEquation)
-single eq =
-    State.pure [ eq ]
-
-
-simple : List TypeEquation -> TIState (List TypeEquation)
-simple eqs =
+finish : List TypeEquation -> TIState (List TypeEquation)
+finish eqs =
     State.pure eqs
 
 
@@ -53,7 +48,7 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
     in
     case expr of
         UnitExpr ->
-            single ( type_, Type Unit )
+            finish [ ( type_, Type Unit ) ]
 
         Application [] ->
             impossibleAstPattern
@@ -105,15 +100,15 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
 
         Integer _ ->
             -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
-            single ( type_, Type Int )
+            finish [ ( type_, Type Int ) ]
 
         Hex _ ->
             -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
-            single ( type_, Type Int )
+            finish [ ( type_, Type Int ) ]
 
         Floatable _ ->
             -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
-            single ( type_, Type Float )
+            finish [ ( type_, Type Float ) ]
 
         Negation ((NodeV2 m1 _) as e1) ->
             f e1
@@ -123,10 +118,10 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
                     ]
 
         Literal _ ->
-            single ( type_, Type String )
+            finish [ ( type_, Type String ) ]
 
         CharLiteral _ ->
-            single ( type_, Type Char )
+            finish [ ( type_, Type Char ) ]
 
         TupledExpression ([ NodeV2 m1 _, NodeV2 m2 _ ] as exprs) ->
             list f exprs
@@ -155,15 +150,13 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
             Debug.todo "generate eqs: record"
 
         ListExpr exprs ->
-            State.do (list f exprs) <|
-                \exprsEquations ->
-                    State.do State.getNextIdAndTick <|
-                        \id ->
-                            simple
-                                (( type_, Type (List (Id id)) )
-                                    :: exprsEquations
-                                    ++ List.map (\(NodeV2 m _) -> ( m.type_, Id id )) exprs
-                                )
+            State.do (list f exprs) <| \exprsEquations ->
+            State.do State.getNextIdAndTick <| \id ->
+            simple
+                (( type_, Type (List (Id id)) )
+                    :: exprsEquations
+                    ++ List.map (\(NodeV2 m _) -> ( m.type_, Id id )) exprs
+                )
 
         RecordAccess _ _ ->
             Debug.todo "generate eqs: record access"
@@ -189,13 +182,10 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
                 ]
 
 
-
---elm-format-ignore-begin
 functionOrValue : ModuleName -> VarName -> TypeOrId -> TIState (List TypeEquation)
 functionOrValue moduleName varName type_ =
-    State.do (State.addVarType moduleName varName type_) <| \() ->
-    simple []
---elm-format-ignore-end
+    State.addVarType moduleName varName type_
+        |> State.map (\() -> [])
 
 
 generateVarEquations : TIState (List TypeEquation)
