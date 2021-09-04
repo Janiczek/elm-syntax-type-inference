@@ -1,6 +1,6 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, init
-    , pure, fromTuple, run, map, map2, andMap, mapError, do, traverse, combine
+    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getIdTypes, getTypeForId, insertTypeForId
@@ -24,7 +24,7 @@ module Elm.TypeInference.State exposing
 
 # Useful stuff
 
-@docs pure, fromTuple, run, map, map2, andMap, mapError, do, traverse, combine
+@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
 
 
 # Next ID
@@ -155,6 +155,14 @@ map2 userFn aM bM =
         |> andMap bM
 
 
+map3 : (a -> b -> c -> d) -> TIState a -> TIState b -> TIState c -> TIState d
+map3 userFn aM bM cM =
+    pure userFn
+        |> andMap aM
+        |> andMap bM
+        |> andMap cM
+
+
 andThen : (a -> TIState b) -> TIState a -> TIState b
 andThen userFn stateFn =
     \state ->
@@ -223,11 +231,16 @@ tickId =
 
 
 --elm-format-ignore-begin
+
+
 getNextIdAndTick : TIState Id
 getNextIdAndTick =
     do get <| \{ nextId } ->
     do tickId <| \() ->
     pure nextId
+
+
+
 --elm-format-ignore-end
 -- VAR TYPES
 
@@ -282,19 +295,18 @@ getTypeForId id =
 
 insertTypeForId : Id -> TypeOrId -> TIState ()
 insertTypeForId id typeOrId =
-    do get <|
-        \state ->
-            case typeOrId of
-                Id id_ ->
-                    case Dict.get id_ state.idTypes of
-                        Nothing ->
-                            put { state | idTypes = Dict.insert id typeOrId state.idTypes }
-
-                        Just another ->
-                            insertTypeForId id another
-
-                Type _ ->
+    do get <| \state ->
+    case typeOrId of
+        Id id_ ->
+            case Dict.get id_ state.idTypes of
+                Nothing ->
                     put { state | idTypes = Dict.insert id typeOrId state.idTypes }
+
+                Just another ->
+                    insertTypeForId id another
+
+        Type _ ->
+            put { state | idTypes = Dict.insert id typeOrId state.idTypes }
 
 
 
