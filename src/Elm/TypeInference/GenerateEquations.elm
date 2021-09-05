@@ -152,7 +152,7 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
         ListExpr exprs ->
             State.do (list f exprs) <| \exprsEquations ->
             State.do State.getNextIdAndTick <| \id ->
-            simple
+            finish
                 (( type_, Type (List (Id id)) )
                     :: exprsEquations
                     ++ List.map (\(NodeV2 m _) -> ( m.type_, Id id )) exprs
@@ -169,7 +169,7 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
 
         GLSLExpression _ ->
             -- TODO will we need to parse the GLSL language ourselves?
-            simple
+            finish
                 [ ( type_
                   , Type
                         (WebGLShader

@@ -9,22 +9,18 @@ module Elm.TypeInference.Qualifiedness exposing
 stuff like `Type (Maybe ModuleName)` less confusing (-> `Type PossiblyQualified`)
 -}
 
+import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 
 
 fromModuleName : ModuleName -> PossiblyQualified
 fromModuleName moduleName =
-    case moduleName of
-        [] ->
-            PossiblyQualified Nothing
-
-        _ ->
-            PossiblyQualified (Just moduleName)
+    PossiblyQualified <| FullModuleName.fromModuleName moduleName
 
 
 type PossiblyQualified
-    = PossiblyQualified (Maybe ModuleName)
+    = PossiblyQualified (Maybe FullModuleName)
 
 
 type Qualified
-    = Qualified ModuleName
+    = Qualified FullModuleName

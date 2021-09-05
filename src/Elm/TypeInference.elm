@@ -17,12 +17,13 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FileV2 exposing (TypedFile)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
+import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.AssignIds as AssignIds
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.GenerateEquations as GenerateEquations
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type
+import Elm.TypeInference.Type as Type
     exposing
         ( Id
         , Type
@@ -37,6 +38,9 @@ import List.ExtraExtra as List
 infer : Dict ModuleName File -> Result (List Error) (Dict ModuleName TypedFile)
 infer files =
     let
+        x =
+            VarQualification.findModuleOfVar 1
+
         typeAliases : Dict ( ModuleName, VarName ) Type
         typeAliases =
             gatherTypeAliases files
@@ -60,7 +64,7 @@ gatherTypeAliases files =
                                         type_ =
                                             typeAlias.typeAnnotation
                                                 |> Node.value
-                                                |> Type.fromTypeAnnotation
+                                                |> typeAnnotationToType
                                     in
                                     Just
                                         ( ( moduleName, Node.value typeAlias.name )
@@ -190,3 +194,54 @@ getBetterType idTypes typeOrId =
                                 , uniforms = Dict.map (always f) uniforms
                                 , varyings = Dict.map (always f) varyings
                                 }
+
+
+typeAnnotationToType : TypeAnnotation -> TIState Type
+typeAnnotationToType typeAnnotation =
+    let
+        f : TypeAnnotation -> Maybe Type
+        f =
+            typeAnnotationToType
+    in
+    case typeAnnotation of
+        TypeAnnotation.GenericType name ->
+            Just <| TypeVar name
+
+        TypeAnnotation.Typed name annotations ->
+            let
+                ( moduleName, typeName ) =
+                    Node.value name
+
+                args : List (TypeOrId_ PossiblyQualified)
+                args =
+                    annotations
+                        |> List.filterMap (Node.value >> f)
+                        |> List.map Type
+            in
+            Just <|
+                UserDefinedType
+                    { qualifiedness = Qualifiedness.fromModuleName moduleName
+                    , name = typeName
+                    , args = annotations
+                    }
+
+        TypeAnnotation.Unit ->
+            Just Unit
+
+        TypeAnnotation.Tupled [ a, b ] ->
+            Maybe.map2 Tuple a b
+
+        TypeAnnotation.Tupled [ a, b, c ] ->
+            Maybe.map3 Tuple3 a b c
+
+        TypeAnnotation.Tupled _ ->
+            Nothing
+
+        TypeAnnotation.Record a ->
+            5
+
+        TypeAnnotation.GenericRecord a b ->
+            6
+
+        TypeAnnotation.FunctionTypeAnnotation a b ->
+            7

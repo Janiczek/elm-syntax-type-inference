@@ -1,11 +1,12 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, init
-    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
+    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, orElse
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getIdTypes, getTypeForId, insertTypeForId
     , getTypeAliases, getTypeAlias
-    , impossibleAstPattern, typeMismatch, occursCheckFailed
+    , impossibleAstPattern, typeMismatch, occursCheckFailed, varNotFound
+    , ambiguousName
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -24,7 +25,7 @@ module Elm.TypeInference.State exposing
 
 # Useful stuff
 
-@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
+@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, orElse
 
 
 # Next ID
@@ -49,12 +50,13 @@ module Elm.TypeInference.State exposing
 
 # Errors
 
-@docs impossibleAstPattern, typeMismatch, occursCheckFailed
+@docs impossibleAstPattern, typeMismatch, occursCheckFailed, varNotFound, ambigousName
 
 -}
 
 import Dict exposing (Dict)
 import Elm.Syntax.ExpressionV2 exposing (TypedExpr)
+import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
@@ -86,13 +88,13 @@ type alias State =
       idTypes : Dict Id TypeOrId
     , {- All known type aliases and what they resolve to.
 
-         Essentially read-only.
+         Read-only.
 
          TODO: in elm-in-elm we have `ConcreteType` which basically disallows IDs.
          Perhaps we should also use it here (make impossible states impossible)?
          Library API tradeoffs - too many types etc...
       -}
-      typeAliases : Dict ( ModuleName, VarName ) Type
+      typeAliases : Dict ( FullModuleName, VarName ) Type
     }
 
 
@@ -196,6 +198,17 @@ combine list =
         list
 
 
+orElse : TIState (Maybe a) -> TIState (Maybe a) -> TIState (Maybe a)
+orElse after before =
+    do before <| \maybeBefore ->
+    case maybeBefore of
+        Nothing ->
+            after
+
+        Just before_ ->
+            pure maybeBefore
+
+
 get : TIState State
 get =
     \state -> ( Ok state, state )
@@ -215,7 +228,7 @@ modify fn =
 -- OUR API
 
 
-init : Dict ( ModuleName, VarName ) Type -> State
+init : Dict ( FullModuleName, VarName ) Type -> State
 init typeAliases =
     { nextId = 0
     , varTypes = Dict.empty
@@ -308,13 +321,13 @@ insertTypeForId id typeOrId =
 -- TYPE ALIASES
 
 
-getTypeAliases : TIState (Dict ( ModuleName, VarName ) Type)
+getTypeAliases : TIState (Dict ( FullModuleName, VarName ) Type)
 getTypeAliases =
     get
         |> map .typeAliases
 
 
-getTypeAlias : ModuleName -> VarName -> TIState (Maybe Type)
+getTypeAlias : FullModuleName -> VarName -> TIState (Maybe Type)
 getTypeAlias moduleName varName =
     getTypeAliases
         |> map (Dict.get ( moduleName, varName ))
@@ -337,3 +350,18 @@ typeMismatch t1 t2 =
 occursCheckFailed : Id -> TypeOrId -> TIState a
 occursCheckFailed id type_ =
     \state -> ( Err (OccursCheckFailed id type_), state )
+
+
+varNotFound : { varName : VarName, usedIn : FullModuleName } -> TIState a
+varNotFound rec =
+    \state -> ( Err (VarNotFound rec), state )
+
+
+ambiguousName :
+    { varName : VarName
+    , usedIn : FullModuleName
+    , possibleModules : List FullModuleName
+    }
+    -> TIState a
+ambiguousName rec =
+    \state -> ( Err (AmbiguousName rec), state )

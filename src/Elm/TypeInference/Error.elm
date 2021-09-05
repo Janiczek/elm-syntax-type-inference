@@ -1,10 +1,17 @@
 module Elm.TypeInference.Error exposing (Error(..))
 
 import Elm.Syntax.ExpressionV2 exposing (TypedExpr)
+import Elm.Syntax.FullModuleName exposing (FullModuleName)
+import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Type exposing (TypeOrId)
 
 
 type Error
-    = TypeMismatch TypeOrId TypeOrId
+    = -- Syntax errors
+      ImpossibleAstPattern TypedExpr
+      -- Var qualification errors
+    | VarNotFound { usedIn : FullModuleName, varName : VarName }
+    | AmbiguousName { usedIn : FullModuleName, varName : VarName, possibleModules : List FullModuleName }
+      -- Type errors
+    | TypeMismatch TypeOrId TypeOrId
     | OccursCheckFailed Int TypeOrId
-    | ImpossibleAstPattern TypedExpr

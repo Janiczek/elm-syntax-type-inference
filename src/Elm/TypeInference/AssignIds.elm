@@ -122,7 +122,7 @@ assignIds (NodeV2 { range } expr) =
 
         Application exprs ->
             list exprs
-                |> State.map (Application exprs_)
+                |> State.map Application
                 |> State.andThen finish
 
         OperatorApplication a b e1 e2 ->
@@ -211,7 +211,7 @@ assignIds (NodeV2 { range } expr) =
                 )
                 (State.traverse p args)
                 (f expression)
-                |> State.andThen
+                |> State.andThen finish
 
         RecordExpr setters ->
             State.traverse recordSetter setters
@@ -293,7 +293,7 @@ assignIdsToPattern (NodeV2 { range } pattern) =
 
         ListPattern patterns ->
             list patterns
-                |> State.map ListPatern
+                |> State.map ListPattern
                 |> State.andThen finish
 
         VarPattern a ->
