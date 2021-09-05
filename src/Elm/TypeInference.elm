@@ -211,7 +211,11 @@ inferFunction function =
         function_ =
             Debug.todo "inferFunction: located function"
     in
-    Debug.todo "infer function"
+    State.pure
+        { documentation = function_.documentation
+        , signature = function_.signature
+        , declaration = function_.declaration
+        }
 
 
 substituteTypesInExpr : TypedExpr -> TIState TypedExpr
