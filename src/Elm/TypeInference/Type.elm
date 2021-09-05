@@ -5,8 +5,6 @@ module Elm.TypeInference.Type exposing
     , getId
     , getType
     , isParametric
-    , mapType
-    , mapTypeOrId
     , varName
     , varName_
     , varNames
@@ -55,6 +53,10 @@ type Type
     | Tuple TypeOrId TypeOrId
     | Tuple3 TypeOrId TypeOrId TypeOrId
     | Record (Dict VarName TypeOrId)
+    | ExtensibleRecord
+        { recordVar : {- TODO rename to TypeVar -} String
+        , fields : Dict VarName TypeOrId
+        }
     | UserDefinedType
         { moduleName : FullModuleName
         , name : VarName
@@ -162,8 +164,13 @@ isParametric typeOrId =
                 Tuple3 t1 t2 t3 ->
                     f t1 || f t2 || f t3
 
-                Record bindings ->
-                    recordBindings bindings
+                Record fields ->
+                    recordBindings fields
+
+                ExtensibleRecord { recordVar, fields } ->
+                    -- in practice ↓ means `True`
+                    f (Type (TypeVar recordVar))
+                        || recordBindings fields
 
                 UserDefinedType { args } ->
                     List.any f args
@@ -239,8 +246,12 @@ recursiveChildren fn type_ =
         Tuple3 t1 t2 t3 ->
             fn_ t1 ++ fn_ t2 ++ fn_ t3
 
-        Record bindings ->
-            recordBindings bindings
+        Record fields ->
+            recordBindings fields
+
+        ExtensibleRecord { recordVar, fields } ->
+            fn (TypeVar recordVar)
+                ++ recordBindings fields
 
         UserDefinedType { args } ->
             List.fastConcatMap fn_ args
@@ -296,8 +307,12 @@ recursiveChildren_ fn typeOrId =
         Type (Tuple3 t1 t2 t3) ->
             fn t1 ++ fn t2 ++ fn t3
 
-        Type (Record bindings) ->
-            recordBindings bindings
+        Type (Record fields) ->
+            recordBindings fields
+
+        Type (ExtensibleRecord { recordVar, fields }) ->
+            fn (Type (TypeVar recordVar))
+                ++ recordBindings fields
 
         Type (UserDefinedType { args }) ->
             List.fastConcatMap fn args
@@ -306,74 +321,3 @@ recursiveChildren_ fn typeOrId =
             recordBindings attributes
                 ++ recordBindings uniforms
                 ++ recordBindings varyings
-
-
-mapTypeOrId : (a -> b) -> TypeOrId -> TypeOrId
-mapTypeOrId fn typeOrId =
-    case typeOrId of
-        Id id ->
-            Id id
-
-        Type type_ ->
-            Type <| mapType fn type_
-
-
-mapType : (a -> b) -> Type -> Type
-mapType fn type_ =
-    let
-        f =
-            mapTypeOrId fn
-    in
-    case type_ of
-        TypeVar str ->
-            TypeVar str
-
-        Function { from, to } ->
-            Function
-                { from = f from
-                , to = f to
-                }
-
-        Int ->
-            Int
-
-        Float ->
-            Float
-
-        Char ->
-            Char
-
-        String ->
-            String
-
-        Bool ->
-            Bool
-
-        List typeOrId ->
-            List <| f typeOrId
-
-        Unit ->
-            Unit
-
-        Tuple a b ->
-            Tuple (f a) (f b)
-
-        Tuple3 a b c ->
-            Tuple3 (f a) (f b) (f c)
-
-        Record dict ->
-            Record <| Dict.map (always f) dict
-
-        UserDefinedType r ->
-            UserDefinedType
-                { moduleName = r.moduleName
-                , name = r.name
-                , args = List.map f r.args
-                }
-
-        WebGLShader { attributes, uniforms, varyings } ->
-            WebGLShader
-                { attributes = Dict.map (always f) attributes
-                , uniforms = Dict.map (always f) uniforms
-                , varyings = Dict.map (always f) varyings
-                }

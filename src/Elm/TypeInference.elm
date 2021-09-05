@@ -17,7 +17,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FileV2 exposing (TypedFile)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.Node as Node
+import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.AssignIds as AssignIds
@@ -204,6 +204,27 @@ typeAnnotationToType typeAnnotation =
             annotation
                 |> typeAnnotationToType
                 |> State.map Type
+
+        recordBindings :
+            List (Node ( Node String, Node TypeAnnotation ))
+            -> TIState (Dict VarName TypeOrId)
+        recordBindings fields =
+            fields
+                |> List.map
+                    (\fieldNode ->
+                        let
+                            ( fieldNameNode, annotationNode ) =
+                                Node.value fieldNode
+
+                            type_ : TIState TypeOrId
+                            type_ =
+                                f (Node.value annotationNode)
+                        in
+                        type_
+                            |> State.map (\type__ -> ( Node.value fieldNameNode, type__ ))
+                    )
+                |> State.combine
+                |> State.map Dict.fromList
     in
     case typeAnnotation of
         TypeAnnotation.GenericType name ->
@@ -252,25 +273,18 @@ typeAnnotationToType typeAnnotation =
             State.impossibleTypePattern typeAnnotation
 
         TypeAnnotation.Record fields ->
-            fields
-                |> List.map
-                    (\fieldNode ->
-                        let
-                            ( fieldNameNode, annotationNode ) =
-                                Node.value fieldNode
+            recordBindings fields
+                |> State.map Record
 
-                            type_ : TIState TypeOrId
-                            type_ =
-                                f (Node.value annotationNode)
-                        in
-                        type_
-                            |> State.map (\type__ -> ( Node.value fieldNameNode, type__ ))
+        TypeAnnotation.GenericRecord name fields ->
+            recordBindings (Node.value fields)
+                |> State.map
+                    (\fields_ ->
+                        ExtensibleRecord
+                            { recordVar = Node.value name
+                            , fields = fields_
+                            }
                     )
-                |> State.combine
-                |> State.map (Record << Dict.fromList)
-
-        TypeAnnotation.GenericRecord a b ->
-            6
 
         TypeAnnotation.FunctionTypeAnnotation from to ->
             State.map2

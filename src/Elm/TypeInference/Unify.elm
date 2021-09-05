@@ -148,6 +148,13 @@ unifyTypes t1 t2 =
         ( Record _, _ ) ->
             typeMismatch
 
+        ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
+            State.do (unifyTypes (TypeVar r1.recordVar) (TypeVar r2.recordVar)) <| \() ->
+            recordBindings r1.fields r2.fields
+
+        ( ExtensibleRecord _, _ ) ->
+            typeMismatch
+
         ( UserDefinedType ut1, UserDefinedType ut2 ) ->
             if ut1.name /= ut2.name || List.length ut1.args /= List.length ut2.args then
                 typeMismatch
@@ -280,8 +287,14 @@ occurs id typeOrId =
                         , f t3
                         ]
 
-                Record bindings ->
-                    recordBindings bindings
+                Record fields ->
+                    recordBindings fields
+
+                ExtensibleRecord { recordVar, fields } ->
+                    or
+                        [ f (Type (TypeVar recordVar))
+                        , recordBindings fields
+                        ]
 
                 UserDefinedType { args } ->
                     args
