@@ -9,7 +9,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.NodeV2 exposing (NodeV2(..))
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (TypeOrId, TypeOrId_(..), Type_(..))
+import Elm.TypeInference.Type exposing (Type(..), TypeOrId(..))
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import List.ExtraExtra as List
 

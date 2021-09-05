@@ -16,7 +16,6 @@ module Elm.Syntax.NodeV2 exposing
 
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Range as Range exposing (Range)
-import Elm.TypeInference.Qualifiedness exposing (Qualified)
 import Elm.TypeInference.Type as Type exposing (Type, TypeOrId)
 
 

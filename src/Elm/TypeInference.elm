@@ -15,6 +15,7 @@ import Elm.Syntax.ExpressionV2 as ExpressionV2
         )
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FileV2 exposing (TypedFile)
+import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
@@ -26,59 +27,58 @@ import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type as Type
     exposing
         ( Id
-        , Type
-        , TypeOrId
-        , TypeOrId_(..)
-        , Type_(..)
+        , Type(..)
+        , TypeOrId(..)
         )
 import Elm.TypeInference.Unify as Unify
 import List.ExtraExtra as List
+import Maybe.Extra as Maybe
 
 
-infer : Dict ModuleName File -> Result (List Error) (Dict ModuleName TypedFile)
+infer : Dict FullModuleName File -> Result (List Error) (Dict FullModuleName TypedFile)
 infer files =
-    let
-        x =
-            VarQualification.findModuleOfVar 1
-
-        typeAliases : Dict ( ModuleName, VarName ) Type
-        typeAliases =
-            gatherTypeAliases files
-    in
-    Debug.todo "infer"
+    gatherTypeAliases files
+        |> State.map (\typeAliases -> Debug.todo "infer")
 
 
-gatherTypeAliases : Dict ModuleName File -> Dict ( ModuleName, VarName ) Type
+gatherTypeAliases : Dict FullModuleName File -> TIState (Dict ( FullModuleName, VarName ) Type)
 gatherTypeAliases files =
     files
         |> Dict.toList
-        |> List.fastConcatMap
+        |> List.map
             (\( moduleName, file ) ->
                 file.declarations
-                    |> List.filterMap
+                    |> List.map
                         (\declarationNode ->
                             case Node.value declarationNode of
                                 Declaration.AliasDeclaration typeAlias ->
                                     let
-                                        type_ : Type
+                                        type_ : TIState Type
                                         type_ =
                                             typeAlias.typeAnnotation
                                                 |> Node.value
                                                 |> typeAnnotationToType
                                     in
-                                    Just
-                                        ( ( moduleName, Node.value typeAlias.name )
-                                        , type_
-                                        )
+                                    type_
+                                        |> State.map
+                                            (\type__ ->
+                                                Just
+                                                    ( ( moduleName, Node.value typeAlias.name )
+                                                    , type__
+                                                    )
+                                            )
 
                                 _ ->
-                                    Nothing
+                                    State.pure Nothing
                         )
+                    |> State.combine
+                    |> State.map Maybe.values
             )
-        |> Dict.fromList
+        |> State.combine
+        |> State.map (List.fastConcat >> Dict.fromList)
 
 
-inferExpr : Dict ( ModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
+inferExpr : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
 inferExpr typeAliases expr =
     -- TODO probably not do State.init here?
     let
@@ -199,43 +199,57 @@ getBetterType idTypes typeOrId =
 typeAnnotationToType : TypeAnnotation -> TIState Type
 typeAnnotationToType typeAnnotation =
     let
-        f : TypeAnnotation -> Maybe Type
-        f =
-            typeAnnotationToType
+        f : TypeAnnotation -> TIState TypeOrId
+        f annotation =
+            annotation
+                |> typeAnnotationToType
+                |> State.map Type
     in
     case typeAnnotation of
         TypeAnnotation.GenericType name ->
-            Just <| TypeVar name
+            State.pure <| TypeVar name
 
         TypeAnnotation.Typed name annotations ->
             let
                 ( moduleName, typeName ) =
                     Node.value name
 
-                args : List (TypeOrId_ PossiblyQualified)
+                fullModuleName : FullModuleName
+                fullModuleName =
+                    FullModuleName.fromModuleName_ moduleName
+
+                args : TIState (List TypeOrId)
                 args =
                     annotations
-                        |> List.filterMap (Node.value >> f)
-                        |> List.map Type
+                        |> List.map (Node.value >> f)
+                        |> State.combine
             in
-            Just <|
-                UserDefinedType
-                    { qualifiedness = Qualifiedness.fromModuleName moduleName
-                    , name = typeName
-                    , args = annotations
-                    }
+            args
+                |> State.map
+                    (\args_ ->
+                        UserDefinedType
+                            { moduleName = fullModuleName
+                            , name = typeName
+                            , args = args_
+                            }
+                    )
 
         TypeAnnotation.Unit ->
-            Just Unit
+            State.pure Unit
 
         TypeAnnotation.Tupled [ a, b ] ->
-            Maybe.map2 Tuple a b
+            State.map2 Tuple
+                (f (Node.value a))
+                (f (Node.value b))
 
         TypeAnnotation.Tupled [ a, b, c ] ->
-            Maybe.map3 Tuple3 a b c
+            State.map3 Tuple3
+                (f (Node.value a))
+                (f (Node.value b))
+                (f (Node.value c))
 
         TypeAnnotation.Tupled _ ->
-            Nothing
+            State.impossibleTypePattern typeAnnotation
 
         TypeAnnotation.Record a ->
             5

@@ -4,9 +4,8 @@ module Elm.TypeInference.Unify exposing
     )
 
 import Dict exposing (Dict)
-import Elm.TypeInference.Qualifiedness exposing (Qualified(..))
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (Id, Type, TypeOrId, TypeOrId_(..), Type_(..))
+import Elm.TypeInference.Type exposing (Id, Type(..), TypeOrId(..))
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.VarName exposing (VarName)
 
@@ -158,18 +157,13 @@ unifyTypes t1 t2 =
                     |> unifyMany
 
         ( UserDefinedType ut, _ ) ->
-            let
-                (Qualified module_) =
-                    ut.qualifiedness
-            in
-            State.do (State.getTypeAlias module_ ut.name) <|
-                \maybeAlias ->
-                    case maybeAlias of
-                        Nothing ->
-                            typeMismatch
+            State.do (State.getTypeAlias ut.moduleName ut.name) <| \maybeAlias ->
+            case maybeAlias of
+                Nothing ->
+                    typeMismatch
 
-                        Just aliasedType ->
-                            unifyTypes aliasedType t2
+                Just aliasedType ->
+                    unifyTypes aliasedType t2
 
         ( WebGLShader webgl1, WebGLShader webgl2 ) ->
             State.traverse (\( bindings1, bindings2 ) -> recordBindings bindings1 bindings2)
@@ -188,34 +182,31 @@ unifyVariable id otherTypeOrId =
     let
         occursCheck : TIState ()
         occursCheck =
-            State.do (occurs id otherTypeOrId) <|
-                \doesOccur ->
-                    if doesOccur then
-                        State.occursCheckFailed id otherTypeOrId
+            State.do (occurs id otherTypeOrId) <| \doesOccur ->
+            if doesOccur then
+                State.occursCheckFailed id otherTypeOrId
 
-                    else
-                        State.insertTypeForId id otherTypeOrId
+            else
+                State.insertTypeForId id otherTypeOrId
     in
-    State.do (State.getTypeForId id) <|
-        \maybeTypeOrId ->
-            case maybeTypeOrId of
-                Just typeOrId ->
-                    unify typeOrId otherTypeOrId
+    State.do (State.getTypeForId id) <| \maybeTypeOrId ->
+    case maybeTypeOrId of
+        Just typeOrId ->
+            unify typeOrId otherTypeOrId
 
-                Nothing ->
-                    case otherTypeOrId of
-                        Id otherId ->
-                            State.do (State.getTypeForId otherId) <|
-                                \maybeOtherType ->
-                                    case maybeOtherType of
-                                        Just otherType ->
-                                            unifyVariable id otherType
+        Nothing ->
+            case otherTypeOrId of
+                Id otherId ->
+                    State.do (State.getTypeForId otherId) <| \maybeOtherType ->
+                    case maybeOtherType of
+                        Just otherType ->
+                            unifyVariable id otherType
 
-                                        Nothing ->
-                                            occursCheck
-
-                        Type _ ->
+                        Nothing ->
                             occursCheck
+
+                Type _ ->
+                    occursCheck
 
 
 occurs : Id -> TypeOrId -> TIState Bool

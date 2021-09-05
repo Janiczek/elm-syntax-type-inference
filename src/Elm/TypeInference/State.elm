@@ -1,12 +1,12 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, init
-    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, orElse
+    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
+    , findModuleOfVar
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getIdTypes, getTypeForId, insertTypeForId
     , getTypeAliases, getTypeAlias
-    , impossibleAstPattern, typeMismatch, occursCheckFailed, varNotFound
-    , ambiguousName
+    , impossibleAstPattern, impossibleTypePattern, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -23,9 +23,14 @@ module Elm.TypeInference.State exposing
 @docs TIState, State, init
 
 
-# Useful stuff
+# Utilities
 
-@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, orElse
+@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
+
+
+# Var module lookup
+
+@docs findModuleOfVar
 
 
 # Next ID
@@ -50,17 +55,21 @@ module Elm.TypeInference.State exposing
 
 # Errors
 
-@docs impossibleAstPattern, typeMismatch, occursCheckFailed, varNotFound, ambigousName
+@docs impossibleAstPattern, impossibleTypePattern, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
 
 -}
 
 import Dict exposing (Dict)
 import Elm.Syntax.ExpressionV2 exposing (TypedExpr)
+import Elm.Syntax.File exposing (File)
+import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
-import Elm.TypeInference.Type exposing (Id, Type, TypeOrId, TypeOrId_(..))
+import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
+import Elm.TypeInference.Type exposing (Id, Type, TypeOrId(..))
 
 
 
@@ -105,6 +114,11 @@ type alias TIState a =
 pure : a -> TIState a
 pure a =
     \s -> ( Ok a, s )
+
+
+fromError : Error -> TIState a
+fromError error =
+    \s -> ( Err error, s )
 
 
 fromTuple : ( Result Error a, State ) -> TIState a
@@ -196,17 +210,6 @@ combine list =
         (map2 (::))
         (pure [])
         list
-
-
-orElse : TIState (Maybe a) -> TIState (Maybe a) -> TIState (Maybe a)
-orElse after before =
-    do before <| \maybeBefore ->
-    case maybeBefore of
-        Nothing ->
-            after
-
-        Just before_ ->
-            pure maybeBefore
 
 
 get : TIState State
@@ -339,22 +342,27 @@ getTypeAlias moduleName varName =
 
 impossibleAstPattern : TypedExpr -> TIState a
 impossibleAstPattern expr =
-    \state -> ( Err (ImpossibleAstPattern expr), state )
+    fromError <| ImpossibleAstPattern expr
+
+
+impossibleTypePattern : TypeAnnotation -> TIState a
+impossibleTypePattern type_ =
+    fromError <| ImpossibleTypePattern type_
 
 
 typeMismatch : TypeOrId -> TypeOrId -> TIState a
 typeMismatch t1 t2 =
-    \state -> ( Err (TypeMismatch t1 t2), state )
+    fromError <| TypeMismatch t1 t2
 
 
 occursCheckFailed : Id -> TypeOrId -> TIState a
 occursCheckFailed id type_ =
-    \state -> ( Err (OccursCheckFailed id type_), state )
+    fromError <| OccursCheckFailed id type_
 
 
 varNotFound : { varName : VarName, usedIn : FullModuleName } -> TIState a
 varNotFound rec =
-    \state -> ( Err (VarNotFound rec), state )
+    fromError <| VarNotFound rec
 
 
 ambiguousName :
@@ -364,4 +372,55 @@ ambiguousName :
     }
     -> TIState a
 ambiguousName rec =
-    \state -> ( Err (AmbiguousName rec), state )
+    fromError <| AmbiguousName rec
+
+
+{-| We have roughly these options:
+
+  - bar = >baz< (baz being defined elsewhere in this module)
+  - import Foo exposing (baz); bar = >baz<
+  - import Foo; bar = >Foo.baz<
+  - import Foo as F; bar = >F.baz<
+
+In all these cases we need to find the full unaliased module name of the var.
+
+-}
+findModuleOfVar :
+    Dict FullModuleName File
+    -> File
+    -> Maybe FullModuleName
+    -> VarName
+    -> TIState FullModuleName
+findModuleOfVar files thisFile maybeModuleName varName =
+    let
+        orElseLazy : (() -> Result Error (Maybe FullModuleName)) -> Result Error (Maybe FullModuleName) -> Result Error (Maybe FullModuleName)
+        orElseLazy after before =
+            case before of
+                Err err ->
+                    Err err
+
+                Ok (Just name) ->
+                    Ok (Just name)
+
+                Ok Nothing ->
+                    after ()
+
+        foundModuleName : Result Error (Maybe FullModuleName)
+        foundModuleName =
+            VarModuleLookup.unqualifiedVarInThisModule thisFile maybeModuleName varName
+                |> orElseLazy (\() -> VarModuleLookup.unqualifiedVarInImportedModule files thisFile maybeModuleName varName)
+                |> orElseLazy (\() -> VarModuleLookup.qualifiedVarInImportedModule files maybeModuleName varName)
+                |> orElseLazy (\() -> VarModuleLookup.qualifiedVarInAliasedModule files thisFile maybeModuleName varName)
+    in
+    case foundModuleName of
+        Err err ->
+            fromError err
+
+        Ok Nothing ->
+            varNotFound
+                { varName = varName
+                , usedIn = File.moduleName thisFile
+                }
+
+        Ok (Just moduleName) ->
+            pure moduleName

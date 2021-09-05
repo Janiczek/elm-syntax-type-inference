@@ -1,11 +1,7 @@
 module Elm.TypeInference.Type exposing
     ( Id
-    , Type
-    , TypeOrId
-    , TypeOrId_(..)
-    , Type_(..)
-    , combineType
-    , combineTypeOrId
+    , Type(..)
+    , TypeOrId(..)
     , getId
     , getType
     , isParametric
@@ -25,52 +21,37 @@ Module is not `Elm.Type` because that already exists in elm/project-metadata-uti
 
 import Dict exposing (Dict)
 import Dict.ExtraExtra as Dict
+import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
-import Elm.TypeInference.Qualifiedness as Qualifiedness
-    exposing
-        ( PossiblyQualified
-        , Qualified
-        )
 import Elm.TypeInference.VarName exposing (VarName)
 import List.ExtraExtra as List
 import Result.Extra as Result
 import Transform
 
 
-type TypeOrId_ qualifiedness
+type TypeOrId
     = Id Id
-    | Type (Type_ qualifiedness)
+    | Type Type
 
 
 type alias Id =
     Int
 
 
-type alias Type =
-    Type_ Qualified
-
-
-type alias TypeOrId =
-    TypeOrId_ Qualified
-
-
-type Type_ a
+type Type
     = TypeVar String
-    | Function
-        { from : TypeOrId_ a
-        , to : TypeOrId_ a
-        }
+    | Function { from : TypeOrId, to : TypeOrId }
     | Int
     | Float
     | Char
     | String
     | Bool
-    | List (TypeOrId_ a)
+    | List TypeOrId
     | Unit
-    | Tuple (TypeOrId_ a) (TypeOrId_ a)
-    | Tuple3 (TypeOrId_ a) (TypeOrId_ a) (TypeOrId_ a)
-    | Record (Dict VarName (TypeOrId_ a))
+    | Tuple TypeOrId TypeOrId
+    | Tuple3 TypeOrId TypeOrId TypeOrId
+    | Record (Dict VarName TypeOrId)
     | {- The actual definitions of type aliases and custom types are elsewhere
          (in the Declaration module), this is just a "pointer", "var".
 
@@ -81,20 +62,20 @@ type Type_ a
          This constructor encompasses both type aliases and custom types:
       -}
       UserDefinedType
-        { qualifiedness : a
-        , name : String
-        , args : List (TypeOrId_ a)
+        { moduleName : FullModuleName
+        , name : VarName
+        , args : List TypeOrId
         }
     | WebGLShader
-        { attributes : Dict VarName (TypeOrId_ a)
-        , uniforms : Dict VarName (TypeOrId_ a)
-        , varyings : Dict VarName (TypeOrId_ a)
+        { attributes : Dict VarName TypeOrId
+        , uniforms : Dict VarName TypeOrId
+        , varyings : Dict VarName TypeOrId
         }
 
 
 {-| Unwrap the string inside the type variable
 -}
-varName : Type_ a -> Maybe String
+varName : Type -> Maybe String
 varName type_ =
     case type_ of
         TypeVar string ->
@@ -106,7 +87,7 @@ varName type_ =
 
 {-| Unwrap the string inside the type variable
 -}
-varName_ : TypeOrId_ a -> Maybe String
+varName_ : TypeOrId -> Maybe String
 varName_ typeOrId =
     case typeOrId of
         Id _ ->
@@ -116,7 +97,7 @@ varName_ typeOrId =
             varName type_
 
 
-getId : TypeOrId_ a -> Maybe Int
+getId : TypeOrId -> Maybe Int
 getId typeOrId =
     case typeOrId of
         Id id ->
@@ -126,7 +107,7 @@ getId typeOrId =
             Nothing
 
 
-getType : TypeOrId_ a -> Maybe (Type_ a)
+getType : TypeOrId -> Maybe Type
 getType typeOrId =
     case typeOrId of
         Id _ ->
@@ -138,13 +119,13 @@ getType typeOrId =
 
 {-| Does it contain lower-case type parameters?
 -}
-isParametric : TypeOrId_ a -> Bool
+isParametric : TypeOrId -> Bool
 isParametric typeOrId =
     let
         f =
             isParametric
 
-        recordBindings : Dict VarName (TypeOrId_ a) -> Bool
+        recordBindings : Dict VarName TypeOrId -> Bool
         recordBindings bindings =
             List.any f (Dict.values bindings)
     in
@@ -199,14 +180,14 @@ isParametric typeOrId =
                         || recordBindings varyings
 
 
-varNames : Type_ a -> List String
+varNames : Type -> List String
 varNames type_ =
     type_
         |> Transform.children recursiveChildren
         |> List.filterMap varName
 
 
-varNames_ : TypeOrId_ a -> List String
+varNames_ : TypeOrId -> List String
 varNames_ typeOrId =
     typeOrId
         |> Transform.children recursiveChildren_
@@ -215,10 +196,10 @@ varNames_ typeOrId =
 
 {-| Find all the children of this expression (and their children, etc...)
 -}
-recursiveChildren : (Type_ a -> List (Type_ a)) -> Type_ a -> List (Type_ a)
+recursiveChildren : (Type -> List Type) -> Type -> List Type
 recursiveChildren fn type_ =
     let
-        fn_ : TypeOrId_ a -> List (Type_ a)
+        fn_ : TypeOrId -> List Type
         fn_ typeOrId =
             case typeOrId of
                 Id _ ->
@@ -278,7 +259,7 @@ recursiveChildren fn type_ =
 
 {-| Find all the children of this expression (and their children, etc...)
 -}
-recursiveChildren_ : (TypeOrId_ a -> List (TypeOrId_ a)) -> TypeOrId_ a -> List (TypeOrId_ a)
+recursiveChildren_ : (TypeOrId -> List TypeOrId) -> TypeOrId -> List TypeOrId
 recursiveChildren_ fn typeOrId =
     let
         recordBindings bindings =
@@ -333,7 +314,7 @@ recursiveChildren_ fn typeOrId =
                 ++ recordBindings varyings
 
 
-mapTypeOrId : (a -> b) -> TypeOrId_ a -> TypeOrId_ b
+mapTypeOrId : (a -> b) -> TypeOrId -> TypeOrId
 mapTypeOrId fn typeOrId =
     case typeOrId of
         Id id ->
@@ -343,7 +324,7 @@ mapTypeOrId fn typeOrId =
             Type <| mapType fn type_
 
 
-mapType : (a -> b) -> Type_ a -> Type_ b
+mapType : (a -> b) -> Type -> Type
 mapType fn type_ =
     let
         f =
@@ -396,7 +377,7 @@ mapType fn type_ =
 
         UserDefinedType r ->
             UserDefinedType
-                { qualifiedness = fn r.qualifiedness
+                { moduleName = r.moduleName
                 , name = r.name
                 , args = List.map f r.args
                 }
@@ -407,107 +388,3 @@ mapType fn type_ =
                 , uniforms = Dict.map (always f) uniforms
                 , varyings = Dict.map (always f) varyings
                 }
-
-
-combineType : Type_ (Result err a) -> Result err (Type_ a)
-combineType type_ =
-    let
-        f =
-            combineTypeOrId
-
-        recordBindings : Dict VarName (TypeOrId_ (Result err a)) -> Result err (Dict VarName (TypeOrId_ a))
-        recordBindings bindings =
-            bindings
-                |> Dict.map (always f)
-                |> Dict.combineResult
-    in
-    case type_ of
-        TypeVar string ->
-            Ok <| TypeVar string
-
-        Function { from, to } ->
-            Result.map2
-                (\from_ to_ ->
-                    Function
-                        { from = from_
-                        , to = to_
-                        }
-                )
-                (f from)
-                (f to)
-
-        Int ->
-            Ok Int
-
-        Float ->
-            Ok Float
-
-        Char ->
-            Ok Char
-
-        String ->
-            Ok String
-
-        Bool ->
-            Ok Bool
-
-        List listType ->
-            f listType
-                |> Result.map List
-
-        Unit ->
-            Ok Unit
-
-        Tuple a b ->
-            Result.map2 Tuple
-                (f a)
-                (f b)
-
-        Tuple3 a b c ->
-            Result.map3 Tuple3
-                (f a)
-                (f b)
-                (f c)
-
-        Record bindings ->
-            recordBindings bindings
-                |> Result.map Record
-
-        UserDefinedType { qualifiedness, name, args } ->
-            Result.map2
-                (\qualifiedness_ args_ ->
-                    UserDefinedType
-                        { qualifiedness = qualifiedness_
-                        , name = name
-                        , args = args_
-                        }
-                )
-                qualifiedness
-                (args
-                    |> List.map f
-                    |> Result.combine
-                )
-
-        WebGLShader { attributes, uniforms, varyings } ->
-            Result.map3
-                (\a u v ->
-                    WebGLShader
-                        { attributes = a
-                        , uniforms = u
-                        , varyings = v
-                        }
-                )
-                (recordBindings attributes)
-                (recordBindings uniforms)
-                (recordBindings varyings)
-
-
-combineTypeOrId : TypeOrId_ (Result err a) -> Result err (TypeOrId_ a)
-combineTypeOrId typeOrId =
-    case typeOrId of
-        Id id ->
-            Ok <| Id id
-
-        Type type_ ->
-            combineType type_
-                |> Result.map Type
