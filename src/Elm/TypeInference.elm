@@ -251,11 +251,34 @@ typeAnnotationToType typeAnnotation =
         TypeAnnotation.Tupled _ ->
             State.impossibleTypePattern typeAnnotation
 
-        TypeAnnotation.Record a ->
-            5
+        TypeAnnotation.Record fields ->
+            fields
+                |> List.map
+                    (\fieldNode ->
+                        let
+                            ( fieldNameNode, annotationNode ) =
+                                Node.value fieldNode
+
+                            type_ : TIState TypeOrId
+                            type_ =
+                                f (Node.value annotationNode)
+                        in
+                        type_
+                            |> State.map (\type__ -> ( Node.value fieldNameNode, type__ ))
+                    )
+                |> State.combine
+                |> State.map (Record << Dict.fromList)
 
         TypeAnnotation.GenericRecord a b ->
             6
 
-        TypeAnnotation.FunctionTypeAnnotation a b ->
-            7
+        TypeAnnotation.FunctionTypeAnnotation from to ->
+            State.map2
+                (\from_ to_ ->
+                    Function
+                        { from = from_
+                        , to = to_
+                        }
+                )
+                (f (Node.value from))
+                (f (Node.value to))

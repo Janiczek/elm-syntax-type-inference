@@ -41,7 +41,10 @@ type alias Id =
 
 type Type
     = TypeVar String
-    | Function { from : TypeOrId, to : TypeOrId }
+    | Function
+        { from : TypeOrId
+        , to : TypeOrId
+        }
     | Int
     | Float
     | Char
@@ -52,16 +55,7 @@ type Type
     | Tuple TypeOrId TypeOrId
     | Tuple3 TypeOrId TypeOrId TypeOrId
     | Record (Dict VarName TypeOrId)
-    | {- The actual definitions of type aliases and custom types are elsewhere
-         (in the Declaration module), this is just a "pointer", "var".
-
-         Also, this is the *usage* of a type! So while definition of Maybe
-         might be `Maybe a`, here you'll most likely see specific stuff
-         like `Maybe Int`.
-
-         This constructor encompasses both type aliases and custom types:
-      -}
-      UserDefinedType
+    | UserDefinedType
         { moduleName : FullModuleName
         , name : VarName
         , args : List TypeOrId
@@ -362,15 +356,10 @@ mapType fn type_ =
             Unit
 
         Tuple a b ->
-            Tuple
-                (f a)
-                (f b)
+            Tuple (f a) (f b)
 
         Tuple3 a b c ->
-            Tuple3
-                (f a)
-                (f b)
-                (f c)
+            Tuple3 (f a) (f b) (f c)
 
         Record dict ->
             Record <| Dict.map (always f) dict
