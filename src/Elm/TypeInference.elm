@@ -281,7 +281,7 @@ typeAnnotationToType typeAnnotation =
                 |> State.map
                     (\fields_ ->
                         ExtensibleRecord
-                            { recordVar = Node.value name
+                            { typeVar = Node.value name
                             , fields = fields_
                             }
                     )

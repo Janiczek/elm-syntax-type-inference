@@ -54,7 +54,7 @@ type Type
     | Tuple3 TypeOrId TypeOrId TypeOrId
     | Record (Dict VarName TypeOrId)
     | ExtensibleRecord
-        { recordVar : {- TODO rename to TypeVar -} String
+        { typeVar : String
         , fields : Dict VarName TypeOrId
         }
     | UserDefinedType
@@ -167,10 +167,10 @@ isParametric typeOrId =
                 Record fields ->
                     recordBindings fields
 
-                ExtensibleRecord { recordVar, fields } ->
+                ExtensibleRecord { typeVar, fields } ->
                     -- in practice ↓ means `True`
-                    f (Type (TypeVar recordVar))
-                        || recordBindings fields
+                    f (Type (TypeVar typeVar))
+                        || f (Type (Record fields))
 
                 UserDefinedType { args } ->
                     List.any f args
@@ -249,9 +249,8 @@ recursiveChildren fn type_ =
         Record fields ->
             recordBindings fields
 
-        ExtensibleRecord { recordVar, fields } ->
-            fn (TypeVar recordVar)
-                ++ recordBindings fields
+        ExtensibleRecord { typeVar, fields } ->
+            fn (TypeVar typeVar) ++ fn (Record fields)
 
         UserDefinedType { args } ->
             List.fastConcatMap fn_ args
@@ -310,9 +309,8 @@ recursiveChildren_ fn typeOrId =
         Type (Record fields) ->
             recordBindings fields
 
-        Type (ExtensibleRecord { recordVar, fields }) ->
-            fn (Type (TypeVar recordVar))
-                ++ recordBindings fields
+        Type (ExtensibleRecord { typeVar, fields }) ->
+            fn (Type (TypeVar typeVar)) ++ fn (Type (Record fields))
 
         Type (UserDefinedType { args }) ->
             List.fastConcatMap fn args
