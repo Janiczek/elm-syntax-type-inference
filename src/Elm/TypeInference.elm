@@ -7,10 +7,13 @@ module Elm.TypeInference exposing (infer)
 -}
 
 import Dict exposing (Dict)
-import Elm.Syntax.Declaration as Declaration
+import Elm.Syntax.Declaration as Declaration exposing (Declaration)
+import Elm.Syntax.DeclarationV2 as DeclarationV2 exposing (DeclarationV2)
+import Elm.Syntax.Expression as Expression exposing (Expression)
 import Elm.Syntax.ExpressionV2 as ExpressionV2
     exposing
-        ( LocatedExpr
+        ( FunctionV2
+        , LocatedExpr
         , TypedExpr
         )
 import Elm.Syntax.File exposing (File)
@@ -18,6 +21,20 @@ import Elm.Syntax.FileV2 exposing (TypedFile)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
+import Elm.Syntax.NodeV2 as NodeV2
+    exposing
+        ( LocatedMeta
+        , LocatedNode
+        , NodeV2(..)
+        , TypedMeta
+        )
+import Elm.Syntax.Pattern exposing (Pattern)
+import Elm.Syntax.PatternV2 as PatternV2
+    exposing
+        ( LocatedPattern
+        , TypedPattern
+        )
+import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.AssignIds as AssignIds
@@ -37,14 +54,84 @@ import Maybe.Extra as Maybe
 
 infer : Dict FullModuleName File -> Result Error (Dict FullModuleName TypedFile)
 infer files =
-    let
-        x =
-            gatherTypeAliases files
-                |> State.map (\typeAliases -> Debug.todo "infer")
-    in
-    x
+    gatherTypeAliases files
+        |> State.andThen (infer_ files)
         |> State.run State.init
         |> Tuple.first
+
+
+infer_ :
+    Dict FullModuleName File
+    -> Dict ( FullModuleName, VarName ) Type
+    -> TIState (Dict FullModuleName TypedFile)
+infer_ files typeAliases =
+    files
+        |> Dict.toList
+        |> State.traverse (inferFile files typeAliases)
+        |> State.map Dict.fromList
+
+
+inferFile :
+    Dict FullModuleName File
+    -> Dict ( FullModuleName, VarName ) Type
+    -> ( FullModuleName, File )
+    -> TIState ( FullModuleName, TypedFile )
+inferFile files typeAliases ( moduleName, file ) =
+    State.traverse (inferDeclaration files typeAliases) file.declarations
+        |> State.map
+            (\declarations ->
+                ( moduleName
+                , { moduleDefinition = NodeV2.fromNode file.moduleDefinition
+                  , imports = List.map NodeV2.fromNode file.imports
+                  , comments = List.map NodeV2.fromNode file.comments
+                  , declarations = declarations
+                  }
+                )
+            )
+
+
+inferDeclaration :
+    Dict FullModuleName File
+    -> Dict ( FullModuleName, VarName ) Type
+    -> Node Declaration
+    -> TIState (LocatedNode (DeclarationV2 TypedMeta))
+inferDeclaration files typeAliases declarationNode =
+    let
+        range : Range
+        range =
+            Node.range declarationNode
+
+        declaration : Declaration
+        declaration =
+            Node.value declarationNode
+    in
+    (case declaration of
+        Declaration.FunctionDeclaration fn ->
+            inferFunction fn
+                |> State.map DeclarationV2.FunctionDeclaration
+
+        Declaration.AliasDeclaration typeAlias ->
+            DeclarationV2.AliasDeclaration typeAlias
+                |> State.pure
+
+        Declaration.CustomTypeDeclaration customType ->
+            DeclarationV2.CustomTypeDeclaration customType
+                |> State.pure
+
+        Declaration.PortDeclaration signature ->
+            DeclarationV2.PortDeclaration signature
+                |> State.pure
+
+        Declaration.InfixDeclaration infix ->
+            DeclarationV2.InfixDeclaration infix
+                |> State.pure
+
+        Declaration.Destructuring patternNode exprNode ->
+            State.map2 DeclarationV2.Destructuring
+                (inferPattern patternNode)
+                (inferExpr typeAliases exprNode)
+    )
+        |> State.map (NodeV2 { range = range })
 
 
 gatherTypeAliases :
@@ -86,9 +173,14 @@ gatherTypeAliases files =
         |> State.map (List.fastConcat >> Dict.fromList)
 
 
-inferExpr : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
-inferExpr typeAliases expr =
-    inferExpr_ typeAliases expr
+inferExpr : Dict ( FullModuleName, VarName ) Type -> Node Expression -> TIState TypedExpr
+inferExpr typeAliases exprNode =
+    let
+        expr_ : LocatedExpr
+        expr_ =
+            Debug.todo "inferExpr: located expr"
+    in
+    inferExpr_ typeAliases expr_
         |> State.mapError (\state err -> substituteTypesInError state.idTypes err)
 
 
@@ -100,6 +192,26 @@ inferExpr_ typeAliases expr =
     State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <| \() ->
     State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
     State.pure betterExpr
+
+
+inferPattern : Node Pattern -> TIState TypedPattern
+inferPattern patternNode =
+    let
+        pattern : LocatedPattern
+        pattern =
+            Debug.todo "inferPattern: located pattern"
+    in
+    Debug.todo "infer pattern"
+
+
+inferFunction : Expression.Function -> TIState (FunctionV2 TypedMeta)
+inferFunction function =
+    let
+        function_ : FunctionV2 LocatedMeta
+        function_ =
+            Debug.todo "inferFunction: located function"
+    in
+    Debug.todo "infer function"
 
 
 substituteTypesInExpr : TypedExpr -> TIState TypedExpr
