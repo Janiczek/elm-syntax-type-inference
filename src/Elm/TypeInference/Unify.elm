@@ -4,38 +4,40 @@ module Elm.TypeInference.Unify exposing
     )
 
 import Dict exposing (Dict)
+import Elm.Syntax.FullModuleName exposing (FullModuleName)
+import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type exposing (Id, Type(..), TypeOrId(..))
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.VarName exposing (VarName)
 
 
-unifyMany : List TypeEquation -> TIState ()
-unifyMany equations =
+unifyMany : Dict ( FullModuleName, VarName ) Type -> List TypeEquation -> TIState ()
+unifyMany typeAliases equations =
     equations
-        |> State.traverse (\( t1, t2 ) -> unify t1 t2)
+        |> State.traverse (\( t1, t2 ) -> unify typeAliases t1 t2)
         |> State.map (\_ -> ())
 
 
-unify : TypeOrId -> TypeOrId -> TIState ()
-unify t1 t2 =
+unify : Dict ( FullModuleName, VarName ) Type -> TypeOrId -> TypeOrId -> TIState ()
+unify typeAliases t1 t2 =
     if t1 == t2 then
         State.pure ()
 
     else
         case ( t1, t2 ) of
             ( Id id, _ ) ->
-                unifyVariable id t2
+                unifyVariable typeAliases id t2
 
             ( _, Id id ) ->
-                unifyVariable id t1
+                unifyVariable typeAliases id t1
 
             ( Type t1_, Type t2_ ) ->
-                unifyTypes t1_ t2_
+                unifyTypes typeAliases t1_ t2_
 
 
-unifyTypes : Type -> Type -> TIState ()
-unifyTypes t1 t2 =
+unifyTypes : Dict ( FullModuleName, VarName ) Type -> Type -> Type -> TIState ()
+unifyTypes typeAliases t1 t2 =
     let
         noOp : TIState ()
         noOp =
@@ -58,7 +60,7 @@ unifyTypes t1 t2 =
                             (Dict.values bindings1)
                             (Dict.values bindings2)
                 in
-                unifyMany fieldEquations
+                unifyMany typeAliases fieldEquations
     in
     case ( t1, t2 ) of
         ( TypeVar name1, TypeVar name2 ) ->
@@ -110,6 +112,7 @@ unifyTypes t1 t2 =
 
         ( Function a, Function b ) ->
             unifyMany
+                typeAliases
                 [ ( a.from, b.from )
                 , ( a.to, b.to )
                 ]
@@ -118,13 +121,14 @@ unifyTypes t1 t2 =
             typeMismatch
 
         ( List list1, List list2 ) ->
-            unify list1 list2
+            unify typeAliases list1 list2
 
         ( List _, _ ) ->
             typeMismatch
 
         ( Tuple t1e1 t1e2, Tuple t2e1 t2e2 ) ->
             unifyMany
+                typeAliases
                 [ ( t1e1, t2e1 )
                 , ( t1e2, t2e2 )
                 ]
@@ -134,6 +138,7 @@ unifyTypes t1 t2 =
 
         ( Tuple3 t1e1 t1e2 t1e3, Tuple3 t2e1 t2e2 t2e3 ) ->
             unifyMany
+                typeAliases
                 [ ( t1e1, t2e1 )
                 , ( t1e2, t2e2 )
                 , ( t1e3, t2e3 )
@@ -149,8 +154,17 @@ unifyTypes t1 t2 =
             typeMismatch
 
         ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
-            State.do (unifyTypes (TypeVar r1.typeVar) (TypeVar r2.typeVar)) <| \() ->
-            unifyTypes (Record r1.fields) (Record r2.fields)
+            State.do
+                (unifyTypes
+                    typeAliases
+                    (TypeVar r1.typeVar)
+                    (TypeVar r2.typeVar)
+                )
+            <| \() ->
+            unifyTypes
+                typeAliases
+                (Record r1.fields)
+                (Record r2.fields)
 
         ( ExtensibleRecord _, _ ) ->
             typeMismatch
@@ -161,16 +175,15 @@ unifyTypes t1 t2 =
 
             else
                 List.map2 Tuple.pair ut1.args ut2.args
-                    |> unifyMany
+                    |> unifyMany typeAliases
 
         ( UserDefinedType ut, _ ) ->
-            State.do (State.getTypeAlias ut.moduleName ut.name) <| \maybeAlias ->
-            case maybeAlias of
+            case Dict.get ( ut.moduleName, ut.name ) typeAliases of
                 Nothing ->
                     typeMismatch
 
                 Just aliasedType ->
-                    unifyTypes aliasedType t2
+                    unifyTypes typeAliases aliasedType t2
 
         ( WebGLShader webgl1, WebGLShader webgl2 ) ->
             State.traverse (\( bindings1, bindings2 ) -> recordBindings bindings1 bindings2)
@@ -184,8 +197,8 @@ unifyTypes t1 t2 =
             typeMismatch
 
 
-unifyVariable : Id -> TypeOrId -> TIState ()
-unifyVariable id otherTypeOrId =
+unifyVariable : Dict ( FullModuleName, VarName ) Type -> Id -> TypeOrId -> TIState ()
+unifyVariable typeAliases id otherTypeOrId =
     let
         occursCheck : TIState ()
         occursCheck =
@@ -199,7 +212,7 @@ unifyVariable id otherTypeOrId =
     State.do (State.getTypeForId id) <| \maybeTypeOrId ->
     case maybeTypeOrId of
         Just typeOrId ->
-            unify typeOrId otherTypeOrId
+            unify typeAliases typeOrId otherTypeOrId
 
         Nothing ->
             case otherTypeOrId of
@@ -207,7 +220,7 @@ unifyVariable id otherTypeOrId =
                     State.do (State.getTypeForId otherId) <| \maybeOtherType ->
                     case maybeOtherType of
                         Just otherType ->
-                            unifyVariable id otherType
+                            unifyVariable typeAliases id otherType
 
                         Nothing ->
                             occursCheck

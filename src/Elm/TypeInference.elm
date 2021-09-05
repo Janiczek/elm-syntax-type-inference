@@ -35,13 +35,21 @@ import List.ExtraExtra as List
 import Maybe.Extra as Maybe
 
 
-infer : Dict FullModuleName File -> Result (List Error) (Dict FullModuleName TypedFile)
+infer : Dict FullModuleName File -> Result Error (Dict FullModuleName TypedFile)
 infer files =
-    gatherTypeAliases files
-        |> State.map (\typeAliases -> Debug.todo "infer")
+    let
+        x =
+            gatherTypeAliases files
+                |> State.map (\typeAliases -> Debug.todo "infer")
+    in
+    x
+        |> State.run State.init
+        |> Tuple.first
 
 
-gatherTypeAliases : Dict FullModuleName File -> TIState (Dict ( FullModuleName, VarName ) Type)
+gatherTypeAliases :
+    Dict FullModuleName File
+    -> TIState (Dict ( FullModuleName, VarName ) Type)
 gatherTypeAliases files =
     files
         |> Dict.toList
@@ -80,21 +88,16 @@ gatherTypeAliases files =
 
 inferExpr : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
 inferExpr typeAliases expr =
-    -- TODO probably not do State.init here?
-    let
-        ( result, state ) =
-            State.run (State.init typeAliases) (inferExpr_ expr)
-    in
-    State.fromTuple ( result, state )
-        |> State.mapError (substituteTypesInError state.idTypes)
+    inferExpr_ typeAliases expr
+        |> State.mapError (\state err -> substituteTypesInError state.idTypes err)
 
 
-inferExpr_ : LocatedExpr -> TIState TypedExpr
-inferExpr_ expr =
+inferExpr_ : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
+inferExpr_ typeAliases expr =
     State.do (AssignIds.assignIds expr) <| \exprWithIds ->
     State.do (GenerateEquations.generateLocalEquations exprWithIds) <| \exprEquations ->
     State.do GenerateEquations.generateVarEquations <| \varEquations ->
-    State.do (Unify.unifyMany (exprEquations ++ varEquations)) <| \() ->
+    State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <| \() ->
     State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
     State.pure betterExpr
 
@@ -110,6 +113,18 @@ substituteTypesInExpr expr =
 substituteTypesInError : Dict Id TypeOrId -> Error -> Error
 substituteTypesInError idTypes error =
     case error of
+        ImpossibleAstPattern _ ->
+            error
+
+        ImpossibleTypePattern _ ->
+            error
+
+        VarNotFound _ ->
+            error
+
+        AmbiguousName _ ->
+            error
+
         TypeMismatch t1 t2 ->
             TypeMismatch
                 (getBetterType idTypes t1)
@@ -117,9 +132,6 @@ substituteTypesInError idTypes error =
 
         OccursCheckFailed id type_ ->
             OccursCheckFailed id (getBetterType idTypes type_)
-
-        ImpossibleAstPattern _ ->
-            error
 
 
 getBetterType : Dict Id TypeOrId -> TypeOrId -> TypeOrId
@@ -129,6 +141,7 @@ getBetterType idTypes typeOrId =
 
     else
         let
+            f : TypeOrId -> TypeOrId
             f =
                 getBetterType idTypes
         in
@@ -177,10 +190,17 @@ getBetterType idTypes typeOrId =
                     Tuple3 e1 e2 e3 ->
                         Type <| Tuple3 (f e1) (f e2) (f e3)
 
-                    Record bindings ->
+                    Record fields ->
                         Type <|
                             Record <|
-                                Dict.map (always f) bindings
+                                Dict.map (always f) fields
+
+                    ExtensibleRecord { typeVar, fields } ->
+                        Type <|
+                            ExtensibleRecord
+                                { typeVar = typeVar
+                                , fields = Dict.map (always f) fields
+                                }
 
                     UserDefinedType ut ->
                         Type <|

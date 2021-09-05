@@ -5,7 +5,6 @@ module Elm.TypeInference.State exposing
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getIdTypes, getTypeForId, insertTypeForId
-    , getTypeAliases, getTypeAlias
     , impossibleAstPattern, impossibleTypePattern, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
     )
 
@@ -46,11 +45,6 @@ module Elm.TypeInference.State exposing
 # ID types
 
 @docs getIdTypes, getTypeForId, insertTypeForId
-
-
-# Type aliases
-
-@docs getTypeAliases, getTypeAlias
 
 
 # Errors
@@ -95,15 +89,6 @@ type alias State =
          might need to walk this dict multiple times.
       -}
       idTypes : Dict Id TypeOrId
-    , {- All known type aliases and what they resolve to.
-
-         Read-only.
-
-         TODO: in elm-in-elm we have `ConcreteType` which basically disallows IDs.
-         Perhaps we should also use it here (make impossible states impossible)?
-         Library API tradeoffs - too many types etc...
-      -}
-      typeAliases : Dict ( FullModuleName, VarName ) Type
     }
 
 
@@ -138,11 +123,16 @@ map userFn stateFn =
             |> Tuple.mapFirst (Result.map userFn)
 
 
-mapError : (Error -> Error) -> TIState a -> TIState a
+mapError : (State -> Error -> Error) -> TIState a -> TIState a
 mapError fn stateFn =
     \state ->
-        stateFn state
-            |> Tuple.mapFirst (Result.mapError fn)
+        let
+            ( result, newState ) =
+                stateFn state
+        in
+        ( Result.mapError (fn newState) result
+        , newState
+        )
 
 
 andMap : TIState a -> TIState (a -> b) -> TIState b
@@ -231,12 +221,11 @@ modify fn =
 -- OUR API
 
 
-init : Dict ( FullModuleName, VarName ) Type -> State
-init typeAliases =
+init : State
+init =
     { nextId = 0
     , varTypes = Dict.empty
     , idTypes = Dict.empty
-    , typeAliases = typeAliases
     }
 
 
@@ -318,22 +307,6 @@ insertTypeForId id typeOrId =
 
         Type _ ->
             put { state | idTypes = Dict.insert id typeOrId state.idTypes }
-
-
-
--- TYPE ALIASES
-
-
-getTypeAliases : TIState (Dict ( FullModuleName, VarName ) Type)
-getTypeAliases =
-    get
-        |> map .typeAliases
-
-
-getTypeAlias : FullModuleName -> VarName -> TIState (Maybe Type)
-getTypeAlias moduleName varName =
-    getTypeAliases
-        |> map (Dict.get ( moduleName, varName ))
 
 
 
