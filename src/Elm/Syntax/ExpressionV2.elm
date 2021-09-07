@@ -10,6 +10,7 @@ module Elm.Syntax.ExpressionV2 exposing
     , RecordSetter
     , TypedExpr
     , fromExpression
+    , fromNodeExpression
     , getType
     , mapType
     , recurse

@@ -12,7 +12,8 @@ import Elm.Syntax.DeclarationV2 as DeclarationV2 exposing (DeclarationV2)
 import Elm.Syntax.Expression as Expression exposing (Expression)
 import Elm.Syntax.ExpressionV2 as ExpressionV2
     exposing
-        ( FunctionV2
+        ( FunctionImplementationV2
+        , FunctionV2
         , LocatedExpr
         , TypedExpr
         )
@@ -32,6 +33,7 @@ import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.PatternV2 as PatternV2
     exposing
         ( LocatedPattern
+        , PatternV2
         , TypedPattern
         )
 import Elm.Syntax.Range exposing (Range)
@@ -107,7 +109,7 @@ inferDeclaration files typeAliases declarationNode =
     in
     (case declaration of
         Declaration.FunctionDeclaration fn ->
-            inferFunction fn
+            inferFunction typeAliases fn
                 |> State.map DeclarationV2.FunctionDeclaration
 
         Declaration.AliasDeclaration typeAlias ->
@@ -186,12 +188,17 @@ inferExpr typeAliases exprNode =
 
 inferExpr_ : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
 inferExpr_ typeAliases expr =
-    State.do (AssignIds.assignIds expr) <| \exprWithIds ->
-    State.do (GenerateEquations.generateLocalEquations exprWithIds) <| \exprEquations ->
-    State.do GenerateEquations.generateVarEquations <| \varEquations ->
-    State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <| \() ->
-    State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
-    State.pure betterExpr
+    State.do (AssignIds.assignIds expr) <|
+        \exprWithIds ->
+            State.do (GenerateEquations.generateLocalEquations exprWithIds) <|
+                \exprEquations ->
+                    State.do GenerateEquations.generateVarEquations <|
+                        \varEquations ->
+                            State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <|
+                                \() ->
+                                    State.do (substituteTypesInExpr exprWithIds) <|
+                                        \betterExpr ->
+                                            State.pure betterExpr
 
 
 inferPattern : Node Pattern -> TIState TypedPattern
@@ -204,26 +211,51 @@ inferPattern patternNode =
     Debug.todo "infer pattern"
 
 
-inferFunction : Expression.Function -> TIState (FunctionV2 TypedMeta)
-inferFunction function =
+inferFunction : Dict ( FullModuleName, VarName ) Type -> Expression.Function -> TIState (FunctionV2 TypedMeta)
+inferFunction typeAliases function =
     let
-        function_ : FunctionV2 LocatedMeta
-        function_ =
-            Debug.todo "inferFunction: located function"
+        declarationRange : Range
+        declarationRange =
+            Node.range function.declaration
+
+        oldDeclaration : Expression.FunctionImplementation
+        oldDeclaration =
+            Node.value function.declaration
+
+        expr : TIState TypedExpr
+        expr =
+            inferExpr typeAliases oldDeclaration.expression
+
+        arguments : TIState (List TypedPattern)
+        arguments =
+            State.traverse inferPattern oldDeclaration.arguments
     in
-    State.pure
-        { documentation = function_.documentation
-        , signature = function_.signature
-        , declaration = function_.declaration
-        }
+    State.map2
+        (\expr_ arguments_ ->
+            let
+                declaration : FunctionImplementationV2 TypedMeta
+                declaration =
+                    { name = NodeV2.fromNode oldDeclaration.name
+                    , arguments = arguments_
+                    , expression = expr_
+                    }
+            in
+            { documentation = Maybe.map NodeV2.fromNode function.documentation
+            , signature = Maybe.map NodeV2.fromNode function.signature
+            , declaration = NodeV2 { range = declarationRange } declaration
+            }
+        )
+        expr
+        arguments
 
 
 substituteTypesInExpr : TypedExpr -> TIState TypedExpr
 substituteTypesInExpr expr =
-    State.do State.getIdTypes <| \idTypes ->
-    expr
-        |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
-        |> State.pure
+    State.do State.getIdTypes <|
+        \idTypes ->
+            expr
+                |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
+                |> State.pure
 
 
 substituteTypesInError : Dict Id TypeOrId -> Error -> Error
