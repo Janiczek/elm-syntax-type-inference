@@ -188,27 +188,39 @@ inferExpr typeAliases exprNode =
 
 inferExpr_ : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
 inferExpr_ typeAliases expr =
-    State.do (AssignIds.assignIds expr) <|
-        \exprWithIds ->
-            State.do (GenerateEquations.generateLocalEquations exprWithIds) <|
-                \exprEquations ->
-                    State.do GenerateEquations.generateVarEquations <|
-                        \varEquations ->
-                            State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <|
-                                \() ->
-                                    State.do (substituteTypesInExpr exprWithIds) <|
-                                        \betterExpr ->
-                                            State.pure betterExpr
+    State.do (AssignIds.assignIds expr) <| \exprWithIds ->
+    State.do (GenerateEquations.generateLocalEquations exprWithIds) <| \exprEquations ->
+    State.do GenerateEquations.generateVarEquations <| \varEquations ->
+    State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <| \() ->
+    State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
+    State.pure betterExpr
 
 
 inferPattern : Node Pattern -> TIState TypedPattern
 inferPattern patternNode =
     let
-        pattern : LocatedPattern
-        pattern =
-            Debug.todo "inferPattern: located pattern"
+        range : Range
+        range =
+            Node.range patternNode
+
+        oldPattern : Pattern
+        oldPattern =
+            Node.value patternNode
+
+        newPattern : PatternV2 TypedMeta
+        newPattern =
+            Debug.todo "new pattern"
+
+        type_ : TypeOrId
+        type_ =
+            Debug.todo "type"
     in
-    Debug.todo "infer pattern"
+    State.pure <|
+        NodeV2
+            { range = range
+            , type_ = type_
+            }
+            newPattern
 
 
 inferFunction : Dict ( FullModuleName, VarName ) Type -> Expression.Function -> TIState (FunctionV2 TypedMeta)
@@ -251,11 +263,10 @@ inferFunction typeAliases function =
 
 substituteTypesInExpr : TypedExpr -> TIState TypedExpr
 substituteTypesInExpr expr =
-    State.do State.getIdTypes <|
-        \idTypes ->
-            expr
-                |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
-                |> State.pure
+    State.do State.getIdTypes <| \idTypes ->
+    expr
+        |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
+        |> State.pure
 
 
 substituteTypesInError : Dict Id TypeOrId -> Error -> Error
