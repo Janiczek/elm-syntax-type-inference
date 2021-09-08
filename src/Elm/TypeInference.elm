@@ -28,11 +28,7 @@ import Elm.Syntax.NodeV2 as NodeV2
         , TypedMeta
         )
 import Elm.Syntax.Pattern exposing (Pattern)
-import Elm.Syntax.PatternV2 as PatternV2
-    exposing
-        ( LocatedPattern
-        , TypedPattern
-        )
+import Elm.Syntax.PatternV2 as PatternV2 exposing (TypedPattern)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
@@ -66,17 +62,16 @@ infer_ :
 infer_ files typeAliases =
     files
         |> Dict.toList
-        |> State.traverse (inferFile files typeAliases)
+        |> State.traverse (inferFile typeAliases)
         |> State.map Dict.fromList
 
 
 inferFile :
-    Dict FullModuleName File
-    -> Dict ( FullModuleName, VarName ) Type
+    Dict ( FullModuleName, VarName ) Type
     -> ( FullModuleName, File )
     -> TIState ( FullModuleName, TypedFile )
-inferFile files typeAliases ( moduleName, file ) =
-    State.traverse (inferDeclaration files typeAliases) file.declarations
+inferFile typeAliases ( moduleName, file ) =
+    State.traverse (inferDeclaration typeAliases) file.declarations
         |> State.map
             (\declarations ->
                 ( moduleName
@@ -90,11 +85,10 @@ inferFile files typeAliases ( moduleName, file ) =
 
 
 inferDeclaration :
-    Dict FullModuleName File
-    -> Dict ( FullModuleName, VarName ) Type
+    Dict ( FullModuleName, VarName ) Type
     -> Node Declaration
     -> TIState (LocatedNode (DeclarationV2 TypedMeta))
-inferDeclaration files typeAliases declarationNode =
+inferDeclaration typeAliases declarationNode =
     let
         range : Range
         range =
