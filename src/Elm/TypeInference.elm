@@ -334,6 +334,9 @@ getBetterType idTypes typeOrId =
                     Float ->
                         typeOrId
 
+                    Number ->
+                        typeOrId
+
                     Char ->
                         typeOrId
 

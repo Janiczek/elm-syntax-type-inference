@@ -229,18 +229,31 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             Debug.todo "generate eqs: case"
 
         LambdaExpression { args, expression } ->
-            -- TODO will need foldr-ing
-            -- arg1 <- ... <- argN <- expression
-            -- with Function. See `Application` case.
-            finish
-                [ ( type_
-                  , Type <|
-                        Function
-                            { from = ()
-                            , to = ()
-                            }
-                  )
-                ]
+            let
+                resultType =
+                    NodeV2.type_ expression
+
+                fnType =
+                    args
+                        |> List.map NodeV2.type_
+                        |> List.foldr
+                            (\rightArgType leftArgType ->
+                                Type <|
+                                    Function
+                                        { from = leftArgType
+                                        , to = rightArgType
+                                        }
+                            )
+                            resultType
+            in
+            State.map2
+                (\bodyEqs argPatternEqs ->
+                    ( type_, fnType )
+                        :: bodyEqs
+                        ++ argPatternEqs
+                )
+                (f expression)
+                (list (generatePatternEquations files thisFile) args)
 
         RecordExpr fieldSetters ->
             let
