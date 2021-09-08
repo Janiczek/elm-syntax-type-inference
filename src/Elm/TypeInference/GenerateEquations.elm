@@ -286,7 +286,6 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                             [ ( Id listItemId, mx.type_ ) ]
             in
             State.do State.getNextIdAndTick <| \listItemId ->
-            -- TODO all items against each other
             list f patterns
                 |> append
                     (( type_, Type (List (Id listItemId)) )
