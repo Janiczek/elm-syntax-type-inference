@@ -5,10 +5,20 @@ module Elm.TypeInference.GenerateEquations exposing
     )
 
 import Dict exposing (Dict)
-import Elm.Syntax.ExpressionV2 exposing (ExpressionV2(..), TypedExpr)
+import Elm.Syntax.ExpressionV2
+    exposing
+        ( ExpressionV2(..)
+        , RecordSetter
+        , TypedExpr
+        )
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
-import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..))
+import Elm.Syntax.NodeV2 as NodeV2
+    exposing
+        ( LocatedNode
+        , NodeV2(..)
+        , TypedMeta
+        )
 import Elm.Syntax.PatternV2
     exposing
         ( PatternV2(..)
@@ -56,6 +66,30 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
         impossibleExpr =
             State.impossibleExpr typedExpr
+
+        recordSetters : List (LocatedNode (RecordSetter TypedMeta)) -> ( Dict VarName TypeOrId, List TypedExpr )
+        recordSetters fieldSetters =
+            let
+                fields : Dict VarName TypeOrId
+                fields =
+                    fieldSetters
+                        |> List.map
+                            (\fieldSetterNode ->
+                                let
+                                    ( fieldNameNode, fieldExpr ) =
+                                        NodeV2.value fieldSetterNode
+                                in
+                                ( NodeV2.value fieldNameNode
+                                , NodeV2.type_ fieldExpr
+                                )
+                            )
+                        |> Dict.fromList
+
+                subexprs : List TypedExpr
+                subexprs =
+                    List.map (NodeV2.value >> Tuple.second) fieldSetters
+            in
+            ( fields, subexprs )
     in
     case expr of
         UnitExpr ->
@@ -202,24 +236,8 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
         RecordExpr fieldSetters ->
             let
-                fields : Dict VarName TypeOrId
-                fields =
-                    fieldSetters
-                        |> List.map
-                            (\fieldSetterNode ->
-                                let
-                                    ( fieldNameNode, fieldExpr ) =
-                                        NodeV2.value fieldSetterNode
-                                in
-                                ( NodeV2.value fieldNameNode
-                                , NodeV2.type_ fieldExpr
-                                )
-                            )
-                        |> Dict.fromList
-
-                subexprs : List TypedExpr
-                subexprs =
-                    List.map (NodeV2.value >> Tuple.second) fieldSetters
+                ( fields, subexprs ) =
+                    recordSetters fieldSetters
             in
             append
                 [ ( type_, Type (Record fields) ) ]
@@ -266,8 +284,29 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                   )
                 ]
 
-        RecordUpdateExpression _ _ ->
-            Debug.todo "generate eqs: record update expression"
+        RecordUpdateExpression recordVarNode fieldSetters ->
+            let
+                recordVar =
+                    NodeV2.value recordVarNode
+            in
+            State.do State.getNextIdAndTick <| \recordId ->
+            State.do (State.findModuleOfVar files thisFile Nothing recordVar) <| \moduleName ->
+            State.do (State.addVarType moduleName recordVar (Id recordId)) <| \() ->
+            let
+                ( fields, subexprs ) =
+                    recordSetters fieldSetters
+            in
+            append
+                [ ( type_
+                  , Type
+                        (ExtensibleRecord
+                            { type_ = Id recordId
+                            , fields = fields
+                            }
+                        )
+                  )
+                ]
+                (list f subexprs)
 
         GLSLExpression _ ->
             -- TODO will we need to parse the GLSL language ourselves?
