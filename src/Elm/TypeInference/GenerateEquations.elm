@@ -189,7 +189,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             impossibleExpr
 
         ParenthesizedExpression e ->
-            list f [ e ]
+            f e
 
         LetExpression _ ->
             Debug.todo "generate eqs: let"
