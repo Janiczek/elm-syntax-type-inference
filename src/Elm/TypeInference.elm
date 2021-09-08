@@ -196,26 +196,7 @@ inferExpr_ typeAliases expr =
 
 inferPattern : Dict ( FullModuleName, VarName ) Type -> Node Pattern -> TIState TypedPattern
 inferPattern typeAliases patternNode =
-    let
-        range : Range
-        range =
-            Node.range patternNode
-
-        oldPattern : Pattern
-        oldPattern =
-            Node.value patternNode
-
-        pattern : LocatedPattern
-        pattern =
-            Debug.todo "pattern"
-    in
-    inferPattern_ typeAliases pattern
-        |> State.map (NodeV2.mapMeta (\m -> { m | range = range }))
-
-
-inferPattern_ : Dict ( FullModuleName, VarName ) Type -> LocatedPattern -> TIState TypedPattern
-inferPattern_ typeAliases expr =
-    State.do (AssignIds.assignIdsToPattern expr) <| \patternWithIds ->
+    State.do (AssignIds.assignIdsToPattern (PatternV2.fromNodePattern patternNode)) <| \patternWithIds ->
     State.do (GenerateEquations.generatePatternEquations patternWithIds) <| \patternEquations ->
     -- TODO generateVarEquations should only run once?
     State.do GenerateEquations.generateVarEquations <| \varEquations ->
