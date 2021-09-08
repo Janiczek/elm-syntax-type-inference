@@ -200,8 +200,30 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
         LambdaExpression _ ->
             Debug.todo "generate eqs: lambda"
 
-        RecordExpr _ ->
-            Debug.todo "generate eqs: record"
+        RecordExpr fieldSetters ->
+            let
+                fields : Dict VarName TypeOrId
+                fields =
+                    fieldSetters
+                        |> List.map
+                            (\fieldSetterNode ->
+                                let
+                                    ( fieldNameNode, fieldExpr ) =
+                                        NodeV2.value fieldSetterNode
+                                in
+                                ( NodeV2.value fieldNameNode
+                                , NodeV2.type_ fieldExpr
+                                )
+                            )
+                        |> Dict.fromList
+
+                subexprs : List TypedExpr
+                subexprs =
+                    List.map (NodeV2.value >> Tuple.second) fieldSetters
+            in
+            append
+                [ ( type_, Type (Record fields) ) ]
+                (list f subexprs)
 
         ListExpr exprs ->
             State.do (list f exprs) <| \exprsEquations ->
