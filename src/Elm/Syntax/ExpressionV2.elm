@@ -17,22 +17,19 @@ module Elm.Syntax.ExpressionV2 exposing
     , transformOnce
     )
 
-import Elm.Syntax.Documentation as Documentation exposing (Documentation)
+import Elm.Syntax.Documentation exposing (Documentation)
 import Elm.Syntax.Expression as Expression exposing (Expression)
 import Elm.Syntax.Infix exposing (InfixDirection)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.Node as Node exposing (Node(..))
+import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.NodeV2 as NodeV2
     exposing
         ( LocatedMeta
         , LocatedNode
         , NodeV2(..)
         , TypedMeta
-        , TypedNode
         )
-import Elm.Syntax.Pattern exposing (Pattern)
-import Elm.Syntax.PatternV2 as PatternV2 exposing (LocatedPattern, PatternV2)
-import Elm.Syntax.Range exposing (Range)
+import Elm.Syntax.PatternV2 as PatternV2 exposing (PatternV2)
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.TypeInference.Type exposing (TypeOrId)
 import Transform

@@ -44,7 +44,7 @@ append equations s =
 
 
 generateExprEquations : TypedExpr -> TIState (List TypeEquation)
-generateExprEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
+generateExprEquations ((NodeV2 { type_ } expr) as typedExpr) =
     let
         f : TypedExpr -> TIState (List TypeEquation)
         f =
@@ -75,7 +75,7 @@ generateExprEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
             in
             append equations (list f exprs)
 
-        OperatorApplication op _ e1 e2 ->
+        OperatorApplication _ _ e1 e2 ->
             let
                 {- TODO link the op name in varTypes
                    For that we need the op to be fully qualified though...
@@ -207,7 +207,7 @@ generateVarEquations =
 
 
 generatePatternEquations : TypedPattern -> TIState (List TypeEquation)
-generatePatternEquations ((NodeV2 ({ type_ } as meta) pattern) as typedPattern) =
+generatePatternEquations ((NodeV2 { type_ } pattern) as typedPattern) =
     let
         f : TypedPattern -> TIState (List TypeEquation)
         f =
@@ -297,18 +297,18 @@ generatePatternEquations ((NodeV2 ({ type_ } as meta) pattern) as typedPattern) 
             -- TODO should we remember that var for later use in exprs?
             finish []
 
-        NamedPattern customType args ->
+        NamedPattern customType _ ->
             State.findModuleOfVar
                 (Debug.todo "assign pattern: named: files")
                 (Debug.todo "assign pattern: named: this file")
                 (FullModuleName.fromModuleName customType.moduleName)
                 customType.name
                 |> State.andThen
-                    (\moduleName ->
+                    (\_ ->
                         finish (Debug.todo "Type (UserDefinedType {moduleName, name, args})")
                     )
 
-        AsPattern p1 name ->
+        AsPattern p1 _ ->
             -- TODO should we remember that var for later use in exprs?
             f p1
 

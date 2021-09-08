@@ -15,8 +15,6 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
-import Maybe.Extra as Maybe
-import Result.Extra as Result
 
 
 unqualifiedVarInThisModule :

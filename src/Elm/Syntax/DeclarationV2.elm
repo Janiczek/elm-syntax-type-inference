@@ -1,6 +1,6 @@
 module Elm.Syntax.DeclarationV2 exposing (DeclarationV2(..))
 
-import Elm.Syntax.ExpressionV2 exposing (ExprWith, ExpressionV2, FunctionV2)
+import Elm.Syntax.ExpressionV2 exposing (ExprWith, FunctionV2)
 import Elm.Syntax.Infix exposing (Infix)
 import Elm.Syntax.PatternV2 exposing (PatternWith)
 import Elm.Syntax.Signature exposing (Signature)

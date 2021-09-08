@@ -17,7 +17,6 @@ import Elm.Syntax.NodeV2 as NodeV2
         , TypedMeta
         )
 import Elm.Syntax.Pattern as Pattern exposing (Pattern, QualifiedNameRef)
-import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Type exposing (TypeOrId)
 import Transform
 

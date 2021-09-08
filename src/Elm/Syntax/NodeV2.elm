@@ -14,9 +14,9 @@ module Elm.Syntax.NodeV2 exposing
     , value
     )
 
-import Elm.Syntax.Node as Node exposing (Node(..))
+import Elm.Syntax.Node exposing (Node(..))
 import Elm.Syntax.Range as Range exposing (Range)
-import Elm.TypeInference.Type as Type exposing (Type, TypeOrId)
+import Elm.TypeInference.Type exposing (TypeOrId)
 
 
 type NodeV2 meta value
@@ -42,7 +42,7 @@ type alias TypedNode value =
 
 
 meta : NodeV2 meta value -> meta
-meta (NodeV2 meta_ value_) =
+meta (NodeV2 meta_ _) =
     meta_
 
 

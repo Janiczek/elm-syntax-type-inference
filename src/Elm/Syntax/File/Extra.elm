@@ -62,7 +62,7 @@ exposes varName file =
                 |> Module.exposingList
     in
     case exposing_ of
-        Explicit exposedItem ->
+        Explicit _ ->
             Exposing.exposesFunction varName exposing_
 
         All _ ->

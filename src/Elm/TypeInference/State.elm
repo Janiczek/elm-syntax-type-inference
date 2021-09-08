@@ -64,7 +64,7 @@ import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
-import Elm.TypeInference.Type exposing (Id, Type, TypeOrId(..))
+import Elm.TypeInference.Type exposing (Id, TypeOrId(..))
 
 
 

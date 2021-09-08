@@ -18,13 +18,9 @@ Module is not `Elm.Type` because that already exists in elm/project-metadata-uti
 -}
 
 import Dict exposing (Dict)
-import Dict.ExtraExtra as Dict
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
-import Elm.Syntax.Node as Node
-import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.VarName exposing (VarName)
 import List.ExtraExtra as List
-import Result.Extra as Result
 import Transform
 
 

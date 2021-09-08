@@ -20,12 +20,10 @@ import Elm.Syntax.ExpressionV2 as ExpressionV2
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FileV2 exposing (TypedFile)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
-import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.NodeV2 as NodeV2
     exposing
-        ( LocatedMeta
-        , LocatedNode
+        ( LocatedNode
         , NodeV2(..)
         , TypedMeta
         )
@@ -33,7 +31,6 @@ import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.PatternV2 as PatternV2
     exposing
         ( LocatedPattern
-        , PatternV2
         , TypedPattern
         )
 import Elm.Syntax.Range exposing (Range)
@@ -43,7 +40,7 @@ import Elm.TypeInference.AssignIds as AssignIds
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.GenerateEquations as GenerateEquations
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type as Type
+import Elm.TypeInference.Type
     exposing
         ( Id
         , Type(..)
