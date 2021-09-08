@@ -253,13 +253,11 @@ occurs id typeOrId =
     in
     case typeOrId of
         Id id_ ->
-            -- TODO ??? should this be False instead?
             State.pure <| id == id_
 
         Type type_ ->
             case type_ of
                 TypeVar _ ->
-                    -- TODO ??? what if var "a" got mapped to id 0? we should maybe check some mapping String->Int?
                     State.pure False
 
                 Function { from, to } ->
