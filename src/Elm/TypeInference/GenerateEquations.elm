@@ -64,7 +64,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
         Application [] ->
             impossibleExpr
 
-        Application ((fn :: args) as exprs) ->
+        Application ((fn :: _) as exprs) ->
             State.do State.getNextIdAndTick <| \resultId ->
             let
                 fnType =
