@@ -8,7 +8,6 @@ import Dict exposing (Dict)
 import Elm.Syntax.ExpressionV2 exposing (ExpressionV2(..), TypedExpr)
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
-import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..))
 import Elm.Syntax.PatternV2
     exposing
@@ -44,12 +43,16 @@ append equations s =
     State.map ((++) equations) s
 
 
-generateExprEquations : TypedExpr -> TIState (List TypeEquation)
-generateExprEquations ((NodeV2 { type_ } expr) as typedExpr) =
+generateExprEquations :
+    Dict FullModuleName File
+    -> File
+    -> TypedExpr
+    -> TIState (List TypeEquation)
+generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
     let
         f : TypedExpr -> TIState (List TypeEquation)
         f =
-            generateExprEquations
+            generateExprEquations files thisFile
 
         impossibleExpr =
             State.impossibleExpr typedExpr
@@ -90,7 +93,16 @@ generateExprEquations ((NodeV2 { type_ } expr) as typedExpr) =
             append equations (list f [ e1, e2 ])
 
         FunctionOrValue moduleName varName ->
-            functionOrValue moduleName varName type_
+            State.do
+                (State.findModuleOfVar
+                    files
+                    thisFile
+                    (FullModuleName.fromModuleName moduleName)
+                    varName
+                )
+            <| \fullModuleName ->
+            State.do (State.addVarType fullModuleName varName type_) <| \() ->
+            finish []
 
         IfBlock ((NodeV2 m1 _) as e1) ((NodeV2 m2 _) as e2) ((NodeV2 m3 _) as e3) ->
             list f [ e1, e2, e3 ]
@@ -100,8 +112,27 @@ generateExprEquations ((NodeV2 { type_ } expr) as typedExpr) =
                     , ( m2.type_, type_ )
                     ]
 
-        PrefixOperator _ ->
-            Debug.todo "generate eqs: prefix operator"
+        PrefixOperator operator ->
+            -- operator is a function of two arguments
+            State.do (State.findModuleOfVar files thisFile Nothing operator) <| \moduleName ->
+            State.do (State.addVarType moduleName operator type_) <| \() ->
+            State.do State.getNextIdAndTick <| \firstArgId ->
+            State.do State.getNextIdAndTick <| \secondArgId ->
+            State.do State.getNextIdAndTick <| \resultId ->
+            finish
+                [ ( type_
+                  , Type <|
+                        Function
+                            { from = Id firstArgId
+                            , to =
+                                Type <|
+                                    Function
+                                        { from = Id secondArgId
+                                        , to = Id resultId
+                                        }
+                            }
+                  )
+                ]
 
         Operator _ ->
             impossibleExpr
@@ -188,12 +219,6 @@ generateExprEquations ((NodeV2 { type_ } expr) as typedExpr) =
                         )
                   )
                 ]
-
-
-functionOrValue : ModuleName -> VarName -> TypeOrId -> TIState (List TypeEquation)
-functionOrValue moduleName varName type_ =
-    State.addVarType moduleName varName type_
-        |> State.map (\() -> [])
 
 
 generateVarEquations : TIState (List TypeEquation)

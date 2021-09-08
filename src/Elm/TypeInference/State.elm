@@ -58,7 +58,6 @@ import Elm.Syntax.ExpressionV2 exposing (TypedExpr)
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
-import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.PatternV2 exposing (TypedPattern)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
@@ -83,7 +82,7 @@ type alias State =
          the actual expression in the declaration of a var) and the rest will
          be just type IDs of its usages. That way we can link them together.
       -}
-      varTypes : Dict ( ModuleName, VarName ) (List TypeOrId)
+      varTypes : Dict ( FullModuleName, VarName ) (List TypeOrId)
     , {- A dict from type variable IDs to inferred types.
 
          Note IDs can point to other IDs (eg. dict entry `(1,Id 2)`) so you
@@ -246,19 +245,19 @@ getNextIdAndTick =
 -- VAR TYPES
 
 
-getVarTypes : TIState (Dict ( ModuleName, VarName ) (List TypeOrId))
+getVarTypes : TIState (Dict ( FullModuleName, VarName ) (List TypeOrId))
 getVarTypes =
     get
         |> map .varTypes
 
 
-getTypesForVar : ModuleName -> VarName -> TIState (List TypeOrId)
+getTypesForVar : FullModuleName -> VarName -> TIState (List TypeOrId)
 getTypesForVar moduleName varName =
     getVarTypes
         |> map (Dict.get ( moduleName, varName ) >> Maybe.withDefault [])
 
 
-addVarType : ModuleName -> VarName -> TypeOrId -> TIState ()
+addVarType : FullModuleName -> VarName -> TypeOrId -> TIState ()
 addVarType moduleName varName type_ =
     modify
         (\state ->

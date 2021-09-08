@@ -125,7 +125,7 @@ inferDeclaration files thisFile typeAliases declarationNode =
         Declaration.Destructuring patternNode exprNode ->
             State.map2 DeclarationV2.Destructuring
                 (inferPattern files thisFile typeAliases patternNode)
-                (inferExpr typeAliases exprNode)
+                (inferExpr files thisFile typeAliases exprNode)
     )
         |> State.map (NodeV2 { range = range })
 
@@ -169,21 +169,31 @@ gatherTypeAliases files =
         |> State.map (List.fastConcat >> Dict.fromList)
 
 
-inferExpr : Dict ( FullModuleName, VarName ) Type -> Node Expression -> TIState TypedExpr
-inferExpr typeAliases exprNode =
+inferExpr :
+    Dict FullModuleName File
+    -> File
+    -> Dict ( FullModuleName, VarName ) Type
+    -> Node Expression
+    -> TIState TypedExpr
+inferExpr files thisFile typeAliases exprNode =
     let
         expr_ : LocatedExpr
         expr_ =
             ExpressionV2.fromNodeExpression exprNode
     in
-    inferExpr_ typeAliases expr_
+    inferExpr_ files thisFile typeAliases expr_
         |> State.mapError (\state err -> substituteTypesInError state.idTypes err)
 
 
-inferExpr_ : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
-inferExpr_ typeAliases expr =
+inferExpr_ :
+    Dict FullModuleName File
+    -> File
+    -> Dict ( FullModuleName, VarName ) Type
+    -> LocatedExpr
+    -> TIState TypedExpr
+inferExpr_ files thisFile typeAliases expr =
     State.do (AssignIds.assignIds expr) <| \exprWithIds ->
-    State.do (GenerateEquations.generateExprEquations exprWithIds) <| \exprEquations ->
+    State.do (GenerateEquations.generateExprEquations files thisFile exprWithIds) <| \exprEquations ->
     -- TODO generateVarEquations should only run once?
     State.do GenerateEquations.generateVarEquations <| \varEquations ->
     State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <| \() ->
@@ -225,7 +235,7 @@ inferFunction files thisFile typeAliases function =
 
         expr : TIState TypedExpr
         expr =
-            inferExpr typeAliases oldDeclaration.expression
+            inferExpr files thisFile typeAliases oldDeclaration.expression
 
         arguments : TIState (List TypedPattern)
         arguments =
