@@ -4,9 +4,10 @@ module Elm.TypeInference.GenerateEquations exposing
     , generateVarEquations
     )
 
-import Dict
+import Dict exposing (Dict)
 import Elm.Syntax.ExpressionV2 exposing (ExpressionV2(..), TypedExpr)
-import Elm.Syntax.FullModuleName as FullModuleName
+import Elm.Syntax.File exposing (File)
+import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..))
 import Elm.Syntax.PatternV2
@@ -206,12 +207,12 @@ generateVarEquations =
             )
 
 
-generatePatternEquations : TypedPattern -> TIState (List TypeEquation)
-generatePatternEquations ((NodeV2 { type_ } pattern) as typedPattern) =
+generatePatternEquations : Dict FullModuleName File -> File -> TypedPattern -> TIState (List TypeEquation)
+generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPattern) =
     let
         f : TypedPattern -> TIState (List TypeEquation)
         f =
-            generatePatternEquations
+            generatePatternEquations files thisFile
 
         impossiblePattern =
             State.impossiblePattern typedPattern
@@ -297,16 +298,27 @@ generatePatternEquations ((NodeV2 { type_ } pattern) as typedPattern) =
             -- TODO should we remember that var for later use in exprs?
             finish []
 
-        NamedPattern customType _ ->
-            State.findModuleOfVar
-                (Debug.todo "assign pattern: named: files")
-                (Debug.todo "assign pattern: named: this file")
-                (FullModuleName.fromModuleName customType.moduleName)
-                customType.name
-                |> State.andThen
-                    (\_ ->
-                        finish (Debug.todo "Type (UserDefinedType {moduleName, name, args})")
+        NamedPattern customType args ->
+            State.map2
+                (\fullModuleName argEquations ->
+                    ( type_
+                    , Type
+                        (UserDefinedType
+                            { moduleName = fullModuleName
+                            , name = customType.name
+                            , args = List.map NodeV2.type_ args
+                            }
+                        )
                     )
+                        :: List.fastConcat argEquations
+                )
+                (State.findModuleOfVar
+                    files
+                    thisFile
+                    (FullModuleName.fromModuleName customType.moduleName)
+                    customType.name
+                )
+                (State.traverse f args)
 
         AsPattern p1 _ ->
             -- TODO should we remember that var for later use in exprs?

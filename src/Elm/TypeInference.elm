@@ -62,22 +62,23 @@ infer_ :
 infer_ files typeAliases =
     files
         |> Dict.toList
-        |> State.traverse (inferFile typeAliases)
+        |> State.traverse (inferFile files typeAliases)
         |> State.map Dict.fromList
 
 
 inferFile :
-    Dict ( FullModuleName, VarName ) Type
+    Dict FullModuleName File
+    -> Dict ( FullModuleName, VarName ) Type
     -> ( FullModuleName, File )
     -> TIState ( FullModuleName, TypedFile )
-inferFile typeAliases ( moduleName, file ) =
-    State.traverse (inferDeclaration typeAliases) file.declarations
+inferFile files typeAliases ( moduleName, thisFile ) =
+    State.traverse (inferDeclaration files thisFile typeAliases) thisFile.declarations
         |> State.map
             (\declarations ->
                 ( moduleName
-                , { moduleDefinition = NodeV2.fromNode file.moduleDefinition
-                  , imports = List.map NodeV2.fromNode file.imports
-                  , comments = List.map NodeV2.fromNode file.comments
+                , { moduleDefinition = NodeV2.fromNode thisFile.moduleDefinition
+                  , imports = List.map NodeV2.fromNode thisFile.imports
+                  , comments = List.map NodeV2.fromNode thisFile.comments
                   , declarations = declarations
                   }
                 )
@@ -85,10 +86,12 @@ inferFile typeAliases ( moduleName, file ) =
 
 
 inferDeclaration :
-    Dict ( FullModuleName, VarName ) Type
+    Dict FullModuleName File
+    -> File
+    -> Dict ( FullModuleName, VarName ) Type
     -> Node Declaration
     -> TIState (LocatedNode (DeclarationV2 TypedMeta))
-inferDeclaration typeAliases declarationNode =
+inferDeclaration files thisFile typeAliases declarationNode =
     let
         range : Range
         range =
@@ -100,7 +103,7 @@ inferDeclaration typeAliases declarationNode =
     in
     (case declaration of
         Declaration.FunctionDeclaration fn ->
-            inferFunction typeAliases fn
+            inferFunction files thisFile typeAliases fn
                 |> State.map DeclarationV2.FunctionDeclaration
 
         Declaration.AliasDeclaration typeAlias ->
@@ -121,7 +124,7 @@ inferDeclaration typeAliases declarationNode =
 
         Declaration.Destructuring patternNode exprNode ->
             State.map2 DeclarationV2.Destructuring
-                (inferPattern typeAliases patternNode)
+                (inferPattern files thisFile typeAliases patternNode)
                 (inferExpr typeAliases exprNode)
     )
         |> State.map (NodeV2 { range = range })
@@ -188,10 +191,15 @@ inferExpr_ typeAliases expr =
     State.pure betterExpr
 
 
-inferPattern : Dict ( FullModuleName, VarName ) Type -> Node Pattern -> TIState TypedPattern
-inferPattern typeAliases patternNode =
+inferPattern :
+    Dict FullModuleName File
+    -> File
+    -> Dict ( FullModuleName, VarName ) Type
+    -> Node Pattern
+    -> TIState TypedPattern
+inferPattern files thisFile typeAliases patternNode =
     State.do (AssignIds.assignIdsToPattern (PatternV2.fromNodePattern patternNode)) <| \patternWithIds ->
-    State.do (GenerateEquations.generatePatternEquations patternWithIds) <| \patternEquations ->
+    State.do (GenerateEquations.generatePatternEquations files thisFile patternWithIds) <| \patternEquations ->
     -- TODO generateVarEquations should only run once?
     State.do GenerateEquations.generateVarEquations <| \varEquations ->
     State.do (Unify.unifyMany typeAliases (patternEquations ++ varEquations)) <| \() ->
@@ -199,8 +207,13 @@ inferPattern typeAliases patternNode =
     State.pure betterPattern
 
 
-inferFunction : Dict ( FullModuleName, VarName ) Type -> Expression.Function -> TIState (FunctionV2 TypedMeta)
-inferFunction typeAliases function =
+inferFunction :
+    Dict FullModuleName File
+    -> File
+    -> Dict ( FullModuleName, VarName ) Type
+    -> Expression.Function
+    -> TIState (FunctionV2 TypedMeta)
+inferFunction files thisFile typeAliases function =
     let
         declarationRange : Range
         declarationRange =
@@ -216,7 +229,7 @@ inferFunction typeAliases function =
 
         arguments : TIState (List TypedPattern)
         arguments =
-            State.traverse (inferPattern typeAliases) oldDeclaration.arguments
+            State.traverse (inferPattern files thisFile typeAliases) oldDeclaration.arguments
     in
     State.map2
         (\expr_ arguments_ ->
