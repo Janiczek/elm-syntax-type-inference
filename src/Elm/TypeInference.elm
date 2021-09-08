@@ -177,7 +177,7 @@ inferExpr typeAliases exprNode =
     let
         expr_ : LocatedExpr
         expr_ =
-            Debug.todo "inferExpr: located expr"
+            ExpressionV2.fromNodeExpression exprNode
     in
     inferExpr_ typeAliases expr_
         |> State.mapError (\state err -> substituteTypesInError state.idTypes err)
