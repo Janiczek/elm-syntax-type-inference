@@ -237,8 +237,23 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
         RecordAccess _ _ ->
             Debug.todo "generate eqs: record access"
 
-        RecordAccessFunction _ ->
-            Debug.todo "generate eqs: record access function"
+        RecordAccessFunction fieldName ->
+            State.do State.getNextIdAndTick <| \recordId ->
+            State.do State.getNextIdAndTick <| \resultId ->
+            finish
+                [ ( type_
+                  , Type <|
+                        Function
+                            { from =
+                                Type <|
+                                    ExtensibleRecord
+                                        { type_ = Id recordId
+                                        , fields = Dict.singleton fieldName (Id resultId)
+                                        }
+                            , to = Id resultId
+                            }
+                  )
+                ]
 
         RecordUpdateExpression _ _ ->
             Debug.todo "generate eqs: record update expression"

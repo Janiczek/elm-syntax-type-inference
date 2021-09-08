@@ -52,7 +52,11 @@ type Type
     | Tuple3 TypeOrId TypeOrId TypeOrId
     | Record (Dict VarName TypeOrId)
     | ExtensibleRecord
-        { type_ : TypeOrId
+        { {- TODO not too sure about this one. Won't these be always a TypeVar
+             in practice? Do we lose the ability to connect the `r` in
+             { r | x : Int } to some `r` elsewhere in our context?
+          -}
+          type_ : TypeOrId
         , fields : Dict VarName TypeOrId
         }
     | UserDefinedType
