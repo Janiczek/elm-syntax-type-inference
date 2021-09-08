@@ -130,7 +130,7 @@ inferDeclaration files typeAliases declarationNode =
 
         Declaration.Destructuring patternNode exprNode ->
             State.map2 DeclarationV2.Destructuring
-                (inferPattern patternNode)
+                (inferPattern typeAliases patternNode)
                 (inferExpr typeAliases exprNode)
     )
         |> State.map (NodeV2 { range = range })
@@ -197,8 +197,8 @@ inferExpr_ typeAliases expr =
     State.pure betterExpr
 
 
-inferPattern : Node Pattern -> TIState TypedPattern
-inferPattern patternNode =
+inferPattern : Dict ( FullModuleName, VarName ) Type -> Node Pattern -> TIState TypedPattern
+inferPattern typeAliases patternNode =
     let
         range : Range
         range =
@@ -207,8 +207,12 @@ inferPattern patternNode =
         oldPattern : Pattern
         oldPattern =
             Node.value patternNode
+
+        pattern : LocatedPattern
+        pattern =
+            Debug.todo "pattern"
     in
-    inferPattern_ oldPattern
+    inferPattern_ typeAliases pattern
         |> State.map (NodeV2.mapMeta (\m -> { m | range = range }))
 
 
@@ -219,7 +223,7 @@ inferPattern_ typeAliases expr =
     -- TODO generateVarEquations should only run once?
     State.do GenerateEquations.generateVarEquations <| \varEquations ->
     State.do (Unify.unifyMany typeAliases (patternEquations ++ varEquations)) <| \() ->
-    State.map (substituteTypesInPattern patternWithIds) <| \betterPattern ->
+    State.do (substituteTypesInPattern patternWithIds) <| \betterPattern ->
     State.pure betterPattern
 
 
@@ -240,7 +244,7 @@ inferFunction typeAliases function =
 
         arguments : TIState (List TypedPattern)
         arguments =
-            State.traverse inferPattern oldDeclaration.arguments
+            State.traverse (inferPattern typeAliases) oldDeclaration.arguments
     in
     State.map2
         (\expr_ arguments_ ->
