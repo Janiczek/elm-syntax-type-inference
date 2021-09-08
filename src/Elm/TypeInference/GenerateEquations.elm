@@ -253,8 +253,41 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
             impossiblePattern
 
         RecordPattern fields ->
-            -- TODO the type_ record needs to have all the mentioned fields
-            Debug.todo "record pattern eqs"
+            {- If we're pattern matching some record fields, we're mandating that
+               the thing is a record that contains _at least_ these fields.
+
+               Which is what our ExtensibleRecord type does!
+            -}
+            let
+                fieldsDict : TIState (Dict VarName TypeOrId)
+                fieldsDict =
+                    fields
+                        |> State.traverse
+                            (\fieldName ->
+                                State.getNextIdAndTick
+                                    |> State.map
+                                        (\fieldId ->
+                                            ( NodeV2.value fieldName
+                                            , Id fieldId
+                                            )
+                                        )
+                            )
+                        |> State.map Dict.fromList
+            in
+            State.map2
+                (\fieldsDict_ recordId ->
+                    [ ( type_
+                      , Type
+                            (ExtensibleRecord
+                                { type_ = Id recordId
+                                , fields = fieldsDict_
+                                }
+                            )
+                      )
+                    ]
+                )
+                fieldsDict
+                State.getNextIdAndTick
 
         UnConsPattern ((NodeV2 m1 _) as p1) ((NodeV2 m2 _) as p2) ->
             list f [ p1, p2 ]

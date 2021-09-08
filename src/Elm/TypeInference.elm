@@ -360,11 +360,11 @@ getBetterType idTypes typeOrId =
                             Record <|
                                 Dict.map (always f) fields
 
-                    ExtensibleRecord { typeVar, fields } ->
+                    ExtensibleRecord r ->
                         Type <|
                             ExtensibleRecord
-                                { typeVar = typeVar
-                                , fields = Dict.map (always f) fields
+                                { type_ = f r.type_
+                                , fields = Dict.map (always f) r.fields
                                 }
 
                     UserDefinedType ut ->
@@ -466,7 +466,7 @@ typeAnnotationToType typeAnnotation =
                 |> State.map
                     (\fields_ ->
                         ExtensibleRecord
-                            { typeVar = Node.value name
+                            { type_ = Type (TypeVar (Node.value name))
                             , fields = fields_
                             }
                     )

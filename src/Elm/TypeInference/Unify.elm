@@ -157,10 +157,10 @@ unifyTypes typeAliases t1 t2 =
 
         ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
             State.do
-                (unifyTypes
+                (unify
                     typeAliases
-                    (TypeVar r1.typeVar)
-                    (TypeVar r2.typeVar)
+                    r1.type_
+                    r2.type_
                 )
             <| \() ->
             unifyTypes
@@ -305,10 +305,10 @@ occurs id typeOrId =
                 Record fields ->
                     recordBindings fields
 
-                ExtensibleRecord { typeVar, fields } ->
+                ExtensibleRecord r ->
                     or
-                        [ f (Type (TypeVar typeVar))
-                        , f (Type (Record fields))
+                        [ f r.type_
+                        , f (Type (Record r.fields))
                         ]
 
                 UserDefinedType { args } ->
