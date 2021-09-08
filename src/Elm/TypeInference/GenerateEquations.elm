@@ -187,22 +187,19 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             impossibleExpr
 
         Integer _ ->
-            -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
-            finish [ ( type_, Type Int ) ]
+            finish [ ( type_, Type Number ) ]
 
         Hex _ ->
-            -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
-            finish [ ( type_, Type Int ) ]
+            finish [ ( type_, Type Number ) ]
 
         Floatable _ ->
-            -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
             finish [ ( type_, Type Float ) ]
 
         Negation ((NodeV2 m1 _) as e1) ->
             f e1
                 |> append
                     [ ( type_, m1.type_ )
-                    , ( type_, Debug.todo "generate eqs: negation: number... int or float" )
+                    , ( type_, Type Number )
                     ]
 
         Literal _ ->
@@ -231,8 +228,19 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
         CaseExpression _ ->
             Debug.todo "generate eqs: case"
 
-        LambdaExpression _ ->
-            Debug.todo "generate eqs: lambda"
+        LambdaExpression { args, expression } ->
+            -- TODO will need foldr-ing
+            -- arg1 <- ... <- argN <- expression
+            -- with Function. See `Application` case.
+            finish
+                [ ( type_
+                  , Type <|
+                        Function
+                            { from = ()
+                            , to = ()
+                            }
+                  )
+                ]
 
         RecordExpr fieldSetters ->
             let

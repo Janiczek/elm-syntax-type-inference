@@ -77,13 +77,31 @@ unifyTypes typeAliases t1 t2 =
         ( Int, Int ) ->
             noOp
 
+        ( Int, Number ) ->
+            noOp
+
         ( Int, _ ) ->
             typeMismatch
 
         ( Float, Float ) ->
             noOp
 
+        ( Float, Number ) ->
+            noOp
+
         ( Float, _ ) ->
+            typeMismatch
+
+        ( Number, Number ) ->
+            noOp
+
+        ( Number, Int ) ->
+            noOp
+
+        ( Number, Float ) ->
+            noOp
+
+        ( Number, _ ) ->
             typeMismatch
 
         ( String, String ) ->
@@ -270,6 +288,9 @@ occurs id typeOrId =
                     State.pure False
 
                 Float ->
+                    State.pure False
+
+                Number ->
                     State.pure False
 
                 Char ->

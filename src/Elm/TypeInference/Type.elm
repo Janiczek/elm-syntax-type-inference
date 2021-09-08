@@ -41,6 +41,7 @@ type Type
         }
     | Int
     | Float
+    | Number {- Int | Number -}
     | Char
     | String
       -- TODO remove hardcoded Bool type
@@ -145,6 +146,9 @@ isParametric typeOrId =
                 Float ->
                     False
 
+                Number ->
+                    True
+
                 Char ->
                     False
 
@@ -226,6 +230,9 @@ recursiveChildren fn type_ =
         Float ->
             []
 
+        Number ->
+            []
+
         Char ->
             []
 
@@ -285,6 +292,9 @@ recursiveChildren_ fn typeOrId =
             []
 
         Type Float ->
+            []
+
+        Type Number ->
             []
 
         Type Char ->
