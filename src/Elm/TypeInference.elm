@@ -189,7 +189,8 @@ inferExpr typeAliases exprNode =
 inferExpr_ : Dict ( FullModuleName, VarName ) Type -> LocatedExpr -> TIState TypedExpr
 inferExpr_ typeAliases expr =
     State.do (AssignIds.assignIds expr) <| \exprWithIds ->
-    State.do (GenerateEquations.generateLocalEquations exprWithIds) <| \exprEquations ->
+    State.do (GenerateEquations.generateExprEquations exprWithIds) <| \exprEquations ->
+    -- TODO generateVarEquations should only run once?
     State.do GenerateEquations.generateVarEquations <| \varEquations ->
     State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <| \() ->
     State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
@@ -206,21 +207,20 @@ inferPattern patternNode =
         oldPattern : Pattern
         oldPattern =
             Node.value patternNode
-
-        newPattern : PatternV2 TypedMeta
-        newPattern =
-            Debug.todo "new pattern"
-
-        type_ : TypeOrId
-        type_ =
-            Debug.todo "type"
     in
-    State.pure <|
-        NodeV2
-            { range = range
-            , type_ = type_
-            }
-            newPattern
+    inferPattern_ oldPattern
+        |> State.map (NodeV2.mapMeta (\m -> { m | range = range }))
+
+
+inferPattern_ : Dict ( FullModuleName, VarName ) Type -> LocatedPattern -> TIState TypedPattern
+inferPattern_ typeAliases expr =
+    State.do (AssignIds.assignIdsToPattern expr) <| \patternWithIds ->
+    State.do (GenerateEquations.generatePatternEquations patternWithIds) <| \patternEquations ->
+    -- TODO generateVarEquations should only run once?
+    State.do GenerateEquations.generateVarEquations <| \varEquations ->
+    State.do (Unify.unifyMany typeAliases (patternEquations ++ varEquations)) <| \() ->
+    State.map (substituteTypesInPattern patternWithIds) <| \betterPattern ->
+    State.pure betterPattern
 
 
 inferFunction : Dict ( FullModuleName, VarName ) Type -> Expression.Function -> TIState (FunctionV2 TypedMeta)
@@ -263,19 +263,36 @@ inferFunction typeAliases function =
 
 substituteTypesInExpr : TypedExpr -> TIState TypedExpr
 substituteTypesInExpr expr =
-    State.do State.getIdTypes <| \idTypes ->
-    expr
-        |> ExpressionV2.transformOnce (ExpressionV2.mapType (getBetterType idTypes))
-        |> State.pure
+    State.getIdTypes
+        |> State.map
+            (\idTypes ->
+                ExpressionV2.transformOnce
+                    (ExpressionV2.mapType (getBetterType idTypes))
+                    expr
+            )
+
+
+substituteTypesInPattern : TypedPattern -> TIState TypedPattern
+substituteTypesInPattern pattern =
+    State.getIdTypes
+        |> State.map
+            (\idTypes ->
+                PatternV2.transformOnce
+                    (PatternV2.mapType (getBetterType idTypes))
+                    pattern
+            )
 
 
 substituteTypesInError : Dict Id TypeOrId -> Error -> Error
 substituteTypesInError idTypes error =
     case error of
-        ImpossibleAstPattern _ ->
+        ImpossibleExpr _ ->
             error
 
-        ImpossibleTypePattern _ ->
+        ImpossiblePattern _ ->
+            error
+
+        ImpossibleType _ ->
             error
 
         VarNotFound _ ->
@@ -449,7 +466,7 @@ typeAnnotationToType typeAnnotation =
                 (f (Node.value c))
 
         TypeAnnotation.Tupled _ ->
-            State.impossibleTypePattern typeAnnotation
+            State.impossibleType typeAnnotation
 
         TypeAnnotation.Record fields ->
             recordBindings fields

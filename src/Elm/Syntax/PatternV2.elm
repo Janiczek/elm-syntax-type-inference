@@ -4,6 +4,8 @@ module Elm.Syntax.PatternV2 exposing
     , PatternWith
     , TypedPattern
     , fromNodePattern
+    , mapType
+    , transformOnce
     )
 
 import Elm.Syntax.Node as Node exposing (Node)
@@ -17,6 +19,7 @@ import Elm.Syntax.NodeV2 as NodeV2
 import Elm.Syntax.Pattern as Pattern exposing (Pattern, QualifiedNameRef)
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Type exposing (TypeOrId)
+import Transform
 
 
 type alias LocatedPattern =
@@ -114,3 +117,69 @@ fromPattern pattern =
 
         Pattern.ParenthesizedPattern p1 ->
             ParenthesizedPattern (f p1)
+
+
+mapType : (TypeOrId -> TypeOrId) -> TypedPattern -> TypedPattern
+mapType fn node =
+    NodeV2.mapMeta (\meta -> { meta | type_ = fn meta.type_ }) node
+
+
+transformOnce : (PatternWith meta -> PatternWith meta) -> PatternWith meta -> PatternWith meta
+transformOnce pass expr =
+    Transform.transformOnce
+        recurse
+        pass
+        expr
+
+
+recurse : (PatternWith meta -> PatternWith meta) -> PatternWith meta -> PatternWith meta
+recurse fn node =
+    node
+        |> NodeV2.map
+            (\expr ->
+                case expr of
+                    AllPattern ->
+                        expr
+
+                    UnitPattern ->
+                        expr
+
+                    CharPattern _ ->
+                        expr
+
+                    StringPattern _ ->
+                        expr
+
+                    IntPattern _ ->
+                        expr
+
+                    HexPattern _ ->
+                        expr
+
+                    FloatPattern _ ->
+                        expr
+
+                    TuplePattern patterns ->
+                        TuplePattern (List.map fn patterns)
+
+                    RecordPattern _ ->
+                        expr
+
+                    UnConsPattern p1 p2 ->
+                        UnConsPattern (fn p1) (fn p2)
+
+                    ListPattern patterns ->
+                        ListPattern (List.map fn patterns)
+
+                    VarPattern _ ->
+                        expr
+
+                    NamedPattern ref patterns ->
+                        NamedPattern ref (List.map fn patterns)
+
+                    AsPattern p1 name ->
+                        AsPattern (fn p1) name
+
+                    ParenthesizedPattern p1 ->
+                        ParenthesizedPattern (fn p1)
+            )

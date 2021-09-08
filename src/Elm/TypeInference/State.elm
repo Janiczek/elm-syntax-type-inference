@@ -5,7 +5,7 @@ module Elm.TypeInference.State exposing
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getIdTypes, getTypeForId, insertTypeForId
-    , impossibleAstPattern, impossibleTypePattern, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
+    , impossibleExpr, impossiblePattern, impossibleType, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -49,7 +49,7 @@ module Elm.TypeInference.State exposing
 
 # Errors
 
-@docs impossibleAstPattern, impossibleTypePattern, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
+@docs impossibleExpr, impossiblePattern, impossibleType, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
 
 -}
 
@@ -59,6 +59,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.PatternV2 exposing (TypedPattern)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
@@ -313,14 +314,19 @@ insertTypeForId id typeOrId =
 -- ERRORS
 
 
-impossibleAstPattern : TypedExpr -> TIState a
-impossibleAstPattern expr =
-    fromError <| ImpossibleAstPattern expr
+impossibleExpr : TypedExpr -> TIState a
+impossibleExpr expr =
+    fromError <| ImpossibleExpr expr
 
 
-impossibleTypePattern : TypeAnnotation -> TIState a
-impossibleTypePattern type_ =
-    fromError <| ImpossibleTypePattern type_
+impossiblePattern : TypedPattern -> TIState a
+impossiblePattern pattern =
+    fromError <| ImpossiblePattern pattern
+
+
+impossibleType : TypeAnnotation -> TIState a
+impossibleType type_ =
+    fromError <| ImpossibleType type_
 
 
 typeMismatch : TypeOrId -> TypeOrId -> TIState a

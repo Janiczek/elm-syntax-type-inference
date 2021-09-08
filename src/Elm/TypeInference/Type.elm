@@ -47,7 +47,9 @@ type Type
     | Float
     | Char
     | String
+      -- TODO remove hardcoded Bool type
     | Bool
+      -- TODO remove hardcoded List type
     | List TypeOrId
     | Unit
     | Tuple TypeOrId TypeOrId

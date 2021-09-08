@@ -1,4 +1,4 @@
-module Elm.TypeInference.AssignIds exposing (assignIds)
+module Elm.TypeInference.AssignIds exposing (assignIds, assignIdsToPattern)
 
 import Elm.Syntax.ExpressionV2
     exposing

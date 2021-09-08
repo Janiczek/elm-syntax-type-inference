@@ -1,15 +1,22 @@
 module Elm.TypeInference.GenerateEquations exposing
-    ( generateLocalEquations
+    ( generateExprEquations
+    , generatePatternEquations
     , generateVarEquations
     )
 
 import Dict
 import Elm.Syntax.ExpressionV2 exposing (ExpressionV2(..), TypedExpr)
+import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.NodeV2 exposing (NodeV2(..))
+import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..))
+import Elm.Syntax.PatternV2
+    exposing
+        ( PatternV2(..)
+        , TypedPattern
+        )
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (Type(..), TypeOrId(..))
+import Elm.TypeInference.Type exposing (Id, Type(..), TypeOrId(..))
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import List.ExtraExtra as List
 
@@ -20,11 +27,11 @@ finish eqs =
 
 
 list :
-    (TypedExpr -> TIState (List TypeEquation))
-    -> List TypedExpr
+    (a -> TIState (List TypeEquation))
+    -> List a
     -> TIState (List TypeEquation)
-list f exprs =
-    State.traverse f exprs
+list f items =
+    State.traverse f items
         |> State.map List.fastConcat
 
 
@@ -36,22 +43,22 @@ append equations s =
     State.map ((++) equations) s
 
 
-generateLocalEquations : TypedExpr -> TIState (List TypeEquation)
-generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
+generateExprEquations : TypedExpr -> TIState (List TypeEquation)
+generateExprEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
     let
         f : TypedExpr -> TIState (List TypeEquation)
         f =
-            generateLocalEquations
+            generateExprEquations
 
-        impossibleAstPattern =
-            State.impossibleAstPattern typedExpr
+        impossibleExpr =
+            State.impossibleExpr typedExpr
     in
     case expr of
         UnitExpr ->
             finish [ ( type_, Type Unit ) ]
 
         Application [] ->
-            impossibleAstPattern
+            impossibleExpr
 
         Application ((fn :: args) as exprs) ->
             let
@@ -96,7 +103,7 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
             Debug.todo "generate eqs: prefix operator"
 
         Operator _ ->
-            impossibleAstPattern
+            impossibleExpr
 
         Integer _ ->
             -- TODO I wonder if we should somehow do `number` (int OR float) stuff here
@@ -132,7 +139,7 @@ generateLocalEquations ((NodeV2 ({ type_ } as meta) expr) as typedExpr) =
                 |> append [ ( type_, Type (Tuple3 m1.type_ m2.type_ m3.type_) ) ]
 
         TupledExpression _ ->
-            impossibleAstPattern
+            impossibleExpr
 
         ParenthesizedExpression e ->
             list f [ e ]
@@ -195,5 +202,115 @@ generateVarEquations =
             (\varTypes ->
                 varTypes
                     |> Dict.values
-                    |> List.fastConcatMap (List.mapConsecutivePairs Tuple.pair)
+                    |> List.fastConcatMap List.consecutivePairs
             )
+
+
+generatePatternEquations : TypedPattern -> TIState (List TypeEquation)
+generatePatternEquations ((NodeV2 ({ type_ } as meta) pattern) as typedPattern) =
+    let
+        f : TypedPattern -> TIState (List TypeEquation)
+        f =
+            generatePatternEquations
+
+        impossiblePattern =
+            State.impossiblePattern typedPattern
+    in
+    case pattern of
+        AllPattern ->
+            finish []
+
+        UnitPattern ->
+            finish [ ( type_, Type Unit ) ]
+
+        CharPattern _ ->
+            finish [ ( type_, Type Char ) ]
+
+        StringPattern _ ->
+            finish [ ( type_, Type String ) ]
+
+        IntPattern _ ->
+            -- TODO number / float?
+            finish [ ( type_, Type Int ) ]
+
+        HexPattern _ ->
+            -- TODO number / float?
+            finish [ ( type_, Type Int ) ]
+
+        FloatPattern _ ->
+            finish [ ( type_, Type Float ) ]
+
+        TuplePattern ([ NodeV2 m1 _, NodeV2 m2 _ ] as patterns) ->
+            list f patterns
+                |> append [ ( type_, Type (Tuple m1.type_ m2.type_) ) ]
+
+        TuplePattern ([ NodeV2 m1 _, NodeV2 m2 _, NodeV2 m3 _ ] as patterns) ->
+            list f patterns
+                |> append [ ( type_, Type (Tuple3 m1.type_ m2.type_ m3.type_) ) ]
+
+        TuplePattern _ ->
+            impossiblePattern
+
+        RecordPattern _ ->
+            Debug.todo "record pattern eqs"
+
+        UnConsPattern ((NodeV2 m1 _) as p1) ((NodeV2 m2 _) as p2) ->
+            list f [ p1, p2 ]
+                |> append
+                    [ ( type_, Type (List m1.type_) )
+                    , ( type_, m2.type_ )
+                    ]
+
+        ListPattern patterns ->
+            let
+                homogenousListEqs : List TypeEquation
+                homogenousListEqs =
+                    List.mapConsecutivePairs
+                        (\a b ->
+                            [ ( NodeV2.type_ a
+                              , NodeV2.type_ b
+                              )
+                            ]
+                        )
+                        patterns
+                        |> List.fastConcat
+
+                firstItemEq : Id -> List TypeEquation
+                firstItemEq listItemId =
+                    case patterns of
+                        [] ->
+                            []
+
+                        (NodeV2 mx _) :: _ ->
+                            [ ( Id listItemId, mx.type_ ) ]
+            in
+            State.do State.getNextIdAndTick <| \listItemId ->
+            -- TODO all items against each other
+            list f patterns
+                |> append
+                    (( type_, Type (List (Id listItemId)) )
+                        :: firstItemEq listItemId
+                        ++ homogenousListEqs
+                    )
+
+        VarPattern _ ->
+            -- TODO should we remember that var for later use in exprs?
+            finish []
+
+        NamedPattern customType args ->
+            State.findModuleOfVar
+                (Debug.todo "assign pattern: named: files")
+                (Debug.todo "assign pattern: named: this file")
+                (FullModuleName.fromModuleName customType.moduleName)
+                customType.name
+                |> State.andThen
+                    (\moduleName ->
+                        finish (Debug.todo "Type (UserDefinedType {moduleName, name, args})")
+                    )
+
+        AsPattern p1 name ->
+            -- TODO should we remember that var for later use in exprs?
+            f p1
+
+        ParenthesizedPattern p1 ->
+            f p1
