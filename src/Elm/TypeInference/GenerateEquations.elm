@@ -252,7 +252,8 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
         TuplePattern _ ->
             impossiblePattern
 
-        RecordPattern _ ->
+        RecordPattern fields ->
+            -- TODO the type_ record needs to have all the mentioned fields
             Debug.todo "record pattern eqs"
 
         UnConsPattern ((NodeV2 m1 _) as p1) ((NodeV2 m2 _) as p2) ->

@@ -150,6 +150,8 @@ unifyTypes typeAliases t1 t2 =
         ( Record bindings1, Record bindings2 ) ->
             recordBindings bindings1 bindings2
 
+        -- TODO (Record, ExtensibleRecord)
+        -- TODO (ExtensibleRecord, Record)
         ( Record _, _ ) ->
             typeMismatch
 
