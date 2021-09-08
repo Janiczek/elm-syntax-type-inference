@@ -65,32 +65,47 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             impossibleExpr
 
         Application ((fn :: args) as exprs) ->
+            State.do State.getNextIdAndTick <| \resultId ->
             let
-                -- for expression `a b`:
-                -- type of `a` is (argType -> resultType)
-                -- which is `Function { from = argType, to = resultType }`
-                {- TODO since this is application of multiple arguments, we'll
-                   need to fold these together in the right direction.
-                -}
-                equations : List TypeEquation
-                equations =
-                    [ Debug.todo "generate eqs: application"
-                    ]
+                fnType =
+                    exprs
+                        |> List.map NodeV2.type_
+                        |> List.foldr
+                            (\rightArgType leftArgType ->
+                                Type <|
+                                    Function
+                                        { from = leftArgType
+                                        , to = rightArgType
+                                        }
+                            )
+                            (Id resultId)
             in
-            append equations (list f exprs)
+            append
+                [ ( type_, Id resultId )
+                , ( NodeV2.type_ fn, fnType )
+                ]
+                (list f exprs)
 
-        OperatorApplication _ _ e1 e2 ->
+        OperatorApplication operator _ e1 e2 ->
+            State.do (State.findModuleOfVar files thisFile Nothing operator) <| \moduleName ->
+            State.do State.getNextIdAndTick <| \resultId ->
             let
-                {- TODO link the op name in varTypes
-                   For that we need the op to be fully qualified though...
-                -}
-                equations : List TypeEquation
-                equations =
-                    [ Debug.todo "generate eqs: op application: is a function"
-                    , Debug.todo "generate eqs: op application: should probably use type_ somehow"
-                    ]
+                fnType =
+                    Type <|
+                        Function
+                            { from = NodeV2.type_ e1
+                            , to =
+                                Type <|
+                                    Function
+                                        { from = NodeV2.type_ e2
+                                        , to = Id resultId
+                                        }
+                            }
             in
-            append equations (list f [ e1, e2 ])
+            State.do (State.addVarType moduleName operator fnType) <| \() ->
+            append
+                [ ( type_, Id resultId ) ]
+                (list f [ e1, e2 ])
 
         FunctionOrValue moduleName varName ->
             State.do
