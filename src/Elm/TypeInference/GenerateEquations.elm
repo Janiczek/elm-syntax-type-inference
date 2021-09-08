@@ -234,8 +234,19 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     ++ List.map (\(NodeV2 m _) -> ( m.type_, Id id )) exprs
                 )
 
-        RecordAccess _ _ ->
-            Debug.todo "generate eqs: record access"
+        RecordAccess record fieldNameNode ->
+            State.do State.getNextIdAndTick <| \extensibleRecordId ->
+            State.do State.getNextIdAndTick <| \resultId ->
+            finish
+                [ ( type_, Id resultId )
+                , ( NodeV2.type_ record
+                  , Type <|
+                        ExtensibleRecord
+                            { type_ = Id extensibleRecordId
+                            , fields = Dict.singleton (NodeV2.value fieldNameNode) (Id resultId)
+                            }
+                  )
+                ]
 
         RecordAccessFunction fieldName ->
             State.do State.getNextIdAndTick <| \recordId ->
