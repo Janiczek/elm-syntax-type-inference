@@ -11,12 +11,6 @@ module Elm.TypeInference.State exposing
 
 {-| State useful during various phases of the type inference algorithm.
 
-  - next ID: TODO write some more
-  - var types: TODO write some more
-  - id types: TODO write some more
-  - type aliases: TODO write some more
-  - type inference errors: TODO write some more
-
 
 # General
 
