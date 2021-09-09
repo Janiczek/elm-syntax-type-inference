@@ -211,10 +211,10 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
         Floatable _ ->
             finish [ ( type_, t Float ) ]
 
-        Negation ((NodeV2 m1 _) as e1) ->
+        Negation e1 ->
             f e1
                 |> append
-                    [ ( type_, m1.type_ )
+                    [ ( type_, NodeV2.type_ e1 )
                     , ( type_, t Number )
                     ]
 
@@ -237,6 +237,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
         ParenthesizedExpression e ->
             f e
+                |> append [ ( type_, NodeV2.type_ e ) ]
 
         LetExpression _ ->
             Debug.todo "generate eqs: let"
