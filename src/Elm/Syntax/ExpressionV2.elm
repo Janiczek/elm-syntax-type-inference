@@ -11,10 +11,8 @@ module Elm.Syntax.ExpressionV2 exposing
     , TypedExpr
     , fromExpression
     , fromNodeExpression
-    , getType
-    , mapType
-    , recurse
-    , transformOnce
+    , map
+    , mapFunction
     )
 
 import Elm.Syntax.Documentation exposing (Documentation)
@@ -29,10 +27,8 @@ import Elm.Syntax.NodeV2 as NodeV2
         , NodeV2(..)
         , TypedMeta
         )
-import Elm.Syntax.PatternV2 as PatternV2 exposing (PatternV2)
+import Elm.Syntax.PatternV2 as PatternV2 exposing (PatternWith)
 import Elm.Syntax.Signature exposing (Signature)
-import Elm.TypeInference.Type exposing (TypeOrId)
-import Transform
 
 
 type alias ExprWith meta =
@@ -45,16 +41,6 @@ type alias LocatedExpr =
 
 type alias TypedExpr =
     ExprWith TypedMeta
-
-
-getType : TypedExpr -> TypeOrId
-getType (NodeV2 { type_ } _) =
-    type_
-
-
-mapType : (TypeOrId -> TypeOrId) -> TypedExpr -> TypedExpr
-mapType fn node =
-    NodeV2.mapMeta (\meta -> { meta | type_ = fn meta.type_ }) node
 
 
 type ExpressionV2 meta
@@ -89,7 +75,7 @@ type alias RecordSetter meta =
 
 
 type alias Lambda meta =
-    { args : List (NodeV2 meta (PatternV2 meta))
+    { args : List (PatternWith meta)
     , expression : ExprWith meta
     }
 
@@ -105,7 +91,7 @@ type alias Cases meta =
 
 
 type alias Case meta =
-    ( NodeV2 meta (PatternV2 meta), ExprWith meta )
+    ( PatternWith meta, ExprWith meta )
 
 
 type alias LetBlock meta =
@@ -116,7 +102,7 @@ type alias LetBlock meta =
 
 type LetDeclaration meta
     = LetFunction (FunctionV2 meta)
-    | LetDestructuring (NodeV2 meta (PatternV2 meta)) (ExprWith meta)
+    | LetDestructuring (PatternWith meta) (ExprWith meta)
 
 
 type alias FunctionV2 meta =
@@ -128,7 +114,7 @@ type alias FunctionV2 meta =
 
 type alias FunctionImplementationV2 meta =
     { name : LocatedNode String
-    , arguments : List (NodeV2 meta (PatternV2 meta))
+    , arguments : List (PatternWith meta)
     , expression : ExprWith meta
     }
 
@@ -280,119 +266,123 @@ fromExpression expr =
             GLSLExpression a
 
 
-transformOnce : (ExprWith meta -> ExprWith meta) -> ExprWith meta -> ExprWith meta
-transformOnce pass expr =
-    Transform.transformOnce
-        recurse
-        pass
-        expr
-
-
-recurse : (ExprWith meta -> ExprWith meta) -> ExprWith meta -> ExprWith meta
-recurse fn node =
+map : (meta1 -> meta2) -> ExprWith meta1 -> ExprWith meta2
+map fn (NodeV2 meta expr) =
     let
-        recurseRecordSetter : RecordSetter meta -> RecordSetter meta
-        recurseRecordSetter ( a, b ) =
-            ( a, fn b )
+        recordSetter : RecordSetter meta1 -> RecordSetter meta2
+        recordSetter ( a, b ) =
+            ( a, map fn b )
 
-        recurseCase : Case meta -> Case meta
-        recurseCase ( a, b ) =
-            ( a, fn b )
+        case_ : Case meta1 -> Case meta2
+        case_ ( a, b ) =
+            ( PatternV2.map fn a, map fn b )
 
-        recurseLetDeclaration : LetDeclaration meta -> LetDeclaration meta
-        recurseLetDeclaration decl =
+        let_ : LetDeclaration meta1 -> LetDeclaration meta2
+        let_ decl =
             case decl of
-                LetFunction ({ declaration } as fun) ->
-                    LetFunction
-                        { fun
-                            | declaration =
-                                NodeV2.map
-                                    (\d -> { d | expression = fn d.expression })
-                                    declaration
-                        }
+                LetFunction fun ->
+                    LetFunction (mapFunction fn fun)
 
                 LetDestructuring a b ->
-                    LetDestructuring a (fn b)
+                    LetDestructuring
+                        (PatternV2.map fn a)
+                        (map fn b)
     in
-    node
-        |> NodeV2.map
-            (\expr ->
-                case expr of
-                    UnitExpr ->
-                        expr
+    NodeV2 (fn meta) <|
+        case expr of
+            UnitExpr ->
+                UnitExpr
 
-                    Application a ->
-                        Application (List.map fn a)
+            Application exprs ->
+                Application (List.map (map fn) exprs)
 
-                    OperatorApplication a b c d ->
-                        OperatorApplication a b (fn c) (fn d)
+            OperatorApplication a b e1 e2 ->
+                OperatorApplication a b (map fn e1) (map fn e2)
 
-                    FunctionOrValue _ _ ->
-                        expr
+            FunctionOrValue a b ->
+                FunctionOrValue a b
 
-                    IfBlock a b c ->
-                        IfBlock (fn a) (fn b) (fn c)
+            IfBlock e1 e2 e3 ->
+                IfBlock (map fn e1) (map fn e2) (map fn e3)
 
-                    PrefixOperator _ ->
-                        expr
+            PrefixOperator a ->
+                PrefixOperator a
 
-                    Operator _ ->
-                        expr
+            Operator a ->
+                Operator a
 
-                    Integer _ ->
-                        expr
+            Integer a ->
+                Integer a
 
-                    Hex _ ->
-                        expr
+            Hex a ->
+                Hex a
 
-                    Floatable _ ->
-                        expr
+            Floatable a ->
+                Floatable a
 
-                    Negation a ->
-                        Negation (fn a)
+            Negation e1 ->
+                Negation (map fn e1)
 
-                    Literal _ ->
-                        expr
+            Literal a ->
+                Literal a
 
-                    CharLiteral _ ->
-                        expr
+            CharLiteral a ->
+                CharLiteral a
 
-                    TupledExpression a ->
-                        TupledExpression (List.map fn a)
+            TupledExpression exprs ->
+                TupledExpression (List.map (map fn) exprs)
 
-                    ParenthesizedExpression a ->
-                        ParenthesizedExpression (fn a)
+            ParenthesizedExpression e1 ->
+                ParenthesizedExpression (map fn e1)
 
-                    LetExpression { declarations, expression } ->
-                        LetExpression
-                            { declarations = List.map (NodeV2.map recurseLetDeclaration) declarations
-                            , expression = fn expression
-                            }
+            LetExpression letBlock ->
+                LetExpression
+                    { declarations = List.map (NodeV2.map let_) letBlock.declarations
+                    , expression = map fn letBlock.expression
+                    }
 
-                    CaseExpression { expression, cases } ->
-                        CaseExpression
-                            { expression = fn expression
-                            , cases = List.map recurseCase cases
-                            }
+            CaseExpression caseBlock ->
+                CaseExpression
+                    { expression = map fn caseBlock.expression
+                    , cases = List.map case_ caseBlock.cases
+                    }
 
-                    LambdaExpression ex ->
-                        LambdaExpression { ex | expression = fn ex.expression }
+            LambdaExpression lambda ->
+                LambdaExpression
+                    { args = List.map (PatternV2.map fn) lambda.args
+                    , expression = map fn lambda.expression
+                    }
 
-                    RecordExpr a ->
-                        RecordExpr (List.map (NodeV2.map recurseRecordSetter) a)
+            RecordExpr setters ->
+                RecordExpr (List.map (NodeV2.map recordSetter) setters)
 
-                    ListExpr a ->
-                        ListExpr (List.map fn a)
+            ListExpr exprs ->
+                ListExpr (List.map (map fn) exprs)
 
-                    RecordAccess a b ->
-                        RecordAccess (fn a) b
+            RecordAccess e1 a ->
+                RecordAccess (map fn e1) a
 
-                    RecordAccessFunction _ ->
-                        expr
+            RecordAccessFunction a ->
+                RecordAccessFunction a
 
-                    RecordUpdateExpression a b ->
-                        RecordUpdateExpression a (List.map (NodeV2.map recurseRecordSetter) b)
+            RecordUpdateExpression a setters ->
+                RecordUpdateExpression a (List.map (NodeV2.map recordSetter) setters)
 
-                    GLSLExpression _ ->
-                        expr
-            )
+            GLSLExpression a ->
+                GLSLExpression a
+
+
+mapFunction : (meta1 -> meta2) -> FunctionV2 meta1 -> FunctionV2 meta2
+mapFunction fn fun =
+    { documentation = fun.documentation
+    , signature = fun.signature
+    , declaration =
+        fun.declaration
+            |> NodeV2.map
+                (\decl_ ->
+                    { name = decl_.name
+                    , arguments = List.map (PatternV2.map fn) decl_.arguments
+                    , expression = map fn decl_.expression
+                    }
+                )
+    }

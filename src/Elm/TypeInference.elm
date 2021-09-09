@@ -9,7 +9,7 @@ module Elm.TypeInference exposing (infer)
 import Dict exposing (Dict)
 import Elm.Syntax.Declaration as Declaration exposing (Declaration)
 import Elm.Syntax.DeclarationV2 as DeclarationV2 exposing (DeclarationV2)
-import Elm.Syntax.Expression as Expression exposing (Expression)
+import Elm.Syntax.Expression as Expression
 import Elm.Syntax.ExpressionV2 as ExpressionV2
     exposing
         ( FunctionImplementationV2
@@ -18,7 +18,7 @@ import Elm.Syntax.ExpressionV2 as ExpressionV2
         , TypedExpr
         )
 import Elm.Syntax.File exposing (File)
-import Elm.Syntax.FileV2 exposing (TypedFile)
+import Elm.Syntax.FileV2 as FileV2 exposing (TypedFile)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.NodeV2 as NodeV2
@@ -27,8 +27,7 @@ import Elm.Syntax.NodeV2 as NodeV2
         , NodeV2(..)
         , TypedMeta
         )
-import Elm.Syntax.Pattern exposing (Pattern)
-import Elm.Syntax.PatternV2 as PatternV2 exposing (TypedPattern)
+import Elm.Syntax.PatternV2 as PatternV2 exposing (LocatedPattern, TypedPattern)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
@@ -49,10 +48,15 @@ import Maybe.Extra as Maybe
 
 infer : Dict FullModuleName File -> Result Error (Dict FullModuleName TypedFile)
 infer files =
-    gatherTypeAliases files
-        |> State.andThen (infer_ files)
-        |> State.run State.init
-        |> Tuple.first
+    let
+        ( result, state ) =
+            gatherTypeAliases files
+                |> State.andThen (infer_ files)
+                |> State.run State.init
+    in
+    result
+        |> Result.mapError (substituteTypesInError state.idTypes)
+        |> Result.map (substituteTypesInFiles state.idTypes)
 
 
 infer_ :
@@ -60,19 +64,19 @@ infer_ :
     -> Dict ( FullModuleName, VarName ) Type
     -> TIState (Dict FullModuleName TypedFile)
 infer_ files typeAliases =
-    files
-        |> Dict.toList
-        |> State.traverse (inferFile files typeAliases)
-        |> State.map Dict.fromList
+    State.do (State.traverse (inferFile files) (Dict.toList files)) <| \typedFiles ->
+    State.do GenerateEquations.generateVarEquations <| \() ->
+    State.do State.getTypeEquations <| \allEquations ->
+    State.do (Unify.unifyMany typeAliases allEquations) <| \() ->
+    State.pure (Dict.fromList typedFiles)
 
 
 inferFile :
     Dict FullModuleName File
-    -> Dict ( FullModuleName, VarName ) Type
     -> ( FullModuleName, File )
     -> TIState ( FullModuleName, TypedFile )
-inferFile files typeAliases ( moduleName, thisFile ) =
-    State.traverse (inferDeclaration files thisFile typeAliases) thisFile.declarations
+inferFile files ( moduleName, thisFile ) =
+    State.traverse (inferDeclaration files thisFile) thisFile.declarations
         |> State.map
             (\declarations ->
                 ( moduleName
@@ -88,10 +92,9 @@ inferFile files typeAliases ( moduleName, thisFile ) =
 inferDeclaration :
     Dict FullModuleName File
     -> File
-    -> Dict ( FullModuleName, VarName ) Type
     -> Node Declaration
     -> TIState (LocatedNode (DeclarationV2 TypedMeta))
-inferDeclaration files thisFile typeAliases declarationNode =
+inferDeclaration files thisFile declarationNode =
     let
         range : Range
         range =
@@ -103,7 +106,7 @@ inferDeclaration files thisFile typeAliases declarationNode =
     in
     (case declaration of
         Declaration.FunctionDeclaration fn ->
-            inferFunction files thisFile typeAliases fn
+            inferFunction files thisFile fn
                 |> State.map DeclarationV2.FunctionDeclaration
 
         Declaration.AliasDeclaration typeAlias ->
@@ -124,8 +127,8 @@ inferDeclaration files thisFile typeAliases declarationNode =
 
         Declaration.Destructuring patternNode exprNode ->
             State.map2 DeclarationV2.Destructuring
-                (inferPattern files thisFile typeAliases patternNode)
-                (inferExpr files thisFile typeAliases exprNode)
+                (inferPattern files thisFile (PatternV2.fromNodePattern patternNode))
+                (inferExpr files thisFile (ExpressionV2.fromNodeExpression exprNode))
     )
         |> State.map (NodeV2 { range = range })
 
@@ -172,58 +175,31 @@ gatherTypeAliases files =
 inferExpr :
     Dict FullModuleName File
     -> File
-    -> Dict ( FullModuleName, VarName ) Type
-    -> Node Expression
-    -> TIState TypedExpr
-inferExpr files thisFile typeAliases exprNode =
-    let
-        expr_ : LocatedExpr
-        expr_ =
-            ExpressionV2.fromNodeExpression exprNode
-    in
-    inferExpr_ files thisFile typeAliases expr_
-        |> State.mapError (\state err -> substituteTypesInError state.idTypes err)
-
-
-inferExpr_ :
-    Dict FullModuleName File
-    -> File
-    -> Dict ( FullModuleName, VarName ) Type
     -> LocatedExpr
     -> TIState TypedExpr
-inferExpr_ files thisFile typeAliases expr =
+inferExpr files thisFile expr =
     State.do (AssignIds.assignIds expr) <| \exprWithIds ->
-    State.do (GenerateEquations.generateExprEquations files thisFile exprWithIds) <| \exprEquations ->
-    -- TODO generateVarEquations should only run once?
-    State.do GenerateEquations.generateVarEquations <| \varEquations ->
-    State.do (Unify.unifyMany typeAliases (exprEquations ++ varEquations)) <| \() ->
-    State.do (substituteTypesInExpr exprWithIds) <| \betterExpr ->
-    State.pure betterExpr
+    State.do (GenerateEquations.generateExprEquations files thisFile exprWithIds) <| \() ->
+    State.pure exprWithIds
 
 
 inferPattern :
     Dict FullModuleName File
     -> File
-    -> Dict ( FullModuleName, VarName ) Type
-    -> Node Pattern
+    -> LocatedPattern
     -> TIState TypedPattern
-inferPattern files thisFile typeAliases patternNode =
-    State.do (AssignIds.assignIdsToPattern (PatternV2.fromNodePattern patternNode)) <| \patternWithIds ->
-    State.do (GenerateEquations.generatePatternEquations files thisFile patternWithIds) <| \patternEquations ->
-    -- TODO generateVarEquations should only run once?
-    State.do GenerateEquations.generateVarEquations <| \varEquations ->
-    State.do (Unify.unifyMany typeAliases (patternEquations ++ varEquations)) <| \() ->
-    State.do (substituteTypesInPattern patternWithIds) <| \betterPattern ->
-    State.pure betterPattern
+inferPattern files thisFile patternNode =
+    State.do (AssignIds.assignIdsToPattern patternNode) <| \patternWithIds ->
+    State.do (GenerateEquations.generatePatternEquations files thisFile patternWithIds) <| \() ->
+    State.pure patternWithIds
 
 
 inferFunction :
     Dict FullModuleName File
     -> File
-    -> Dict ( FullModuleName, VarName ) Type
     -> Expression.Function
     -> TIState (FunctionV2 TypedMeta)
-inferFunction files thisFile typeAliases function =
+inferFunction files thisFile function =
     let
         declarationRange : Range
         declarationRange =
@@ -235,11 +211,13 @@ inferFunction files thisFile typeAliases function =
 
         expr : TIState TypedExpr
         expr =
-            inferExpr files thisFile typeAliases oldDeclaration.expression
+            inferExpr files thisFile (ExpressionV2.fromNodeExpression oldDeclaration.expression)
 
         arguments : TIState (List TypedPattern)
         arguments =
-            State.traverse (inferPattern files thisFile typeAliases) oldDeclaration.arguments
+            oldDeclaration.arguments
+                |> State.traverse
+                    (PatternV2.fromNodePattern >> inferPattern files thisFile)
     in
     State.map2
         (\expr_ arguments_ ->
@@ -260,25 +238,18 @@ inferFunction files thisFile typeAliases function =
         arguments
 
 
-substituteTypesInExpr : TypedExpr -> TIState TypedExpr
-substituteTypesInExpr expr =
-    State.getIdTypes
-        |> State.map
-            (\idTypes ->
-                ExpressionV2.transformOnce
-                    (ExpressionV2.mapType (getBetterType idTypes))
-                    expr
-            )
+
+-- TYPE SUBSTITUTION
 
 
-substituteTypesInPattern : TypedPattern -> TIState TypedPattern
-substituteTypesInPattern pattern =
-    State.getIdTypes
-        |> State.map
-            (\idTypes ->
-                PatternV2.transformOnce
-                    (PatternV2.mapType (getBetterType idTypes))
-                    pattern
+substituteTypesInFiles : Dict Id TypeOrId -> Dict FullModuleName TypedFile -> Dict FullModuleName TypedFile
+substituteTypesInFiles idTypes files =
+    files
+        |> Dict.map
+            (\_ file ->
+                FileV2.map
+                    (\meta -> { meta | type_ = getBetterType idTypes meta.type_ })
+                    file
             )
 
 

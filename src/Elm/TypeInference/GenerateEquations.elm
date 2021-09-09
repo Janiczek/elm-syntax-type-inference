@@ -59,12 +59,22 @@ generateExprEquations :
     Dict FullModuleName File
     -> File
     -> TypedExpr
+    -> TIState ()
+generateExprEquations files thisFile expr =
+    State.do (generateExprEquations_ files thisFile expr) <| \equations ->
+    State.addTypeEquations equations
+
+
+generateExprEquations_ :
+    Dict FullModuleName File
+    -> File
+    -> TypedExpr
     -> TIState (List TypeEquation)
-generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
+generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
     let
         f : TypedExpr -> TIState (List TypeEquation)
         f =
-            generateExprEquations files thisFile
+            generateExprEquations_ files thisFile
 
         impossibleExpr =
             State.impossibleExpr typedExpr
@@ -255,7 +265,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                         ++ argPatternEqs
                 )
                 (f expression)
-                (list (generatePatternEquations files thisFile) args)
+                (list (generatePatternEquations_ files thisFile) args)
 
         RecordExpr fieldSetters ->
             let
@@ -445,23 +455,31 @@ glslDeclarationRegex =
         |> Maybe.withDefault Regex.never
 
 
-generateVarEquations : TIState (List TypeEquation)
+generateVarEquations : TIState ()
 generateVarEquations =
-    State.getVarTypes
-        |> State.map
-            (\varTypes ->
-                varTypes
-                    |> Dict.values
-                    |> List.fastConcatMap List.consecutivePairs
-            )
+    State.do State.getVarTypes <| \varTypes ->
+    varTypes
+        |> Dict.values
+        |> List.fastConcatMap List.consecutivePairs
+        |> State.addTypeEquations
 
 
-generatePatternEquations : Dict FullModuleName File -> File -> TypedPattern -> TIState (List TypeEquation)
-generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPattern) =
+generatePatternEquations :
+    Dict FullModuleName File
+    -> File
+    -> TypedPattern
+    -> TIState ()
+generatePatternEquations files thisFile pattern =
+    State.do (generatePatternEquations_ files thisFile pattern) <| \equations ->
+    State.addTypeEquations equations
+
+
+generatePatternEquations_ : Dict FullModuleName File -> File -> TypedPattern -> TIState (List TypeEquation)
+generatePatternEquations_ files thisFile ((NodeV2 { type_ } pattern) as typedPattern) =
     let
         f : TypedPattern -> TIState (List TypeEquation)
         f =
-            generatePatternEquations files thisFile
+            generatePatternEquations_ files thisFile
 
         impossiblePattern =
             State.impossiblePattern typedPattern

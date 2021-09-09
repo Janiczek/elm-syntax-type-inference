@@ -5,6 +5,7 @@ module Elm.TypeInference.State exposing
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getIdTypes, getTypeForId, insertTypeForId
+    , addTypeEquations, getTypeEquations
     , impossibleExpr, impossiblePattern, impossibleType, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
     )
 
@@ -47,6 +48,11 @@ module Elm.TypeInference.State exposing
 @docs getIdTypes, getTypeForId, insertTypeForId
 
 
+# Type equations
+
+@docs addTypeEquations, getTypeEquations
+
+
 # Errors
 
 @docs impossibleExpr, impossiblePattern, impossibleType, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
@@ -64,6 +70,7 @@ import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
 import Elm.TypeInference.Type exposing (Id, TypeOrId(..))
+import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 
 
 
@@ -89,6 +96,7 @@ type alias State =
          might need to walk this dict multiple times.
       -}
       idTypes : Dict Id TypeOrId
+    , {- A list of all type equations recorded so far. -} typeEquations : List TypeEquation
     }
 
 
@@ -226,6 +234,7 @@ init =
     { nextId = 0
     , varTypes = Dict.empty
     , idTypes = Dict.empty
+    , typeEquations = []
     }
 
 
@@ -307,6 +316,21 @@ insertTypeForId id typeOrId =
 
         Type _ ->
             put { state | idTypes = Dict.insert id typeOrId state.idTypes }
+
+
+
+-- TYPE EQUATIONS
+
+
+addTypeEquations : List TypeEquation -> TIState ()
+addTypeEquations equations =
+    modify (\state -> { state | typeEquations = state.typeEquations ++ equations })
+
+
+getTypeEquations : TIState (List TypeEquation)
+getTypeEquations =
+    get
+        |> map .typeEquations
 
 
 
