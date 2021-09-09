@@ -379,12 +379,10 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
             finish [ ( type_, Type String ) ]
 
         IntPattern _ ->
-            -- TODO number / float?
-            finish [ ( type_, Type Int ) ]
+            finish [ ( type_, Type Number ) ]
 
         HexPattern _ ->
-            -- TODO number / float?
-            finish [ ( type_, Type Int ) ]
+            finish [ ( type_, Type Number ) ]
 
         FloatPattern _ ->
             finish [ ( type_, Type Float ) ]
