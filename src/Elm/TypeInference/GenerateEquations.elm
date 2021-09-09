@@ -26,9 +26,11 @@ import Elm.Syntax.PatternV2
         )
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (Id, Type(..), TypeOrId(..))
+import Elm.TypeInference.Type as Type exposing (Id, Type(..), TypeOrId(..))
+import Elm.TypeInference.Type.External as ExternalType
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import List.ExtraExtra as List
+import Regex exposing (Regex)
 
 
 finish : List TypeEquation -> TIState (List TypeEquation)
@@ -329,19 +331,118 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                 ]
                 (list f subexprs)
 
-        GLSLExpression _ ->
-            -- TODO will we need to parse the GLSL language ourselves?
+        GLSLExpression code ->
+            {- TODO This currently only correctly detects "simple" declarations:
+
+                   uniform mat4 u_worldViewProjection;
+                   uniform vec3 u_lightWorldPos;
+                   attribute vec4 a_position;
+                   attribute vec2 a_texcoord;
+                   varying vec4 v_position;
+                   varying vec2 v_texcoord;
+
+               and so on. Anything more advanced will probably not be picked up correctly:
+
+                   uniform /* hello */ mat4 u_x, u_y, u_z;
+                   attribute
+                     vec4 a_position
+                        ;
+
+               It would be great to write a more precise parser that allows arbitrary
+               whitespace and comments in between the uniform/varying/attribute declarations.
+
+               Prior art:
+                * https://github.com/noteed/language-glsl/blob/master/Language/GLSL/Parser.hs
+                  * what elm/compiler uses under the hood
+                * https://github.com/shuhei/elm-compiler/blob/glsl-parser/compiler/src/Parse/Shader.hs
+                  * this one might be doing the least work
+                * https://github.com/w0rm/elm-glsl/blob/main/Language/GLSL/NewParser.hs
+                  * written using elm-parser-like primitives
+            -}
+            let
+                declarations :
+                    { uniforms : Dict VarName TypeOrId
+                    , attributes : Dict VarName TypeOrId
+                    , varyings : Dict VarName TypeOrId
+                    }
+                declarations =
+                    code
+                        |> Regex.find glslDeclarationRegex
+                        |> List.foldl
+                            (\{ submatches } acc ->
+                                case submatches of
+                                    [ Just storageQualifier, Just varType, Just varName ] ->
+                                        parseGlslVarType varType
+                                            |> Maybe.map
+                                                (\varType_ ->
+                                                    case storageQualifier of
+                                                        "attribute" ->
+                                                            { acc | attributes = Dict.insert varName (Type varType_) acc.attributes }
+
+                                                        "varying" ->
+                                                            { acc | varyings = Dict.insert varName (Type varType_) acc.varyings }
+
+                                                        "uniform" ->
+                                                            { acc | uniforms = Dict.insert varName (Type varType_) acc.uniforms }
+
+                                                        _ ->
+                                                            acc
+                                                )
+                                            |> Maybe.withDefault acc
+
+                                    _ ->
+                                        acc
+                            )
+                            { uniforms = Dict.empty
+                            , attributes = Dict.empty
+                            , varyings = Dict.empty
+                            }
+            in
             finish
                 [ ( type_
                   , Type
                         (WebGLShader
-                            { attributes = Debug.todo "generate eqs: webgl: attributes"
-                            , uniforms = Debug.todo "generate eqs: webgl: uniforms"
-                            , varyings = Debug.todo "generate eqs: webgl: varyings"
+                            { attributes = declarations.attributes
+                            , uniforms = declarations.uniforms
+                            , varyings = declarations.varyings
                             }
                         )
                   )
                 ]
+
+
+parseGlslVarType : String -> Maybe Type
+parseGlslVarType type_ =
+    case type_ of
+        "vec2" ->
+            Just ExternalType.vec2
+
+        "vec3" ->
+            Just ExternalType.vec3
+
+        "vec4" ->
+            Just ExternalType.vec4
+
+        "mat4" ->
+            Just ExternalType.mat4
+
+        "sampler2d" ->
+            Just ExternalType.texture
+
+        "int" ->
+            Just Int
+
+        "float" ->
+            Just Float
+
+        _ ->
+            Nothing
+
+
+glslDeclarationRegex : Regex
+glslDeclarationRegex =
+    Regex.fromString "^(uniform|attribute|varying)\\s+([^\\s]+)\\s+([^;]+);$"
+        |> Maybe.withDefault Regex.never
 
 
 generateVarEquations : TIState (List TypeEquation)

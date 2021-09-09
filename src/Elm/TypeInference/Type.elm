@@ -2,6 +2,7 @@ module Elm.TypeInference.Type exposing
     ( Id
     , Type(..)
     , TypeOrId(..)
+    , external
     , getId
     , getType
     , isParametric
@@ -331,3 +332,12 @@ recursiveChildren_ fn typeOrId =
             recordBindings attributes
                 ++ recordBindings uniforms
                 ++ recordBindings varyings
+
+
+external : FullModuleName -> VarName -> Type
+external moduleName typeName =
+    UserDefinedType
+        { moduleName = moduleName
+        , name = typeName
+        , args = []
+        }
