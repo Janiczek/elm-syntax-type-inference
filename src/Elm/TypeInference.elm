@@ -2,6 +2,8 @@ module Elm.TypeInference exposing (infer)
 
 {-| TODO write docs
 
+TODO check declarations against their type annotations
+
 @docs infer
 
 -}
@@ -46,6 +48,8 @@ import List.ExtraExtra as List
 import Maybe.Extra as Maybe
 
 
+{-| The entry-point you probably want to use.
+-}
 infer : Dict FullModuleName File -> Result Error (Dict FullModuleName TypedFile)
 infer files =
     let
