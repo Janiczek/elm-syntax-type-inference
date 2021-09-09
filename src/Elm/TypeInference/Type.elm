@@ -34,6 +34,24 @@ type alias Id =
     Int
 
 
+{-| TODO maybe remove some hardcoded types and refer to them with `external` == UserDefinedType?
+
+Candidates:
+
+  - Int
+  - Float
+  - Char
+  - String
+  - Bool
+  - List
+
+See here:
+<https://github.com/elm/compiler/blob/39949053f9469862b17006e3965f3b440414d13c/compiler/src/Type/Type.hs#L196-L201>
+
+(Evan for some reason never needed to define a list type, while we do...)
+(Also, he defined Never. Why do we _not_ need that one?)
+
+-}
 type Type
     = TypeVar String
     | Function
@@ -45,9 +63,7 @@ type Type
     | Number {- Int | Number -}
     | Char
     | String
-      -- TODO remove hardcoded Bool type
     | Bool
-      -- TODO remove hardcoded List type
     | List TypeOrId
     | Unit
     | Tuple TypeOrId TypeOrId

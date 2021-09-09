@@ -10,6 +10,7 @@ import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type exposing (Id, Type(..), TypeOrId(..))
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.VarName exposing (VarName)
+import Set exposing (Set)
 
 
 unifyMany : Dict ( FullModuleName, VarName ) Type -> List TypeEquation -> TIState ()
@@ -61,6 +62,31 @@ unifyTypes typeAliases t1 t2 =
                             (Dict.values bindings2)
                 in
                 unifyMany typeAliases fieldEquations
+
+        recordVsExtensibleRecord :
+            { record : Dict VarName TypeOrId
+            , extensibleRecord : Dict VarName TypeOrId
+            }
+            -> TIState ()
+        recordVsExtensibleRecord { record, extensibleRecord } =
+            let
+                fieldsToSet : Dict VarName TypeOrId -> Set VarName
+                fieldsToSet dict =
+                    dict
+                        |> Dict.keys
+                        |> Set.fromList
+
+                neededButMissing : Set VarName
+                neededButMissing =
+                    Set.diff
+                        (fieldsToSet extensibleRecord)
+                        (fieldsToSet record)
+            in
+            if Set.isEmpty neededButMissing then
+                noOp
+
+            else
+                typeMismatch
     in
     case ( t1, t2 ) of
         ( TypeVar name1, TypeVar name2 ) ->
@@ -168,8 +194,12 @@ unifyTypes typeAliases t1 t2 =
         ( Record bindings1, Record bindings2 ) ->
             recordBindings bindings1 bindings2
 
-        -- TODO (Record, ExtensibleRecord)
-        -- TODO (ExtensibleRecord, Record)
+        ( Record recBindings, ExtensibleRecord extRec ) ->
+            recordVsExtensibleRecord
+                { record = recBindings
+                , extensibleRecord = extRec.fields
+                }
+
         ( Record _, _ ) ->
             typeMismatch
 
@@ -185,6 +215,12 @@ unifyTypes typeAliases t1 t2 =
                 typeAliases
                 (Record r1.fields)
                 (Record r2.fields)
+
+        ( ExtensibleRecord extRec, Record recBindings ) ->
+            recordVsExtensibleRecord
+                { record = recBindings
+                , extensibleRecord = extRec.fields
+                }
 
         ( ExtensibleRecord _, _ ) ->
             typeMismatch
