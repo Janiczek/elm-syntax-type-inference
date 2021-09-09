@@ -71,6 +71,14 @@ suite =
         [ Test.describe "infer"
             [ Test.describe "simple single expressions"
                 [ testExpr "Unit" "()" (Type Unit)
+                , testExpr "Integer = Number until proven otherwise" "123" (Type Number)
+                , testExpr "Hex = Number until proven otherwise" "0x123" (Type Number)
+                , testExpr "Float" "42.0" (Type Float)
+                , testExpr "Negation" "-123" (Type Number)
+                , testExpr "Negation of float" "-123.0" (Type Float)
                 ]
+
+            -- TODO number later used with an int -> coerced into an int
+            -- TODO number later used with a float -> coerced into a float
             ]
         ]
