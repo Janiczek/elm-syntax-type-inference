@@ -26,7 +26,7 @@ import Elm.Syntax.PatternV2
         )
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type as Type exposing (Id, Type(..), TypeOrId(..))
+import Elm.TypeInference.Type exposing (Id, Type(..), TypeOrId(..))
 import Elm.TypeInference.Type.External as ExternalType
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import List.ExtraExtra as List
