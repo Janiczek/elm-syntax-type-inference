@@ -6,12 +6,12 @@ import Elm.Processing
 import Elm.Syntax.DeclarationV2 exposing (DeclarationV2(..))
 import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..))
 import Elm.TypeInference
-import Elm.TypeInference.Type exposing (Type(..), TypeOrId(..))
+import Elm.TypeInference.Type as Type exposing (Type(..), TypeOrId(..))
 import Expect
 import Test exposing (Test)
 
 
-testExpr : String -> String -> TypeOrId -> Test
+testExpr : String -> String -> Type -> Test
 testExpr label exprCode expectedType =
     let
         moduleCode =
@@ -59,7 +59,8 @@ main = {EXPR}
                                         |> NodeV2.value
                                         |> .expression
                                         |> NodeV2.type_
-                                        |> Expect.equal expectedType
+                                        |> Type.getType
+                                        |> Expect.equal (Just expectedType)
 
                                 Just (NodeV2 _ d) ->
                                     Expect.fail <| "Found an unexpected declaration: " ++ Debug.toString d
@@ -70,12 +71,12 @@ suite =
     Test.describe "Elm.TypeInference"
         [ Test.describe "infer"
             [ Test.describe "simple single expressions"
-                [ testExpr "Unit" "()" (Type Unit)
-                , testExpr "Integer = Number until proven otherwise" "123" (Type Number)
-                , testExpr "Hex = Number until proven otherwise" "0x123" (Type Number)
-                , testExpr "Float" "42.0" (Type Float)
-                , testExpr "Negation" "-123" (Type Number)
-                , testExpr "Negation of float" "-123.0" (Type Float)
+                [ testExpr "Unit" "()" Unit
+                , testExpr "Integer = Number until proven otherwise" "123" Number
+                , testExpr "Hex = Number until proven otherwise" "0x123" Number
+                , testExpr "Float" "42.0" Float
+                , testExpr "Negation" "-123" Number
+                , testExpr "Negation of float" "-123.0" Float
                 ]
 
             -- TODO number later used with an int -> coerced into an int

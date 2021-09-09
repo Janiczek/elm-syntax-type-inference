@@ -79,6 +79,10 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
         impossibleExpr =
             State.impossibleExpr typedExpr
 
+        t : Type -> TypeOrId
+        t type__ =
+            Type type__ Nothing
+
         recordSetters : List (LocatedNode (RecordSetter TypedMeta)) -> ( Dict VarName TypeOrId, List TypedExpr )
         recordSetters fieldSetters =
             let
@@ -105,7 +109,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
     in
     case expr of
         UnitExpr ->
-            finish [ ( type_, Type Unit ) ]
+            finish [ ( type_, t Unit ) ]
 
         Application [] ->
             impossibleExpr
@@ -118,7 +122,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                         |> List.map NodeV2.type_
                         |> List.foldr
                             (\rightArgType leftArgType ->
-                                Type <|
+                                t <|
                                     Function
                                         { from = leftArgType
                                         , to = rightArgType
@@ -137,11 +141,11 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             State.do State.getNextIdAndTick <| \resultId ->
             let
                 fnType =
-                    Type <|
+                    t <|
                         Function
                             { from = NodeV2.type_ e1
                             , to =
-                                Type <|
+                                t <|
                                     Function
                                         { from = NodeV2.type_ e2
                                         , to = Id resultId
@@ -168,7 +172,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
         IfBlock ((NodeV2 m1 _) as e1) ((NodeV2 m2 _) as e2) ((NodeV2 m3 _) as e3) ->
             list f [ e1, e2, e3 ]
                 |> append
-                    [ ( m1.type_, Type Bool )
+                    [ ( m1.type_, t Bool )
                     , ( m2.type_, m3.type_ )
                     , ( m2.type_, type_ )
                     ]
@@ -182,11 +186,11 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             State.do State.getNextIdAndTick <| \resultId ->
             finish
                 [ ( type_
-                  , Type <|
+                  , t <|
                         Function
                             { from = Id firstArgId
                             , to =
-                                Type <|
+                                t <|
                                     Function
                                         { from = Id secondArgId
                                         , to = Id resultId
@@ -199,34 +203,34 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             impossibleExpr
 
         Integer _ ->
-            finish [ ( type_, Type Number ) ]
+            finish [ ( type_, t Number ) ]
 
         Hex _ ->
-            finish [ ( type_, Type Number ) ]
+            finish [ ( type_, t Number ) ]
 
         Floatable _ ->
-            finish [ ( type_, Type Float ) ]
+            finish [ ( type_, t Float ) ]
 
         Negation ((NodeV2 m1 _) as e1) ->
             f e1
                 |> append
                     [ ( type_, m1.type_ )
-                    , ( type_, Type Number )
+                    , ( type_, t Number )
                     ]
 
         Literal _ ->
-            finish [ ( type_, Type String ) ]
+            finish [ ( type_, t String ) ]
 
         CharLiteral _ ->
-            finish [ ( type_, Type Char ) ]
+            finish [ ( type_, t Char ) ]
 
         TupledExpression ([ NodeV2 m1 _, NodeV2 m2 _ ] as exprs) ->
             list f exprs
-                |> append [ ( type_, Type (Tuple m1.type_ m2.type_) ) ]
+                |> append [ ( type_, t (Tuple m1.type_ m2.type_) ) ]
 
         TupledExpression ([ NodeV2 m1 _, NodeV2 m2 _, NodeV2 m3 _ ] as exprs) ->
             list f exprs
-                |> append [ ( type_, Type (Tuple3 m1.type_ m2.type_ m3.type_) ) ]
+                |> append [ ( type_, t (Tuple3 m1.type_ m2.type_ m3.type_) ) ]
 
         TupledExpression _ ->
             impossibleExpr
@@ -250,7 +254,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                         |> List.map NodeV2.type_
                         |> List.foldr
                             (\rightArgType leftArgType ->
-                                Type <|
+                                t <|
                                     Function
                                         { from = leftArgType
                                         , to = rightArgType
@@ -273,14 +277,14 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     recordSetters fieldSetters
             in
             append
-                [ ( type_, Type (Record fields) ) ]
+                [ ( type_, t (Record fields) ) ]
                 (list f subexprs)
 
         ListExpr exprs ->
             State.do (list f exprs) <| \exprsEquations ->
             State.do State.getNextIdAndTick <| \id ->
             finish
-                (( type_, Type (List (Id id)) )
+                (( type_, t (List (Id id)) )
                     :: exprsEquations
                     ++ List.map (\(NodeV2 m _) -> ( m.type_, Id id )) exprs
                 )
@@ -291,7 +295,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             finish
                 [ ( type_, Id resultId )
                 , ( NodeV2.type_ record
-                  , Type <|
+                  , t <|
                         ExtensibleRecord
                             { type_ = Id extensibleRecordId
                             , fields = Dict.singleton (NodeV2.value fieldNameNode) (Id resultId)
@@ -304,10 +308,10 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             State.do State.getNextIdAndTick <| \resultId ->
             finish
                 [ ( type_
-                  , Type <|
+                  , t <|
                         Function
                             { from =
-                                Type <|
+                                t <|
                                     ExtensibleRecord
                                         { type_ = Id recordId
                                         , fields = Dict.singleton fieldName (Id resultId)
@@ -331,7 +335,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             in
             append
                 [ ( type_
-                  , Type
+                  , t
                         (ExtensibleRecord
                             { type_ = Id recordId
                             , fields = fields
@@ -387,13 +391,13 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                                 (\varType_ ->
                                                     case storageQualifier of
                                                         "attribute" ->
-                                                            { acc | attributes = Dict.insert varName (Type varType_) acc.attributes }
+                                                            { acc | attributes = Dict.insert varName (t varType_) acc.attributes }
 
                                                         "varying" ->
-                                                            { acc | varyings = Dict.insert varName (Type varType_) acc.varyings }
+                                                            { acc | varyings = Dict.insert varName (t varType_) acc.varyings }
 
                                                         "uniform" ->
-                                                            { acc | uniforms = Dict.insert varName (Type varType_) acc.uniforms }
+                                                            { acc | uniforms = Dict.insert varName (t varType_) acc.uniforms }
 
                                                         _ ->
                                                             acc
@@ -410,7 +414,7 @@ generateExprEquations_ files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             in
             finish
                 [ ( type_
-                  , Type
+                  , t
                         (WebGLShader
                             { attributes = declarations.attributes
                             , uniforms = declarations.uniforms
@@ -483,36 +487,40 @@ generatePatternEquations_ files thisFile ((NodeV2 { type_ } pattern) as typedPat
 
         impossiblePattern =
             State.impossiblePattern typedPattern
+
+        t : Type -> TypeOrId
+        t type__ =
+            Type type__ Nothing
     in
     case pattern of
         AllPattern ->
             finish []
 
         UnitPattern ->
-            finish [ ( type_, Type Unit ) ]
+            finish [ ( type_, t Unit ) ]
 
         CharPattern _ ->
-            finish [ ( type_, Type Char ) ]
+            finish [ ( type_, t Char ) ]
 
         StringPattern _ ->
-            finish [ ( type_, Type String ) ]
+            finish [ ( type_, t String ) ]
 
         IntPattern _ ->
-            finish [ ( type_, Type Number ) ]
+            finish [ ( type_, t Number ) ]
 
         HexPattern _ ->
-            finish [ ( type_, Type Number ) ]
+            finish [ ( type_, t Number ) ]
 
         FloatPattern _ ->
-            finish [ ( type_, Type Float ) ]
+            finish [ ( type_, t Float ) ]
 
         TuplePattern ([ NodeV2 m1 _, NodeV2 m2 _ ] as patterns) ->
             list f patterns
-                |> append [ ( type_, Type (Tuple m1.type_ m2.type_) ) ]
+                |> append [ ( type_, t (Tuple m1.type_ m2.type_) ) ]
 
         TuplePattern ([ NodeV2 m1 _, NodeV2 m2 _, NodeV2 m3 _ ] as patterns) ->
             list f patterns
-                |> append [ ( type_, Type (Tuple3 m1.type_ m2.type_ m3.type_) ) ]
+                |> append [ ( type_, t (Tuple3 m1.type_ m2.type_ m3.type_) ) ]
 
         TuplePattern _ ->
             impossiblePattern
@@ -542,7 +550,7 @@ generatePatternEquations_ files thisFile ((NodeV2 { type_ } pattern) as typedPat
             State.map2
                 (\fieldsDict_ recordId ->
                     [ ( type_
-                      , Type
+                      , t
                             (ExtensibleRecord
                                 { type_ = Id recordId
                                 , fields = fieldsDict_
@@ -557,7 +565,7 @@ generatePatternEquations_ files thisFile ((NodeV2 { type_ } pattern) as typedPat
         UnConsPattern ((NodeV2 m1 _) as p1) ((NodeV2 m2 _) as p2) ->
             list f [ p1, p2 ]
                 |> append
-                    [ ( type_, Type (List m1.type_) )
+                    [ ( type_, t (List m1.type_) )
                     , ( type_, m2.type_ )
                     ]
 
@@ -587,7 +595,7 @@ generatePatternEquations_ files thisFile ((NodeV2 { type_ } pattern) as typedPat
             State.do State.getNextIdAndTick <| \listItemId ->
             list f patterns
                 |> append
-                    (( type_, Type (List (Id listItemId)) )
+                    (( type_, t (List (Id listItemId)) )
                         :: firstItemEq listItemId
                         ++ homogenousListEqs
                     )
@@ -600,7 +608,7 @@ generatePatternEquations_ files thisFile ((NodeV2 { type_ } pattern) as typedPat
             State.map2
                 (\fullModuleName argEquations ->
                     ( type_
-                    , Type
+                    , t
                         (UserDefinedType
                             { moduleName = fullModuleName
                             , name = customType.name
