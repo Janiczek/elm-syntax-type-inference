@@ -86,7 +86,12 @@ suite =
             , ( "Literal", "\"ABC\"", String )
             , ( "Char literal", "'A'", Char )
             , ( "Parenthesized float", "(42.0)", Float )
+            , ( "List of floats", "[1.0, 2.0, 3.0]", List (Type Float) )
+            , ( "List of ints and one float at end = floats", "[1, 2, 3.0]", List (Type Float) )
+            , ( "List of ints and one float at beginning = floats", "[1.0, 2, 3]", List (Type Float) )
+            , ( "List of ints = numbers", "[1, 2, 3]", List (Type Number) )
 
+            -- TODO , ( "Heterogenous list isn't allowed", "[1, ()]", fails )
             -- TODO Application (List (ExprWith meta))
             -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
             -- TODO FunctionOrValue ModuleName String

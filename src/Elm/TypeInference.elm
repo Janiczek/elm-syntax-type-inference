@@ -301,7 +301,7 @@ getBetterType idTypes typeOrId =
                     |> Maybe.map f
                     |> Maybe.withDefault typeOrId
 
-            Type type_ maybeId ->
+            Type type_ ->
                 case type_ of
                     Int ->
                         typeOrId
@@ -325,60 +325,48 @@ getBetterType idTypes typeOrId =
                         typeOrId
 
                     Function { from, to } ->
-                        Type
-                            (Function
+                        Type <|
+                            Function
                                 { from = f from
                                 , to = f to
                                 }
-                            )
-                            maybeId
 
                     List param ->
-                        Type
-                            (List <| f param)
-                            maybeId
+                        Type <| List <| f param
 
                     Unit ->
                         typeOrId
 
                     Tuple e1 e2 ->
-                        Type
-                            (Tuple (f e1) (f e2))
-                            maybeId
+                        Type <| Tuple (f e1) (f e2)
 
                     Tuple3 e1 e2 e3 ->
-                        Type
-                            (Tuple3 (f e1) (f e2) (f e3))
-                            maybeId
+                        Type <| Tuple3 (f e1) (f e2) (f e3)
 
                     Record fields ->
-                        Type
-                            (Record <| Dict.map (always f) fields)
-                            maybeId
+                        Type <|
+                            Record <|
+                                Dict.map (always f) fields
 
                     ExtensibleRecord r ->
-                        Type
-                            (ExtensibleRecord
+                        Type <|
+                            ExtensibleRecord
                                 { type_ = f r.type_
                                 , fields = Dict.map (always f) r.fields
                                 }
-                            )
-                            maybeId
 
                     UserDefinedType ut ->
-                        Type
-                            (UserDefinedType { ut | args = List.map f ut.args })
-                            maybeId
+                        Type <|
+                            UserDefinedType
+                                { ut | args = List.map f ut.args }
 
                     WebGLShader { attributes, uniforms, varyings } ->
-                        Type
-                            (WebGLShader
+                        Type <|
+                            WebGLShader
                                 { attributes = Dict.map (always f) attributes
                                 , uniforms = Dict.map (always f) uniforms
                                 , varyings = Dict.map (always f) varyings
                                 }
-                            )
-                            maybeId
 
 
 typeAnnotationToType : TypeAnnotation -> TIState Type
@@ -388,7 +376,7 @@ typeAnnotationToType typeAnnotation =
         f annotation =
             annotation
                 |> typeAnnotationToType
-                |> State.map (\t -> Type t Nothing)
+                |> State.map Type
 
         recordBindings :
             List (Node ( Node String, Node TypeAnnotation ))
@@ -466,7 +454,7 @@ typeAnnotationToType typeAnnotation =
                 |> State.map
                     (\fields_ ->
                         ExtensibleRecord
-                            { type_ = Type (TypeVar (Node.value name)) Nothing
+                            { type_ = Type (TypeVar (Node.value name))
                             , fields = fields_
                             }
                     )

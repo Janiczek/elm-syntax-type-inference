@@ -33,12 +33,12 @@ unify typeAliases t1 t2 =
             ( _, Id id ) ->
                 unifyVariable typeAliases id t1
 
-            ( Type t1_ maybeId1, Type t2_ maybeId2 ) ->
-                unifyTypes typeAliases ( t1_, maybeId1 ) ( t2_, maybeId2 )
+            ( Type t1_, Type t2_ ) ->
+                unifyTypes typeAliases t1_ t2_
 
 
-unifyTypes : Dict ( FullModuleName, VarName ) Type -> ( Type, Maybe Id ) -> ( Type, Maybe Id ) -> TIState ()
-unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
+unifyTypes : Dict ( FullModuleName, VarName ) Type -> Type -> Type -> TIState ()
+unifyTypes typeAliases t1 t2 =
     let
         noOp : TIState ()
         noOp =
@@ -46,19 +46,7 @@ unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
 
         typeMismatch : TIState ()
         typeMismatch =
-            State.typeMismatch (Type t1 maybeId1) (Type t2 maybeId2)
-
-        coerceLeftTo : Type -> TIState ()
-        coerceLeftTo type_ =
-            maybeId1
-                |> Maybe.map (\id -> State.insertTypeForId id (Type type_ maybeId2))
-                |> Maybe.withDefault noOp
-
-        coerceRightTo : Type -> TIState ()
-        coerceRightTo type_ =
-            maybeId2
-                |> Maybe.map (\id -> State.insertTypeForId id (Type type_ maybeId1))
-                |> Maybe.withDefault noOp
+            State.typeMismatch (Type t1) (Type t2)
 
         recordBindings : Dict VarName TypeOrId -> Dict VarName TypeOrId -> TIState ()
         recordBindings bindings1 bindings2 =
@@ -116,7 +104,7 @@ unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
             noOp
 
         ( Int, Number ) ->
-            coerceRightTo Int
+            noOp
 
         ( Int, _ ) ->
             typeMismatch
@@ -125,7 +113,7 @@ unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
             noOp
 
         ( Float, Number ) ->
-            coerceRightTo Float
+            noOp
 
         ( Float, _ ) ->
             typeMismatch
@@ -134,10 +122,10 @@ unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
             noOp
 
         ( Number, Int ) ->
-            coerceLeftTo Int
+            noOp
 
         ( Number, Float ) ->
-            coerceLeftTo Float
+            noOp
 
         ( Number, _ ) ->
             typeMismatch
@@ -225,8 +213,8 @@ unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
             <| \() ->
             unifyTypes
                 typeAliases
-                ( Record r1.fields, Nothing )
-                ( Record r2.fields, Nothing )
+                (Record r1.fields)
+                (Record r2.fields)
 
         ( ExtensibleRecord extRec, Record recBindings ) ->
             recordVsExtensibleRecord
@@ -251,7 +239,7 @@ unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
                     typeMismatch
 
                 Just aliasedType ->
-                    unifyTypes typeAliases ( aliasedType, Nothing ) ( t2, Nothing )
+                    unifyTypes typeAliases aliasedType t2
 
         ( WebGLShader webgl1, WebGLShader webgl2 ) ->
             State.traverse (\( bindings1, bindings2 ) -> recordBindings bindings1 bindings2)
@@ -268,34 +256,22 @@ unifyTypes typeAliases ( t1, maybeId1 ) ( t2, maybeId2 ) =
 unifyVariable : Dict ( FullModuleName, VarName ) Type -> Id -> TypeOrId -> TIState ()
 unifyVariable typeAliases id otherTypeOrId =
     let
-        other : TypeOrId
-        other =
-            case otherTypeOrId of
-                Id _ ->
-                    otherTypeOrId
-
-                Type type_ (Just _) ->
-                    otherTypeOrId
-
-                Type type_ Nothing ->
-                    Type type_ (Just id)
-
         occursCheck : TIState ()
         occursCheck =
-            State.do (occurs id other) <| \doesOccur ->
+            State.do (occurs id otherTypeOrId) <| \doesOccur ->
             if doesOccur then
-                State.occursCheckFailed id other
+                State.occursCheckFailed id otherTypeOrId
 
             else
-                State.insertTypeForId id other
+                State.insertTypeForId id otherTypeOrId
     in
     State.do (State.getTypeForId id) <| \maybeTypeOrId ->
     case maybeTypeOrId of
         Just typeOrId ->
-            unify typeAliases typeOrId other
+            unify typeAliases typeOrId otherTypeOrId
 
         Nothing ->
-            case other of
+            case otherTypeOrId of
                 Id otherId ->
                     State.do (State.getTypeForId otherId) <| \maybeOtherType ->
                     case maybeOtherType of
@@ -305,7 +281,7 @@ unifyVariable typeAliases id otherTypeOrId =
                         Nothing ->
                             occursCheck
 
-                Type _ _ ->
+                Type _ ->
                     occursCheck
 
 
@@ -333,7 +309,7 @@ occurs id typeOrId =
         Id id_ ->
             State.pure <| id == id_
 
-        Type type_ _ ->
+        Type type_ ->
             case type_ of
                 TypeVar _ ->
                     State.pure False
@@ -387,7 +363,7 @@ occurs id typeOrId =
                 ExtensibleRecord r ->
                     or
                         [ f r.type_
-                        , f (Type (Record r.fields) Nothing)
+                        , f (Type (Record r.fields))
                         ]
 
                 UserDefinedType { args } ->

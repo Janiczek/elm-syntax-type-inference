@@ -27,7 +27,7 @@ import Transform
 
 type TypeOrId
     = Id Id
-    | Type Type (Maybe Id)
+    | Type Type
 
 
 type alias Id =
@@ -105,7 +105,7 @@ varName_ typeOrId =
         Id _ ->
             Nothing
 
-        Type type_ _ ->
+        Type type_ ->
             varName type_
 
 
@@ -115,8 +115,8 @@ getId typeOrId =
         Id id ->
             Just id
 
-        Type _ maybeId ->
-            maybeId
+        Type _ ->
+            Nothing
 
 
 getType : TypeOrId -> Maybe Type
@@ -125,7 +125,7 @@ getType typeOrId =
         Id _ ->
             Nothing
 
-        Type type_ _ ->
+        Type type_ ->
             Just type_
 
 
@@ -145,7 +145,7 @@ isParametric typeOrId =
         Id _ ->
             True
 
-        Type type_ _ ->
+        Type type_ ->
             case type_ of
                 TypeVar _ ->
                     True
@@ -188,7 +188,7 @@ isParametric typeOrId =
 
                 ExtensibleRecord r ->
                     -- in practice always `True`
-                    f r.type_ || f (Type (Record r.fields) Nothing)
+                    f r.type_ || f (Type (Record r.fields))
 
                 UserDefinedType { args } ->
                     List.any f args
@@ -224,7 +224,7 @@ recursiveChildren fn type_ =
                 Id _ ->
                     []
 
-                Type t _ ->
+                Type t ->
                     fn t
 
         recordBindings bindings =
@@ -295,57 +295,55 @@ recursiveChildren_ fn typeOrId =
         Id _ ->
             []
 
-        Type type_ _ ->
-            case type_ of
-                TypeVar _ ->
-                    []
+        Type (TypeVar _) ->
+            []
 
-                Function _ ->
-                    []
+        Type (Function _) ->
+            []
 
-                Int ->
-                    []
+        Type Int ->
+            []
 
-                Float ->
-                    []
+        Type Float ->
+            []
 
-                Number ->
-                    []
+        Type Number ->
+            []
 
-                Char ->
-                    []
+        Type Char ->
+            []
 
-                String ->
-                    []
+        Type String ->
+            []
 
-                Bool ->
-                    []
+        Type Bool ->
+            []
 
-                List t ->
-                    fn t
+        Type (List t) ->
+            fn t
 
-                Unit ->
-                    []
+        Type Unit ->
+            []
 
-                Tuple t1 t2 ->
-                    fn t1 ++ fn t2
+        Type (Tuple t1 t2) ->
+            fn t1 ++ fn t2
 
-                Tuple3 t1 t2 t3 ->
-                    fn t1 ++ fn t2 ++ fn t3
+        Type (Tuple3 t1 t2 t3) ->
+            fn t1 ++ fn t2 ++ fn t3
 
-                Record fields ->
-                    recordBindings fields
+        Type (Record fields) ->
+            recordBindings fields
 
-                ExtensibleRecord r ->
-                    fn r.type_ ++ fn (Type (Record r.fields) Nothing)
+        Type (ExtensibleRecord { type_, fields }) ->
+            fn type_ ++ fn (Type (Record fields))
 
-                UserDefinedType { args } ->
-                    List.fastConcatMap fn args
+        Type (UserDefinedType { args }) ->
+            List.fastConcatMap fn args
 
-                WebGLShader { attributes, uniforms, varyings } ->
-                    recordBindings attributes
-                        ++ recordBindings uniforms
-                        ++ recordBindings varyings
+        Type (WebGLShader { attributes, uniforms, varyings }) ->
+            recordBindings attributes
+                ++ recordBindings uniforms
+                ++ recordBindings varyings
 
 
 external : FullModuleName -> VarName -> Type

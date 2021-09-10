@@ -308,7 +308,7 @@ insertTypeForId id typeOrId =
                 Just another ->
                     insertTypeForId id another
 
-        Type _ _ ->
+        Type _ ->
             put { state | idTypes = Dict.insert id typeOrId state.idTypes }
 
 
