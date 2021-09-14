@@ -1,5 +1,6 @@
 module Tests exposing (..)
 
+import AssocSet as Set
 import Dict
 import Elm.Parser
 import Elm.Processing
@@ -7,12 +8,14 @@ import Elm.Syntax.DeclarationV2 exposing (DeclarationV2(..))
 import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..), TypedMeta)
 import Elm.TypeInference
 import Elm.TypeInference.Error exposing (Error)
+import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type
     exposing
         ( MonoType(..)
         , SuperType(..)
         , Type(..)
         , TypeVar
+        , TypeVarStyle(..)
         )
 import Expect
 import Fuzz exposing (Fuzzer)
@@ -73,6 +76,67 @@ main = {EXPR}
                     NodeV2 _ d ->
                         Err <| FoundUnexpectedDeclaration d
             )
+
+
+normalize : Type -> Type
+normalize ((Forall boundVars monoType) as type_) =
+    let
+        allVars : List TypeVar
+        allVars =
+            Set.union
+                (Type.freeVarsMono monoType)
+                (Set.fromList boundVars)
+                |> Set.toList
+
+        newVars : List TypeVar
+        newVars =
+            allVars
+                |> List.foldl
+                    (\( style, super ) ( nextId, nextVarOrd, acc ) ->
+                        case style of
+                            Generated n ->
+                                ( nextId + 1, nextVarOrd, ( Generated nextId, super ) :: acc )
+
+                            Named name ->
+                                ( nextId, nextVarOrd + 1, ( Named (ordToName nextVarOrd), super ) :: acc )
+                    )
+                    ( 0, 0, [] )
+                |> (\( _, _, vars ) -> vars)
+
+        subst : SubstitutionMap
+        subst =
+            List.map2 (\from to -> ( from, TypeVar to ))
+                allVars
+                newVars
+                |> SubstitutionMap.fromList
+    in
+    SubstitutionMap.substitute subst type_
+
+
+ordToName : Int -> String
+ordToName n =
+    let
+        radix =
+            26
+
+        {- The functions below are stolen from fredcy/elm-parseint and tweaked
+           to work similar to:
+
+           https://en.wikipedia.org/wiki/Bijective_numeration#The_bijective_base-26_system
+        -}
+        charFromInt : Int -> Char
+        charFromInt i =
+            Char.fromCode <| i + Char.toCode 'a'
+
+        go : Int -> String
+        go i =
+            if i < radix then
+                String.fromChar <| charFromInt i
+
+            else
+                go (i // radix) ++ (String.fromChar <| charFromInt (modBy radix i))
+    in
+    go n
 
 
 testExpr : ( String, Result Error Type -> Bool ) -> Test
@@ -179,24 +243,15 @@ suite =
         allExprFuzzer : Fuzzer String
         allExprFuzzer =
             exprFuzzer (goodExprs ++ badExprs)
-
-        goodExprFuzzer : Fuzzer String
-        goodExprFuzzer =
-            exprFuzzer goodExprs
-
-        badExprFuzzer : Fuzzer String
-        badExprFuzzer =
-            exprFuzzer badExprs
     in
     Test.describe "Elm.TypeInference"
         [ Test.describe "infer"
             [ Test.describe "good expressions" (List.map testExpr goodExprs)
             , Test.describe "bad expressions" (List.map testExpr badExprs)
-
-            --, Test.fuzz allExprFuzzer "e == (e)" <|
-            --    \expr ->
-            --        getExprType ("(" ++ expr ++ ")")
-            --            |> Expect.equal (getExprType expr)
+            , Test.fuzz allExprFuzzer "e == (e)" <|
+                \expr ->
+                    Result.map normalize (getExprType ("(" ++ expr ++ ")"))
+                        |> Expect.equal (Result.map normalize (getExprType expr))
             ]
 
         -- TODO number later used with an int -> coerced into an int

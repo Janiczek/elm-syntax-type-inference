@@ -2,6 +2,7 @@ module Elm.TypeInference.SubstitutionMap exposing
     ( SubstitutionMap
     , compose
     , empty
+    , fromList
     , singleton
     , substitute
     , substituteMono
@@ -32,6 +33,14 @@ compose : SubstitutionMap -> SubstitutionMap -> SubstitutionMap
 compose s1 s2 =
     AssocList.map (always (substituteMono s1)) s2
         |> AssocList.union s1
+
+
+fromList : List ( TypeVar, MonoType ) -> SubstitutionMap
+fromList list =
+    List.foldl
+        (\( var, type_ ) acc -> compose (singleton var type_) acc)
+        empty
+        list
 
 
 empty : SubstitutionMap
