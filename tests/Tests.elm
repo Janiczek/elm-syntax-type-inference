@@ -191,6 +191,17 @@ isList innerCheck actual =
             False
 
 
+isTuple : (Result Error Type -> Bool) -> (Result Error Type -> Bool) -> Result Error Type -> Bool
+isTuple check1 check2 actual =
+    case actual of
+        Ok (Forall [] (Tuple t1 t2)) ->
+            check1 (Ok (Forall [] t1))
+                && check2 (Ok (Forall [] t2))
+
+        _ ->
+            False
+
+
 suite : Test
 suite =
     let
@@ -206,10 +217,13 @@ suite =
             , ( "\"ABC\"", is String )
             , ( "'A'", is Char )
             , ( "(42.0)", is Float )
+            , ( "('a', ())", is (Tuple Char Unit) )
+            , ( "('a', (), 123.4)", is (Tuple3 Char Unit Float) )
             , ( "[1.0, 2.0, 3.0]", isList (is Float) )
             , ( "[1, 2, 3.0]", isList (is Float) )
             , ( "[1.0, 2, 3]", isList (is Float) )
             , ( "[1, 2, 3]", isList isNumber )
+            , ( "[(1,'a'),(2,'b')]", isList (isTuple isNumber (is Char)) )
 
             -- TODO Application (List (ExprWith meta))
             -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
@@ -217,12 +231,10 @@ suite =
             -- TODO IfBlock (ExprWith meta) (ExprWith meta) (ExprWith meta)
             -- TODO PrefixOperator String
             -- TODO Operator String
-            -- TODO TupledExpression (List (ExprWith meta))
             -- TODO LetExpression (LetBlock meta)
             -- TODO CaseExpression (CaseBlock meta)
             -- TODO LambdaExpression (Lambda meta)
             -- TODO RecordExpr (List (LocatedNode (RecordSetter meta)))
-            -- TODO ListExpr (List (ExprWith meta))
             -- TODO RecordAccess (ExprWith meta) (LocatedNode String)
             -- TODO RecordAccessFunction String
             -- TODO RecordUpdateExpression (LocatedNode String) (List (LocatedNode (RecordSetter meta)))
@@ -232,6 +244,7 @@ suite =
         badExprs : List ( String, Result Error Type -> Bool )
         badExprs =
             [ ( "[1, ()]", fails )
+            , ( "fn 1", fails )
             ]
 
         exprFuzzer : List ( String, a ) -> Fuzzer String
