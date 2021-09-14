@@ -4,15 +4,31 @@ import Dict
 import Elm.Parser
 import Elm.Processing
 import Elm.Syntax.DeclarationV2 exposing (DeclarationV2(..))
-import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..))
+import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..), TypedMeta)
 import Elm.TypeInference
-import Elm.TypeInference.Type as Type exposing (Type(..), TypeOrId(..))
+import Elm.TypeInference.Error exposing (Error)
+import Elm.TypeInference.Type as Type
+    exposing
+        ( MonoType(..)
+        , SuperType(..)
+        , Type(..)
+        , TypeVar
+        )
 import Expect
 import Fuzz exposing (Fuzzer)
+import List.Extra as List
 import Test exposing (Test)
 
 
-getExprType : String -> Result String Type
+type TestError
+    = CouldntParse (List String)
+    | CouldntInfer Error
+    | CouldntFindMainModule
+    | CouldntFindAnyDeclaration
+    | FoundUnexpectedDeclaration (DeclarationV2 TypedMeta)
+
+
+getExprType : String -> Result TestError Type
 getExprType exprCode =
     let
         moduleCode =
@@ -28,70 +44,109 @@ main = {EXPR}
     moduleCode
         |> Elm.Parser.parse
         |> Result.map (Elm.Processing.process Elm.Processing.init)
-        |> Result.mapError (\parseErrs -> "Couldn't parse: " ++ Debug.toString parseErrs)
+        |> Result.mapError (List.map Debug.toString >> CouldntParse)
         |> Result.andThen
             (\file ->
                 Elm.TypeInference.infer (Dict.singleton mainModule file)
-                    |> Result.mapError (\inferErr -> "Couldn't infer types: " ++ Debug.toString inferErr)
+                    |> Result.mapError CouldntInfer
             )
         |> Result.andThen
             (\typedFiles ->
                 Dict.get mainModule typedFiles
-                    |> Result.fromMaybe "Couldn't find the Main module"
+                    |> Result.fromMaybe CouldntFindMainModule
             )
         |> Result.andThen
             (\typedFile ->
                 List.head typedFile.declarations
-                    |> Result.fromMaybe "Couldn't find the main declaration"
+                    |> Result.fromMaybe CouldntFindAnyDeclaration
             )
         |> Result.andThen
             (\decl ->
                 case decl of
-                    NodeV2 _ (FunctionDeclaration { declaration }) ->
+                    NodeV2 _ ((FunctionDeclaration { declaration }) as val) ->
                         declaration
                             |> NodeV2.value
                             |> .expression
                             |> NodeV2.type_
-                            |> Type.getType
-                            |> Result.fromMaybe "Couldn't get type of inferred declaration"
+                            |> Ok
 
                     NodeV2 _ d ->
-                        Err <| "Found an unexpected declaration: " ++ Debug.toString d
+                        Err <| FoundUnexpectedDeclaration d
             )
 
 
-testExpr : String -> String -> Type -> Test
-testExpr label exprCode expectedType =
-    Test.test label <| \() ->
-    case getExprType exprCode of
-        Err err ->
-            Expect.fail err
+testExpr : ( String, Result Error Type -> Bool ) -> Test
+testExpr ( exprCode, predicate ) =
+    Test.test exprCode <|
+        \() ->
+            case getExprType exprCode of
+                Err (CouldntInfer err) ->
+                    predicate (Err err)
+                        |> Expect.true ("Has failed in a bad way: " ++ Debug.toString err)
 
-        Ok type_ ->
-            type_ |> Expect.equal expectedType
+                Ok type_ ->
+                    predicate (Ok type_)
+                        |> Expect.true ("Has inferred a bad type: " ++ Type.toString type_)
+
+                Err err ->
+                    Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+
+
+is : MonoType -> Result Error Type -> Bool
+is expected actual =
+    Ok (Forall [] expected) == actual
+
+
+fails : Result Error Type -> Bool
+fails actual =
+    case actual of
+        Err _ ->
+            True
+
+        Ok _ ->
+            False
+
+
+isNumber : Result Error Type -> Bool
+isNumber actual =
+    case actual of
+        Ok (Forall [] (TypeVar ( _, Number ))) ->
+            True
+
+        _ ->
+            False
+
+
+isList : (Result Error Type -> Bool) -> Result Error Type -> Bool
+isList innerCheck actual =
+    case actual of
+        Ok (Forall [] (List inner)) ->
+            innerCheck (Ok (Forall [] inner))
+
+        _ ->
+            False
 
 
 suite : Test
 suite =
     let
-        singleExprs : List ( String, String, Type )
-        singleExprs =
-            [ ( "Unit", "()", Unit )
-            , ( "Integer = Number until proven otherwise", "123", Number )
-            , ( "Hex = Number until proven otherwise", "0x123", Number )
-            , ( "Float", "42.0", Float )
-            , ( "Negation of int", "-123", Number )
-            , ( "Negation of hex", "-0x123", Number )
-            , ( "Negation of float", "-123.0", Float )
-            , ( "Literal", "\"ABC\"", String )
-            , ( "Char literal", "'A'", Char )
-            , ( "Parenthesized float", "(42.0)", Float )
-            , ( "List of floats", "[1.0, 2.0, 3.0]", List (Type Float) )
-            , ( "List of ints and one float at end = floats", "[1, 2, 3.0]", List (Type Float) )
-            , ( "List of ints and one float at beginning = floats", "[1.0, 2, 3]", List (Type Float) )
-            , ( "List of ints = numbers", "[1, 2, 3]", List (Type Number) )
+        goodExprs : List ( String, Result Error Type -> Bool )
+        goodExprs =
+            [ ( "()", is Unit )
+            , ( "123", isNumber )
+            , ( "0x123", isNumber )
+            , ( "42.0", is Float )
+            , ( "-123", isNumber )
+            , ( "-0x123", isNumber )
+            , ( "-123.0", is Float )
+            , ( "\"ABC\"", is String )
+            , ( "'A'", is Char )
+            , ( "(42.0)", is Float )
+            , ( "[1.0, 2.0, 3.0]", isList (is Float) )
+            , ( "[1, 2, 3.0]", isList (is Float) )
+            , ( "[1.0, 2, 3]", isList (is Float) )
+            , ( "[1, 2, 3]", isList isNumber )
 
-            -- TODO , ( "Heterogenous list isn't allowed", "[1, ()]", fails )
             -- TODO Application (List (ExprWith meta))
             -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
             -- TODO FunctionOrValue ModuleName String
@@ -110,21 +165,38 @@ suite =
             -- TODO GLSLExpression String
             ]
 
-        singleExprFuzzer : Fuzzer String
-        singleExprFuzzer =
-            singleExprs
-                |> List.map (\( _, expr, _ ) -> Fuzz.constant expr)
+        badExprs : List ( String, Result Error Type -> Bool )
+        badExprs =
+            [ ( "[1, ()]", fails )
+            ]
+
+        exprFuzzer : List ( String, a ) -> Fuzzer String
+        exprFuzzer exprs =
+            exprs
+                |> List.map (\( expr, _ ) -> Fuzz.constant expr)
                 |> Fuzz.oneOf
+
+        allExprFuzzer : Fuzzer String
+        allExprFuzzer =
+            exprFuzzer (goodExprs ++ badExprs)
+
+        goodExprFuzzer : Fuzzer String
+        goodExprFuzzer =
+            exprFuzzer goodExprs
+
+        badExprFuzzer : Fuzzer String
+        badExprFuzzer =
+            exprFuzzer badExprs
     in
     Test.describe "Elm.TypeInference"
         [ Test.describe "infer"
-            [ Test.describe "simple single expressions"
-                (singleExprs
-                    |> List.map (\( label, input, output ) -> testExpr label input output)
-                )
-            , Test.fuzz singleExprFuzzer "e == (e)" <| \expr ->
-            getExprType ("(" ++ expr ++ ")")
-                |> Expect.equal (getExprType expr)
+            [ Test.describe "good expressions" (List.map testExpr goodExprs)
+            , Test.describe "bad expressions" (List.map testExpr badExprs)
+
+            --, Test.fuzz allExprFuzzer "e == (e)" <|
+            --    \expr ->
+            --        getExprType ("(" ++ expr ++ ")")
+            --            |> Expect.equal (getExprType expr)
             ]
 
         -- TODO number later used with an int -> coerced into an int

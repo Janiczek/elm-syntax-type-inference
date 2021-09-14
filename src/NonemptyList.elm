@@ -2,6 +2,7 @@ module NonemptyList exposing
     ( NonemptyList
     , fromList
     , singleton
+    , toList
     )
 
 
@@ -22,3 +23,8 @@ fromList list =
 singleton : a -> NonemptyList a
 singleton a =
     ( a, [] )
+
+
+toList : NonemptyList a -> List a
+toList ( x, xs ) =
+    x :: xs

@@ -1,161 +1,149 @@
-module Elm.TypeInference.Unify exposing
-    ( unify
-    , unifyMany
-    )
+module Elm.TypeInference.Unify exposing (unifyMany)
 
+import AssocList
+import AssocSet
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
+import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (Id, Type(..), TypeOrId(..))
+import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
+import Elm.TypeInference.Type as Type
+    exposing
+        ( Id
+        , MonoType(..)
+        , SuperType(..)
+        , Type(..)
+        , TypeVar
+        )
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.VarName exposing (VarName)
 import Set exposing (Set)
 
 
-unifyMany : Dict ( FullModuleName, VarName ) Type -> List TypeEquation -> TIState ()
-unifyMany typeAliases equations =
-    equations
-        |> State.traverse (\( t1, t2 ) -> unify typeAliases t1 t2)
-        |> State.map (\_ -> ())
-
-
-unify : Dict ( FullModuleName, VarName ) Type -> TypeOrId -> TypeOrId -> TIState ()
-unify typeAliases t1 t2 =
-    if t1 == t2 then
-        State.pure ()
+unify : Dict ( FullModuleName, VarName ) MonoType -> Type -> Type -> TIState SubstitutionMap
+unify typeAliases ((Forall boundVars1 mono1) as t1) ((Forall boundVars2 mono2) as t2) =
+    if List.length boundVars1 /= List.length boundVars2 then
+        State.error <| TypeMismatch t1 t2
 
     else
-        case ( t1, t2 ) of
-            ( Id id, _ ) ->
-                unifyVariable typeAliases id t2
-
-            ( _, Id id ) ->
-                unifyVariable typeAliases id t1
-
-            ( Type t1_, Type t2_ ) ->
-                unifyTypes typeAliases t1_ t2_
+        -- TODO this is most likely wrong
+        unifyMono typeAliases mono1 mono2
 
 
-unifyTypes : Dict ( FullModuleName, VarName ) Type -> Type -> Type -> TIState ()
-unifyTypes typeAliases t1 t2 =
+unifyMany : Dict ( FullModuleName, VarName ) MonoType -> List ( Type, Type ) -> TIState SubstitutionMap
+unifyMany typeAliases equations =
     let
-        noOp : TIState ()
-        noOp =
-            State.pure ()
+        go : SubstitutionMap -> List TypeEquation -> TIState SubstitutionMap
+        go subst equations_ =
+            case equations_ of
+                [] ->
+                    State.pure subst
 
-        typeMismatch : TIState ()
+                ( t1, t2 ) :: restOfEquations ->
+                    State.do (unify typeAliases t1 t2) <| \subst1 ->
+                    go
+                        (SubstitutionMap.compose subst1 subst)
+                        (List.map (SubstitutionMap.substituteTypeEquation subst1) restOfEquations)
+    in
+    go SubstitutionMap.empty equations
+
+
+unifyManyMono : Dict ( FullModuleName, VarName ) MonoType -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
+unifyManyMono typeAliases eqs =
+    case eqs of
+        [] ->
+            State.pure AssocList.empty
+
+        ( t1, t2 ) :: eqs_ ->
+            State.do (unifyMono typeAliases t1 t2) <| \su1 ->
+            State.do
+                (unifyManyMono
+                    typeAliases
+                    (List.map
+                        (Tuple.mapBoth
+                            (SubstitutionMap.substituteMono su1)
+                            (SubstitutionMap.substituteMono su1)
+                        )
+                        eqs_
+                    )
+                )
+            <| \su2 ->
+            State.pure (SubstitutionMap.compose su2 su1)
+
+
+unifyMono : Dict ( FullModuleName, VarName ) MonoType -> MonoType -> MonoType -> TIState SubstitutionMap
+unifyMono typeAliases t1 t2 =
+    let
+        noSubstitutionNeeded : TIState SubstitutionMap
+        noSubstitutionNeeded =
+            State.pure AssocList.empty
+
+        substitute : TypeVar -> MonoType -> TIState SubstitutionMap
+        substitute var type_ =
+            State.pure <| AssocList.singleton var type_
+
+        typeMismatch : TIState SubstitutionMap
         typeMismatch =
-            State.typeMismatch (Type t1) (Type t2)
+            State.error <| TypeMismatchMono t1 t2
 
-        recordBindings : Dict VarName TypeOrId -> Dict VarName TypeOrId -> TIState ()
+        recordBindings : Dict VarName MonoType -> Dict VarName MonoType -> TIState SubstitutionMap
         recordBindings bindings1 bindings2 =
             if Dict.keys bindings1 /= Dict.keys bindings2 then
                 typeMismatch
 
             else
-                let
-                    fieldEquations : List TypeEquation
-                    fieldEquations =
-                        List.map2 Tuple.pair
-                            (Dict.values bindings1)
-                            (Dict.values bindings2)
-                in
-                unifyMany typeAliases fieldEquations
-
-        recordVsExtensibleRecord :
-            { record : Dict VarName TypeOrId
-            , extensibleRecord : Dict VarName TypeOrId
-            }
-            -> TIState ()
-        recordVsExtensibleRecord { record, extensibleRecord } =
-            let
-                fieldsToSet : Dict VarName TypeOrId -> Set VarName
-                fieldsToSet dict =
-                    dict
-                        |> Dict.keys
-                        |> Set.fromList
-
-                neededButMissing : Set VarName
-                neededButMissing =
-                    Set.diff
-                        (fieldsToSet extensibleRecord)
-                        (fieldsToSet record)
-            in
-            if Set.isEmpty neededButMissing then
-                noOp
-
-            else
-                typeMismatch
+                unifyMany typeAliases
+                    (List.map2 (\b1 b2 -> ( Type.mono b1, Type.mono b2 ))
+                        (Dict.values bindings1)
+                        (Dict.values bindings2)
+                    )
     in
     case ( t1, t2 ) of
-        ( TypeVar name1, TypeVar name2 ) ->
-            if name1 == name2 then
-                noOp
+        ( TypeVar v, _ ) ->
+            bind v t2
 
-            else
-                -- TODO is this correct?
-                typeMismatch
-
-        ( TypeVar _, _ ) ->
-            typeMismatch
+        ( _, TypeVar v ) ->
+            bind v t1
 
         ( Int, Int ) ->
-            noOp
-
-        ( Int, Number ) ->
-            noOp
+            noSubstitutionNeeded
 
         ( Int, _ ) ->
             typeMismatch
 
         ( Float, Float ) ->
-            noOp
-
-        ( Float, Number ) ->
-            noOp
+            noSubstitutionNeeded
 
         ( Float, _ ) ->
             typeMismatch
 
-        ( Number, Number ) ->
-            noOp
-
-        ( Number, Int ) ->
-            noOp
-
-        ( Number, Float ) ->
-            noOp
-
-        ( Number, _ ) ->
-            typeMismatch
-
         ( String, String ) ->
-            noOp
+            noSubstitutionNeeded
 
         ( String, _ ) ->
             typeMismatch
 
         ( Char, Char ) ->
-            noOp
+            noSubstitutionNeeded
 
         ( Char, _ ) ->
             typeMismatch
 
         ( Bool, Bool ) ->
-            noOp
+            noSubstitutionNeeded
 
         ( Bool, _ ) ->
             typeMismatch
 
         ( Unit, Unit ) ->
-            noOp
+            noSubstitutionNeeded
 
         ( Unit, _ ) ->
             typeMismatch
 
         ( Function a, Function b ) ->
-            unifyMany
+            unifyManyMono
                 typeAliases
                 [ ( a.from, b.from )
                 , ( a.to, b.to )
@@ -165,13 +153,13 @@ unifyTypes typeAliases t1 t2 =
             typeMismatch
 
         ( List list1, List list2 ) ->
-            unify typeAliases list1 list2
+            unifyMono typeAliases list1 list2
 
         ( List _, _ ) ->
             typeMismatch
 
         ( Tuple t1e1 t1e2, Tuple t2e1 t2e2 ) ->
-            unifyMany
+            unifyManyMono
                 typeAliases
                 [ ( t1e1, t2e1 )
                 , ( t1e2, t2e2 )
@@ -181,7 +169,7 @@ unifyTypes typeAliases t1 t2 =
             typeMismatch
 
         ( Tuple3 t1e1 t1e2 t1e3, Tuple3 t2e1 t2e2 t2e3 ) ->
-            unifyMany
+            unifyManyMono
                 typeAliases
                 [ ( t1e1, t2e1 )
                 , ( t1e2, t2e2 )
@@ -191,36 +179,19 @@ unifyTypes typeAliases t1 t2 =
         ( Tuple3 _ _ _, _ ) ->
             typeMismatch
 
+        -- TODO records vs extensible records
         ( Record bindings1, Record bindings2 ) ->
             recordBindings bindings1 bindings2
-
-        ( Record recBindings, ExtensibleRecord extRec ) ->
-            recordVsExtensibleRecord
-                { record = recBindings
-                , extensibleRecord = extRec.fields
-                }
 
         ( Record _, _ ) ->
             typeMismatch
 
         ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
-            State.do
-                (unify
-                    typeAliases
-                    r1.type_
-                    r2.type_
-                )
-            <| \() ->
-            unifyTypes
+            unifyManyMono
                 typeAliases
-                (Record r1.fields)
-                (Record r2.fields)
-
-        ( ExtensibleRecord extRec, Record recBindings ) ->
-            recordVsExtensibleRecord
-                { record = recBindings
-                , extensibleRecord = extRec.fields
-                }
+                [ ( r1.type_, r2.type_ )
+                , ( Record r1.fields, Record r2.fields )
+                ]
 
         ( ExtensibleRecord _, _ ) ->
             typeMismatch
@@ -231,7 +202,7 @@ unifyTypes typeAliases t1 t2 =
 
             else
                 List.map2 Tuple.pair ut1.args ut2.args
-                    |> unifyMany typeAliases
+                    |> unifyManyMono typeAliases
 
         ( UserDefinedType ut, _ ) ->
             case Dict.get ( ut.moduleName, ut.name ) typeAliases of
@@ -239,141 +210,59 @@ unifyTypes typeAliases t1 t2 =
                     typeMismatch
 
                 Just aliasedType ->
-                    unifyTypes typeAliases aliasedType t2
+                    unifyMono typeAliases aliasedType t2
 
         ( WebGLShader webgl1, WebGLShader webgl2 ) ->
-            State.traverse (\( bindings1, bindings2 ) -> recordBindings bindings1 bindings2)
-                [ ( webgl1.attributes, webgl2.attributes )
-                , ( webgl1.uniforms, webgl2.uniforms )
-                , ( webgl1.varyings, webgl2.varyings )
+            unifyManyMono
+                typeAliases
+                [ ( Record webgl1.attributes, Record webgl2.attributes )
+                , ( Record webgl1.uniforms, Record webgl2.uniforms )
+                , ( Record webgl1.varyings, Record webgl2.varyings )
                 ]
-                |> State.map (\_ -> ())
 
         ( WebGLShader _, _ ) ->
             typeMismatch
 
 
-unifyVariable : Dict ( FullModuleName, VarName ) Type -> Id -> TypeOrId -> TIState ()
-unifyVariable typeAliases id otherTypeOrId =
-    let
-        occursCheck : TIState ()
-        occursCheck =
-            State.do (occurs id otherTypeOrId) <| \doesOccur ->
-            if doesOccur then
-                State.occursCheckFailed id otherTypeOrId
+bind : TypeVar -> MonoType -> TIState SubstitutionMap
+bind typeVar type_ =
+    if type_ == TypeVar typeVar then
+        State.pure SubstitutionMap.empty
 
-            else
-                State.insertTypeForId id otherTypeOrId
-    in
-    State.do (State.getTypeForId id) <| \maybeTypeOrId ->
-    case maybeTypeOrId of
-        Just typeOrId ->
-            unify typeAliases typeOrId otherTypeOrId
+    else if occursCheck typeVar type_ then
+        State.error <| InfiniteType typeVar type_
 
-        Nothing ->
-            case otherTypeOrId of
-                Id otherId ->
-                    State.do (State.getTypeForId otherId) <| \maybeOtherType ->
-                    case maybeOtherType of
-                        Just otherType ->
-                            unifyVariable typeAliases id otherType
+    else
+        let
+            ( style, super ) =
+                typeVar
 
-                        Nothing ->
-                            occursCheck
+            goAhead =
+                State.pure <| SubstitutionMap.singleton typeVar type_
+        in
+        case super of
+            Normal ->
+                goAhead
 
-                Type _ ->
-                    occursCheck
+            Number ->
+                case type_ of
+                    Int ->
+                        goAhead
+
+                    Float ->
+                        goAhead
+
+                    TypeVar (( _, Normal ) as otherVar) ->
+                        -- go the other way, from less specific to more specific
+                        State.pure <| SubstitutionMap.singleton otherVar (TypeVar typeVar)
+
+                    TypeVar otherVar ->
+                        goAhead
+
+                    _ ->
+                        State.error <| SuperTypeMismatch super type_
 
 
-occurs : Id -> TypeOrId -> TIState Bool
-occurs id typeOrId =
-    let
-        f : TypeOrId -> TIState Bool
-        f typeOrId_ =
-            occurs id typeOrId_
-
-        or : List (TIState Bool) -> TIState Bool
-        or list =
-            list
-                |> State.combine
-                |> State.map (List.any identity)
-
-        recordBindings : Dict VarName TypeOrId -> TIState Bool
-        recordBindings bindings =
-            bindings
-                |> Dict.values
-                |> List.map f
-                |> or
-    in
-    case typeOrId of
-        Id id_ ->
-            State.pure <| id == id_
-
-        Type type_ ->
-            case type_ of
-                TypeVar _ ->
-                    State.pure False
-
-                Function { from, to } ->
-                    or
-                        [ f from
-                        , f to
-                        ]
-
-                Int ->
-                    State.pure False
-
-                Float ->
-                    State.pure False
-
-                Number ->
-                    State.pure False
-
-                Char ->
-                    State.pure False
-
-                String ->
-                    State.pure False
-
-                Bool ->
-                    State.pure False
-
-                List listType ->
-                    f listType
-
-                Unit ->
-                    State.pure False
-
-                Tuple t1 t2 ->
-                    or
-                        [ f t1
-                        , f t2
-                        ]
-
-                Tuple3 t1 t2 t3 ->
-                    or
-                        [ f t1
-                        , f t2
-                        , f t3
-                        ]
-
-                Record fields ->
-                    recordBindings fields
-
-                ExtensibleRecord r ->
-                    or
-                        [ f r.type_
-                        , f (Type (Record r.fields))
-                        ]
-
-                UserDefinedType { args } ->
-                    args
-                        |> List.map f
-                        |> or
-
-                WebGLShader { attributes, uniforms, varyings } ->
-                    or
-                        [ recordBindings attributes
-                        , recordBindings uniforms
-                        , recordBindings varyings
-                        ]
+occursCheck : TypeVar -> MonoType -> Bool
+occursCheck typeVar type_ =
+    AssocSet.member typeVar <| Type.freeVarsMono type_

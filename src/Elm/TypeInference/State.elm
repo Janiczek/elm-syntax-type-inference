@@ -1,12 +1,10 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, init
-    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
+    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
     , findModuleOfVar
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
-    , getIdTypes, getTypeForId, insertTypeForId
-    , addTypeEquations, getTypeEquations
-    , impossibleExpr, impossiblePattern, impossibleType, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
+    , getTypeEnv, withBinding, withSubstitutions
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -19,7 +17,7 @@ module Elm.TypeInference.State exposing
 
 # Utilities
 
-@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine
+@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
 
 
 # Var module lookup
@@ -37,19 +35,9 @@ module Elm.TypeInference.State exposing
 @docs getVarTypes, getTypesForVar, addVarType
 
 
-# ID types
+# Type env
 
-@docs getIdTypes, getTypeForId, insertTypeForId
-
-
-# Type equations
-
-@docs addTypeEquations, getTypeEquations
-
-
-# Errors
-
-@docs impossibleExpr, impossiblePattern, impossibleType, typeMismatch, occursCheckFailed, varNotFound, ambiguousName
+@docs getTypeEnv, withBinding, withSubstitutions
 
 -}
 
@@ -63,7 +51,8 @@ import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
-import Elm.TypeInference.Type exposing (Id, TypeOrId(..))
+import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
+import Elm.TypeInference.Type exposing (Id, MonoType(..), Type(..), TypeVar)
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 
 
@@ -79,18 +68,22 @@ type alias State =
       nextId : Id
     , {- A dict from variable names to their types/type IDs.
 
-         Usually one of these will be something of substance (type taken from
-         the actual expression in the declaration of a var) and the rest will
-         be just type IDs of its usages. That way we can link them together.
-      -}
-      varTypes : Dict ( FullModuleName, VarName ) (List TypeOrId)
-    , {- A dict from type variable IDs to inferred types.
+         This is mainly important because we allow any order of declarations vs
+         their usages. We can't really look stuff up in the environment as we
+         find the usages; we need to defer that until later.
 
-         Note IDs can point to other IDs (eg. dict entry `(1,Id 2)`) so you
-         might need to walk this dict multiple times.
+         Usually one of these IDs will be something of substance (type taken
+         from the actual expression in the declaration of a var) and the rest
+         will be just type IDs of its usages. That way we can link them
+         together.
       -}
-      idTypes : Dict Id TypeOrId
-    , {- A list of all type equations recorded so far. -} typeEquations : List TypeEquation
+      varTypes : Dict ( FullModuleName, VarName ) (List Type)
+    , {- Environment holding types for our various variables and bindings.
+
+         This is not global state, as it will change and flow as we go in and out
+         of let..in expressions and lambdas etc.
+      -}
+      typeEnv : Dict VarName Type
     }
 
 
@@ -103,9 +96,9 @@ pure a =
     \s -> ( Ok a, s )
 
 
-fromError : Error -> TIState a
-fromError error =
-    \s -> ( Err error, s )
+error : Error -> TIState a
+error error_ =
+    \s -> ( Err error_, s )
 
 
 fromTuple : ( Result Error a, State ) -> TIState a
@@ -223,12 +216,11 @@ modify fn =
 -- OUR API
 
 
-init : State
-init =
+init : Dict VarName Type -> State
+init env =
     { nextId = 0
     , varTypes = Dict.empty
-    , idTypes = Dict.empty
-    , typeEquations = []
+    , typeEnv = env
     }
 
 
@@ -248,19 +240,19 @@ getNextIdAndTick =
 -- VAR TYPES
 
 
-getVarTypes : TIState (Dict ( FullModuleName, VarName ) (List TypeOrId))
+getVarTypes : TIState (Dict ( FullModuleName, VarName ) (List Type))
 getVarTypes =
     get
         |> map .varTypes
 
 
-getTypesForVar : FullModuleName -> VarName -> TIState (List TypeOrId)
+getTypesForVar : FullModuleName -> VarName -> TIState (List Type)
 getTypesForVar moduleName varName =
     getVarTypes
         |> map (Dict.get ( moduleName, varName ) >> Maybe.withDefault [])
 
 
-addVarType : FullModuleName -> VarName -> TypeOrId -> TIState ()
+addVarType : FullModuleName -> VarName -> Type -> TIState ()
 addVarType moduleName varName type_ =
     modify
         (\state ->
@@ -281,94 +273,7 @@ addVarType moduleName varName type_ =
 
 
 
--- ID TYPES
-
-
-getIdTypes : TIState (Dict Id TypeOrId)
-getIdTypes =
-    get
-        |> map .idTypes
-
-
-getTypeForId : Id -> TIState (Maybe TypeOrId)
-getTypeForId id =
-    getIdTypes
-        |> map (Dict.get id)
-
-
-insertTypeForId : Id -> TypeOrId -> TIState ()
-insertTypeForId id typeOrId =
-    do get <| \state ->
-    case typeOrId of
-        Id id_ ->
-            case Dict.get id_ state.idTypes of
-                Nothing ->
-                    put { state | idTypes = Dict.insert id typeOrId state.idTypes }
-
-                Just another ->
-                    insertTypeForId id another
-
-        Type _ ->
-            put { state | idTypes = Dict.insert id typeOrId state.idTypes }
-
-
-
--- TYPE EQUATIONS
-
-
-addTypeEquations : List TypeEquation -> TIState ()
-addTypeEquations equations =
-    modify (\state -> { state | typeEquations = state.typeEquations ++ equations })
-
-
-getTypeEquations : TIState (List TypeEquation)
-getTypeEquations =
-    get
-        |> map .typeEquations
-
-
-
--- ERRORS
-
-
-impossibleExpr : TypedExpr -> TIState a
-impossibleExpr expr =
-    fromError <| ImpossibleExpr expr
-
-
-impossiblePattern : TypedPattern -> TIState a
-impossiblePattern pattern =
-    fromError <| ImpossiblePattern pattern
-
-
-impossibleType : TypeAnnotation -> TIState a
-impossibleType type_ =
-    fromError <| ImpossibleType type_
-
-
-typeMismatch : TypeOrId -> TypeOrId -> TIState a
-typeMismatch t1 t2 =
-    fromError <| TypeMismatch t1 t2
-
-
-occursCheckFailed : Id -> TypeOrId -> TIState a
-occursCheckFailed id type_ =
-    fromError <| OccursCheckFailed id type_
-
-
-varNotFound : { varName : VarName, usedIn : FullModuleName } -> TIState a
-varNotFound rec =
-    fromError <| VarNotFound rec
-
-
-ambiguousName :
-    { varName : VarName
-    , usedIn : FullModuleName
-    , possibleModules : List FullModuleName
-    }
-    -> TIState a
-ambiguousName rec =
-    fromError <| AmbiguousName rec
+-- VAR QUALIFICATION
 
 
 {-| We have roughly these options:
@@ -410,13 +315,46 @@ findModuleOfVar files thisFile maybeModuleName varName =
     in
     case foundModuleName of
         Err err ->
-            fromError err
+            error err
 
         Ok Nothing ->
-            varNotFound
-                { varName = varName
-                , usedIn = File.moduleName thisFile
-                }
+            error <|
+                VarNotFound
+                    { varName = varName
+                    , usedIn = File.moduleName thisFile
+                    }
 
         Ok (Just moduleName) ->
             pure moduleName
+
+
+
+-- TYPE ENV
+
+
+getTypeEnv : TIState (Dict VarName Type)
+getTypeEnv =
+    get
+        |> map .typeEnv
+
+
+withBinding : VarName -> Type -> TIState a -> TIState a
+withBinding var type_ m =
+    withModifiedTypeEnv
+        {- Diehl removes the key from the dict first... but I think we don't
+           need to do that as on collision the new item wins.
+        -}
+        (Dict.insert var type_)
+        m
+
+
+withSubstitutions : SubstitutionMap -> TIState a -> TIState a
+withSubstitutions subst m =
+    withModifiedTypeEnv
+        (SubstitutionMap.substituteTypeEnv subst)
+        m
+
+
+withModifiedTypeEnv : (Dict VarName Type -> Dict VarName Type) -> TIState a -> TIState a
+withModifiedTypeEnv fn stateFn =
+    \state -> stateFn { state | typeEnv = fn state.typeEnv }

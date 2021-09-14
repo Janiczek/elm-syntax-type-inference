@@ -2,6 +2,7 @@ module Elm.Syntax.FullModuleName exposing
     ( FullModuleName
     , fromModuleName
     , fromModuleName_
+    , toString
     )
 
 import Elm.Syntax.ModuleName exposing (ModuleName)
@@ -27,3 +28,10 @@ fromModuleName_ moduleName =
     moduleName
         |> fromModuleName
         |> Maybe.withDefault (fromString "<BUG> The file didn't have a proper module name")
+
+
+toString : FullModuleName -> String
+toString moduleName =
+    moduleName
+        |> NonemptyList.toList
+        |> String.join "."

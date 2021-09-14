@@ -25,13 +25,13 @@ import Elm.Syntax.PatternV2
         )
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (TypeOrId(..))
+import Elm.TypeInference.Type as Type exposing (Id, MonoType(..), Type(..), TypeVar)
 
 
 assignId : Range -> value -> TIState (NodeV2 TypedMeta value)
 assignId range expr =
     State.getNextIdAndTick
-        |> State.map (\id -> NodeV2 { range = range, type_ = Id id } expr)
+        |> State.map (\id -> NodeV2 { range = range, type_ = Type.id id } expr)
 
 
 assignIds : LocatedExpr -> TIState TypedExpr

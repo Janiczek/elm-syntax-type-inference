@@ -5,7 +5,7 @@ import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.PatternV2 exposing (TypedPattern)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
-import Elm.TypeInference.Type exposing (TypeOrId)
+import Elm.TypeInference.Type exposing (MonoType, SuperType, Type, TypeVar)
 
 
 type Error
@@ -17,5 +17,7 @@ type Error
     | VarNotFound { usedIn : FullModuleName, varName : VarName }
     | AmbiguousName { usedIn : FullModuleName, varName : VarName, possibleModules : List FullModuleName }
       -- Type errors
-    | TypeMismatch TypeOrId TypeOrId
-    | OccursCheckFailed Int TypeOrId
+    | TypeMismatch Type Type
+    | TypeMismatchMono MonoType MonoType
+    | InfiniteType TypeVar MonoType
+    | SuperTypeMismatch SuperType MonoType
