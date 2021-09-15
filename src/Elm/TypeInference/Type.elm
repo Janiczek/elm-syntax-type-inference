@@ -17,6 +17,7 @@ module Elm.TypeInference.Type exposing
     , isParametric
     , mono
     , monoTypeToString
+    , normalize
     , number
     , number_
     , recurse
@@ -30,6 +31,7 @@ Module is not `Elm.Type` because that already exists in elm/project-metadata-uti
 
 -}
 
+import AssocList
 import AssocSet as Set exposing (Set)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
@@ -410,7 +412,12 @@ monoTypeToString type_ =
             "( " ++ f t1 ++ ", " ++ f t2 ++ ", " ++ f t3 ++ " )"
 
         Record bindings ->
-            "{ " ++ recordBindings bindings ++ " }"
+            let
+                bindingsStr =
+                    (" " ++ recordBindings bindings ++ " ")
+                        |> String.trim
+            in
+            "{" ++ bindingsStr ++ "}"
 
         ExtensibleRecord r ->
             "{ " ++ f r.type_ ++ " | " ++ recordBindings r.fields ++ " }"
@@ -456,3 +463,94 @@ getDebugId (Forall _ monoType) =
 
         _ ->
             -1
+
+
+normalize : Type -> Type
+normalize ((Forall boundVars monoType) as type_) =
+    let
+        allVars : List TypeVar
+        allVars =
+            Set.union
+                (freeVarsMono monoType)
+                (Set.fromList boundVars)
+                |> Set.toList
+
+        newVars : List TypeVar
+        newVars =
+            allVars
+                |> List.foldl
+                    (\( style, super ) ( nextId, nextVarOrd, acc ) ->
+                        case style of
+                            Generated _ ->
+                                ( nextId + 1, nextVarOrd, ( Generated nextId, super ) :: acc )
+
+                            Named _ ->
+                                ( nextId, nextVarOrd + 1, ( Named (ordToName nextVarOrd), super ) :: acc )
+                    )
+                    ( 0, 0, [] )
+                |> (\( _, _, vars ) -> vars)
+
+        -- We can't use SubstitutionMap.substitute because it works recursively
+        -- We need to replace the vars just once and not follow the links.
+        subst : AssocList.Dict TypeVar TypeVar
+        subst =
+            List.map2 Tuple.pair allVars newVars
+                |> AssocList.fromList
+                |> Debug.log "subst"
+    in
+    type_
+        |> mapVars
+            (\var ->
+                case AssocList.get var subst of
+                    Nothing ->
+                        var
+
+                    Just newVar ->
+                        newVar
+            )
+
+
+mapVars : (TypeVar -> TypeVar) -> Type -> Type
+mapVars fn (Forall boundVars monoType) =
+    Forall (List.map fn boundVars) (mapVarsMono fn monoType)
+
+
+mapVarsMono : (TypeVar -> TypeVar) -> MonoType -> MonoType
+mapVarsMono fn type_ =
+    Transform.transformOnce
+        recurse
+        (\t ->
+            case t of
+                TypeVar var ->
+                    TypeVar (fn var)
+
+                _ ->
+                    t
+        )
+        type_
+
+
+ordToName : Int -> String
+ordToName n =
+    let
+        radix =
+            26
+
+        {- The functions below are stolen from fredcy/elm-parseint and tweaked
+           to work similar to:
+
+           https://en.wikipedia.org/wiki/Bijective_numeration#The_bijective_base-26_system
+        -}
+        charFromInt : Int -> Char
+        charFromInt i =
+            Char.fromCode <| i + Char.toCode 'a'
+
+        go : Int -> String
+        go i =
+            if i < radix then
+                String.fromChar <| charFromInt i
+
+            else
+                go (i // radix) ++ (String.fromChar <| charFromInt (modBy radix i))
+    in
+    go n

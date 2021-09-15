@@ -376,7 +376,9 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                             { from =
                                 ExtensibleRecord
                                     { type_ = Type.id_ recordId
-                                    , fields = Dict.singleton fieldName (Type.id_ resultId)
+                                    , fields =
+                                        -- the fieldName is ".a", not "a", so let's sanitize that
+                                        Dict.singleton (String.dropLeft 1 fieldName) (Type.id_ resultId)
                                     }
                             , to = Type.id_ resultId
                             }
