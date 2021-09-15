@@ -201,6 +201,26 @@ isTuple check1 check2 actual =
             False
 
 
+isFunction : (Result Error Type -> Bool) -> (Result Error Type -> Bool) -> Result Error Type -> Bool
+isFunction fromCheck toCheck actual =
+    case actual of
+        Ok (Forall [] (Function { from, to })) ->
+            fromCheck (Ok (Forall [] from)) && toCheck (Ok (Forall [] to))
+
+        _ ->
+            False
+
+
+isVar : Result Error Type -> Bool
+isVar actual =
+    case actual of
+        Ok (Forall [] (TypeVar _)) ->
+            True
+
+        _ ->
+            False
+
+
 suite : Test
 suite =
     let
@@ -223,6 +243,11 @@ suite =
             , ( "[1.0, 2, 3]", isList (is Float) )
             , ( "[1, 2, 3]", isList isNumber )
             , ( "[(1,'a'),(2,'b')]", isList (isTuple isNumber (is Char)) )
+            , ( "\\x -> 1", isFunction isVar isNumber )
+            , ( "\\x y -> 1", isFunction isVar (isFunction isVar isNumber) )
+            , ( "\\() -> 1", isFunction (is Unit) isNumber )
+            , ( "\\x () -> 1", isFunction isVar (isFunction (is Unit) isNumber) )
+            , ( "\\() x -> 1", isFunction (is Unit) (isFunction isVar isNumber) )
 
             -- TODO Application (List (ExprWith meta))
             -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
@@ -232,7 +257,6 @@ suite =
             -- TODO Operator String
             -- TODO LetExpression (LetBlock meta)
             -- TODO CaseExpression (CaseBlock meta)
-            -- TODO LambdaExpression (Lambda meta)
             -- TODO RecordExpr (List (LocatedNode (RecordSetter meta)))
             -- TODO RecordAccess (ExprWith meta) (LocatedNode String)
             -- TODO RecordAccessFunction String

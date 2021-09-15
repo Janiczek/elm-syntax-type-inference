@@ -310,10 +310,10 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                 fnType =
                     argIds
                         |> List.foldr
-                            (\rightArgType leftArgType ->
+                            (\leftArgType rightArgType ->
                                 Function
-                                    { from = leftArgType
-                                    , to = Type.id_ rightArgType
+                                    { from = Type.id_ leftArgType
+                                    , to = rightArgType
                                     }
                             )
                             (Type.id_ resultId)
