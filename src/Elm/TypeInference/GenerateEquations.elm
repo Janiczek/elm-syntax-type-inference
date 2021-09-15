@@ -31,9 +31,6 @@ import Elm.TypeInference.Type as Type
     exposing
         ( Id
         , MonoType(..)
-        , SuperType(..)
-        , Type(..)
-        , TypeVar
         )
 import Elm.TypeInference.Type.External as ExternalType
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
@@ -89,7 +86,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     List.map2
                         (\fieldSetterNode fieldId ->
                             let
-                                ( fieldNameNode, fieldExpr ) =
+                                ( fieldNameNode, _ ) =
                                     NodeV2.value fieldSetterNode
                             in
                             ( NodeV2.value fieldNameNode
@@ -109,7 +106,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     List.map2
                         (\fieldSetterNode fieldId ->
                             let
-                                ( fieldNameNode, fieldExpr ) =
+                                ( _, fieldExpr ) =
                                     NodeV2.value fieldSetterNode
                             in
                             ( NodeV2.type_ fieldExpr
@@ -291,8 +288,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             f e
                 |> append [ ( type_, NodeV2.type_ e ) ]
 
-        LetExpression { declarations, expression } ->
-            State.do State.getTypeEnv <| \typeEnv ->
+        LetExpression _ ->
             -- x == bindingName
             -- e1 == bindingBody
             -- e2 == letBody

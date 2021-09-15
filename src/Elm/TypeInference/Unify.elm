@@ -10,15 +10,13 @@ import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type
     exposing
-        ( Id
-        , MonoType(..)
+        ( MonoType(..)
         , SuperType(..)
         , Type(..)
         , TypeVar
         )
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.VarName exposing (VarName)
-import Set exposing (Set)
 
 
 unify : Dict ( FullModuleName, VarName ) MonoType -> Type -> Type -> TIState SubstitutionMap
@@ -41,10 +39,11 @@ unifyMany typeAliases equations =
                     State.pure subst
 
                 ( t1, t2 ) :: restOfEquations ->
-                    State.do (unify typeAliases t1 t2) <| \subst1 ->
-                    go
-                        (SubstitutionMap.compose subst1 subst)
-                        (List.map (SubstitutionMap.substituteTypeEquation subst1) restOfEquations)
+                    State.do (unify typeAliases t1 t2) <|
+                        \subst1 ->
+                            go
+                                (SubstitutionMap.compose subst1 subst)
+                                (List.map (SubstitutionMap.substituteTypeEquation subst1) restOfEquations)
     in
     go SubstitutionMap.empty equations
 
@@ -56,20 +55,22 @@ unifyManyMono typeAliases eqs =
             State.pure AssocList.empty
 
         ( t1, t2 ) :: eqs_ ->
-            State.do (unifyMono typeAliases t1 t2) <| \su1 ->
-            State.do
-                (unifyManyMono
-                    typeAliases
-                    (List.map
-                        (Tuple.mapBoth
-                            (SubstitutionMap.substituteMono su1)
-                            (SubstitutionMap.substituteMono su1)
+            State.do (unifyMono typeAliases t1 t2) <|
+                \su1 ->
+                    State.do
+                        (unifyManyMono
+                            typeAliases
+                            (List.map
+                                (Tuple.mapBoth
+                                    (SubstitutionMap.substituteMono su1)
+                                    (SubstitutionMap.substituteMono su1)
+                                )
+                                eqs_
+                            )
                         )
-                        eqs_
-                    )
-                )
-            <| \su2 ->
-            State.pure (SubstitutionMap.compose su2 su1)
+                    <|
+                        \su2 ->
+                            State.pure (SubstitutionMap.compose su2 su1)
 
 
 unifyMono : Dict ( FullModuleName, VarName ) MonoType -> MonoType -> MonoType -> TIState SubstitutionMap
@@ -78,10 +79,6 @@ unifyMono typeAliases t1 t2 =
         noSubstitutionNeeded : TIState SubstitutionMap
         noSubstitutionNeeded =
             State.pure AssocList.empty
-
-        substitute : TypeVar -> MonoType -> TIState SubstitutionMap
-        substitute var type_ =
-            State.pure <| AssocList.singleton var type_
 
         typeMismatch : TIState SubstitutionMap
         typeMismatch =
@@ -234,7 +231,7 @@ bind typeVar type_ =
 
     else
         let
-            ( style, super ) =
+            ( _, super ) =
                 typeVar
 
             goAhead =
@@ -256,7 +253,7 @@ bind typeVar type_ =
                         -- go the other way, from less specific to more specific
                         State.pure <| SubstitutionMap.singleton otherVar (TypeVar typeVar)
 
-                    TypeVar otherVar ->
+                    TypeVar _ ->
                         goAhead
 
                     _ ->

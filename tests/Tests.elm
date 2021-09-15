@@ -19,7 +19,6 @@ import Elm.TypeInference.Type as Type
         )
 import Expect
 import Fuzz exposing (Fuzzer)
-import List.Extra as List
 import Test exposing (Test)
 
 
@@ -66,7 +65,7 @@ main = {EXPR}
         |> Result.andThen
             (\decl ->
                 case decl of
-                    NodeV2 _ ((FunctionDeclaration { declaration }) as val) ->
+                    NodeV2 _ (FunctionDeclaration { declaration }) ->
                         declaration
                             |> NodeV2.value
                             |> .expression
@@ -94,10 +93,10 @@ normalize ((Forall boundVars monoType) as type_) =
                 |> List.foldl
                     (\( style, super ) ( nextId, nextVarOrd, acc ) ->
                         case style of
-                            Generated n ->
+                            Generated _ ->
                                 ( nextId + 1, nextVarOrd, ( Generated nextId, super ) :: acc )
 
-                            Named name ->
+                            Named _ ->
                                 ( nextId, nextVarOrd + 1, ( Named (ordToName nextVarOrd), super ) :: acc )
                     )
                     ( 0, 0, [] )

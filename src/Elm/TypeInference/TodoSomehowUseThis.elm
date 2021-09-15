@@ -1,9 +1,7 @@
-module Elm.TypeInference.X exposing (..)
+module Elm.TypeInference.TodoSomehowUseThis exposing (..)
 
 import AssocList
-import AssocSet
 import Dict exposing (Dict)
-import Elm.Syntax.ExpressionV2 exposing (ExpressionV2(..))
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
@@ -11,13 +9,10 @@ import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type
     exposing
-        ( Id
-        , MonoType(..)
+        ( MonoType
         , Type(..)
-        , TypeVar
         )
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
-import Elm.TypeInference.Unify as Unify
 
 
 type alias Env =
@@ -53,7 +48,7 @@ solveStuffTodo typeAliases equations type_ =
             Err err
 
         Ok substitutions ->
-            Ok <| closeOver <| SubstitutionMap.substituteMono substitutions type_
+            Ok <| Type.closeOver <| SubstitutionMap.substituteMono substitutions type_
 
 
 myOtherTodo =

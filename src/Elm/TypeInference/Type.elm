@@ -30,7 +30,6 @@ Module is not `Elm.Type` because that already exists in elm/project-metadata-uti
 
 -}
 
-import AssocList
 import AssocSet as Set exposing (Set)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
@@ -322,13 +321,6 @@ freeVarsTypeEnv env =
     env
         |> Dict.values
         |> List.foldl (\type_ acc -> Set.union (freeVars type_) acc) Set.empty
-
-
-freeVarsTypeEquation : ( Type, Type ) -> Set TypeVar
-freeVarsTypeEquation ( t1, t2 ) =
-    Set.union
-        (freeVars t1)
-        (freeVars t2)
 
 
 closeOver : MonoType -> Type

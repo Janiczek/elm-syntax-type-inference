@@ -41,10 +41,8 @@ import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type
     exposing
-        ( Id
-        , MonoType(..)
+        ( MonoType(..)
         , SuperType(..)
-        , Type(..)
         , TypeVarStyle(..)
         )
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
@@ -57,13 +55,10 @@ import Maybe.Extra as Maybe
 -}
 infer : Dict FullModuleName File -> Result Error (Dict FullModuleName TypedFile)
 infer files =
-    let
-        ( result, state ) =
-            gatherTypeAliases files
-                |> State.andThen (infer_ files)
-                |> State.run (State.init Dict.empty)
-    in
-    result
+    gatherTypeAliases files
+        |> State.andThen (infer_ files)
+        |> State.run (State.init Dict.empty)
+        |> Tuple.first
 
 
 infer_ :

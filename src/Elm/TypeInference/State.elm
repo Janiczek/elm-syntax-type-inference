@@ -42,18 +42,14 @@ module Elm.TypeInference.State exposing
 -}
 
 import Dict exposing (Dict)
-import Elm.Syntax.ExpressionV2 exposing (TypedExpr)
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
-import Elm.Syntax.PatternV2 exposing (TypedPattern)
-import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
-import Elm.TypeInference.Type exposing (Id, MonoType(..), Type(..), TypeVar)
-import Elm.TypeInference.TypeEquation exposing (TypeEquation)
+import Elm.TypeInference.Type exposing (Id, Type)
 
 
 
@@ -202,11 +198,6 @@ get =
     \state -> ( Ok state, state )
 
 
-put : State -> TIState ()
-put state =
-    \_ -> ( Ok (), state )
-
-
 modify : (State -> State) -> TIState ()
 modify fn =
     \state -> ( Ok (), fn state )
@@ -231,9 +222,11 @@ tickId =
 
 getNextIdAndTick : TIState Id
 getNextIdAndTick =
-    do get <| \{ nextId } ->
-    do tickId <| \() ->
-    pure nextId
+    do get <|
+        \{ nextId } ->
+            do tickId <|
+                \() ->
+                    pure nextId
 
 
 

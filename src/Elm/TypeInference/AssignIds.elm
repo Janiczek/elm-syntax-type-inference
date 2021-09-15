@@ -25,7 +25,7 @@ import Elm.Syntax.PatternV2
         )
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type as Type exposing (Id, MonoType(..), Type(..), TypeVar)
+import Elm.TypeInference.Type as Type
 
 
 assignId : Range -> value -> TIState (NodeV2 TypedMeta value)
