@@ -1,24 +1,13 @@
 module Tests exposing (..)
 
-import AssocList
-import AssocSet as Set
 import Dict
-import Elm.Parser
-import Elm.Processing
-import Elm.Syntax.DeclarationV2 exposing (DeclarationV2(..))
-import Elm.Syntax.ExpressionV2 as ExpressionV2
-import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..), TypedMeta)
-import Elm.TypeInference
 import Elm.TypeInference.Error exposing (Error)
 import Elm.TypeInference.Helpers exposing (TestError(..), getExprType)
-import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type
     exposing
         ( MonoType(..)
         , SuperType(..)
         , Type(..)
-        , TypeVar
-        , TypeVarStyle(..)
         )
 import Expect
 import Test exposing (Test)
