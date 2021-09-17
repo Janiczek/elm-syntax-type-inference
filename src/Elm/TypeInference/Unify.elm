@@ -32,7 +32,7 @@ unify typeAliases ((Forall boundVars1 mono1) as t1) ((Forall boundVars2 mono2) a
 unifyMany : Dict ( FullModuleName, VarName ) MonoType -> List ( Type, Type ) -> TIState SubstitutionMap
 unifyMany typeAliases equations =
     let
-        go : SubstitutionMap -> List TypeEquation -> TIState SubstitutionMap
+        go : SubstitutionMap -> List ( Type, Type ) -> TIState SubstitutionMap
         go subst equations_ =
             case equations_ of
                 [] ->

@@ -86,6 +86,24 @@ isFunction fromCheck toCheck actual =
             False
 
 
+isFunctionWithSignature : String -> Result Error Type -> Bool
+isFunctionWithSignature signature actual =
+    case actual of
+        Ok ((Forall [] (Function { from, to })) as type_) ->
+            let
+                (Forall _ mono) =
+                    Type.normalize type_
+
+                actualSignature =
+                    Type.monoTypeToString mono
+                        |> Debug.log "actual signature"
+            in
+            signature == actualSignature
+
+        _ ->
+            False
+
+
 isVar : Result Error Type -> Bool
 isVar actual =
     case actual of
@@ -158,6 +176,9 @@ suite =
             , ( "[1, 2, 3]", isList isNumber )
             , ( "[(1,'a'),(2,'b')]", isList (isTuple isNumber (is Char)) )
             , ( "\\x -> 1", isFunction isVar isNumber )
+            , ( "\\x -> x", isFunctionWithSignature "#0 -> #0" )
+            , ( "\\x y -> x", isFunctionWithSignature "#1 -> #0 -> #1" ) -- TODO weirdness
+            , ( "\\x y -> y", isFunctionWithSignature "#0 -> #1 -> #1" )
             , ( "\\x y -> 1", isFunction isVar (isFunction isVar isNumber) )
             , ( "\\() -> 1", isFunction (is Unit) isNumber )
             , ( "\\x () -> 1", isFunction isVar (isFunction (is Unit) isNumber) )
@@ -166,7 +187,13 @@ suite =
             , ( "{a = 1}", isRecord [ ( "a", isNumber ) ] )
             , ( "{a = 1, b = ()}", isRecord [ ( "a", isNumber ), ( "b", is Unit ) ] )
             , ( ".a", isFunction (isExtensibleRecord isVar [ ( "a", isVar ) ]) isVar )
+            , ( "record.a", isVar ) -- in this example we can't say much more about the fact that `record` is `{ ? | a : ? }`
+            , ( "(\\x -> x) 1", isNumber )
+            , ( "(\\x y -> x) 1 2", isNumber )
+            , ( "(\\x y -> x) 1", isFunction isVar isNumber )
+            , ( "(\\x y -> y) 1", isFunction isVar isVar )
 
+            -- , ( "if True then 1 else 2", isNumber ) -- TODO will need us to provide all the project deps as files
             -- TODO Application (List (ExprWith meta))
             -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
             -- TODO FunctionOrValue ModuleName String
@@ -175,8 +202,8 @@ suite =
             -- TODO Operator String
             -- TODO LetExpression (LetBlock meta)
             -- TODO CaseExpression (CaseBlock meta)
-            -- TODO RecordAccess (ExprWith meta) (LocatedNode String)
             -- TODO RecordUpdateExpression (LocatedNode String) (List (LocatedNode (RecordSetter meta)))
+            -- , ( "{ record | a = 123 }", isRecord [ ( "a", isNumber ) ] ) -- TODO needs `record` in scope
             -- TODO GLSLExpression String
             ]
 
@@ -184,6 +211,8 @@ suite =
         badExprs =
             [ ( "[1, ()]", fails )
             , ( "fn 1", fails )
+            , ( "\\x -> y", fails )
+            , ( "(\\x y -> x) 1 2 3", fails )
             ]
     in
     Test.describe "Elm.TypeInference"

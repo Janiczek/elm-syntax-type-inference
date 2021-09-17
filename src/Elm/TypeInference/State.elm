@@ -1,10 +1,9 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, init
     , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
-    , findModuleOfVar
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
-    , getTypeEnv, withBinding, withSubstitutions
+    , getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -20,11 +19,6 @@ module Elm.TypeInference.State exposing
 @docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
 
 
-# Var module lookup
-
-@docs findModuleOfVar
-
-
 # Next ID
 
 @docs getNextIdAndTick
@@ -37,19 +31,19 @@ module Elm.TypeInference.State exposing
 
 # Type env
 
-@docs getTypeEnv, withBinding, withSubstitutions
+@docs getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
 
 -}
 
+import AssocList
 import Dict exposing (Dict)
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
-import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
-import Elm.TypeInference.Type exposing (Id, Type)
+import Elm.TypeInference.Type as Type exposing (Id, MonoType, Type(..))
 
 
 
@@ -222,11 +216,9 @@ tickId =
 
 getNextIdAndTick : TIState Id
 getNextIdAndTick =
-    do get <|
-        \{ nextId } ->
-            do tickId <|
-                \() ->
-                    pure nextId
+    do get <| \{ nextId } ->
+    do tickId <| \() ->
+    pure nextId
 
 
 
@@ -266,62 +258,6 @@ addVarType moduleName varName type_ =
 
 
 
--- VAR QUALIFICATION
-
-
-{-| We have roughly these options:
-
-  - bar = >baz< (baz being defined elsewhere in this module)
-  - import Foo exposing (baz); bar = >baz<
-  - import Foo; bar = >Foo.baz<
-  - import Foo as F; bar = >F.baz<
-
-In all these cases we need to find the full unaliased module name of the var.
-
--}
-findModuleOfVar :
-    Dict FullModuleName File
-    -> File
-    -> Maybe FullModuleName
-    -> VarName
-    -> TIState FullModuleName
-findModuleOfVar files thisFile maybeModuleName varName =
-    let
-        orElseLazy : (() -> Result Error (Maybe FullModuleName)) -> Result Error (Maybe FullModuleName) -> Result Error (Maybe FullModuleName)
-        orElseLazy after before =
-            case before of
-                Err err ->
-                    Err err
-
-                Ok (Just name) ->
-                    Ok (Just name)
-
-                Ok Nothing ->
-                    after ()
-
-        foundModuleName : Result Error (Maybe FullModuleName)
-        foundModuleName =
-            VarModuleLookup.unqualifiedVarInThisModule thisFile maybeModuleName varName
-                |> orElseLazy (\() -> VarModuleLookup.unqualifiedVarInImportedModule files thisFile maybeModuleName varName)
-                |> orElseLazy (\() -> VarModuleLookup.qualifiedVarInImportedModule files maybeModuleName varName)
-                |> orElseLazy (\() -> VarModuleLookup.qualifiedVarInAliasedModule files thisFile maybeModuleName varName)
-    in
-    case foundModuleName of
-        Err err ->
-            error err
-
-        Ok Nothing ->
-            error <|
-                VarNotFound
-                    { varName = varName
-                    , usedIn = File.moduleName thisFile
-                    }
-
-        Ok (Just moduleName) ->
-            pure moduleName
-
-
-
 -- TYPE ENV
 
 
@@ -331,23 +267,55 @@ getTypeEnv =
         |> map .typeEnv
 
 
-withBinding : VarName -> Type -> TIState a -> TIState a
-withBinding var type_ m =
-    withModifiedTypeEnv
-        {- Diehl removes the key from the dict first... but I think we don't
-           need to do that as on collision the new item wins.
-        -}
-        (Dict.insert var type_)
-        m
+modifyTypeEnv : (Dict VarName Type -> Dict VarName Type) -> TIState ()
+modifyTypeEnv fn =
+    modify (\state -> { state | typeEnv = fn state.typeEnv })
 
 
-withSubstitutions : SubstitutionMap -> TIState a -> TIState a
-withSubstitutions subst m =
-    withModifiedTypeEnv
-        (SubstitutionMap.substituteTypeEnv subst)
-        m
+addBinding : VarName -> Type -> TIState ()
+addBinding var type_ =
+    {- Diehl removes the key from the dict first... but I think we don't
+       need to do that as on collision the new item wins.
+    -}
+    modifyTypeEnv (Dict.insert var type_)
 
 
-withModifiedTypeEnv : (Dict VarName Type -> Dict VarName Type) -> TIState a -> TIState a
-withModifiedTypeEnv fn stateFn =
-    \state -> stateFn { state | typeEnv = fn state.typeEnv }
+addSubstitutions : SubstitutionMap -> TIState ()
+addSubstitutions subst =
+    modifyTypeEnv (SubstitutionMap.substituteTypeEnv subst)
+
+
+lookupEnv : FullModuleName -> VarName -> TIState MonoType
+lookupEnv thisModule var =
+    do getTypeEnv <| \env ->
+    case Dict.get var env of
+        Nothing ->
+            error <|
+                VarNotFound
+                    { usedIn = thisModule
+                    , varName = var
+                    }
+
+        Just type_ ->
+            instantiate type_
+
+
+existsInEnv : VarName -> TIState Bool
+existsInEnv varName =
+    getTypeEnv
+        |> map (Dict.member varName)
+
+
+instantiate : Type -> TIState MonoType
+instantiate (Forall boundVars monoType) =
+    do (traverse (always getNextIdAndTick) boundVars) <| \varIds ->
+    let
+        subst : SubstitutionMap
+        subst =
+            List.map2 (\var id -> ( var, Type.id_ id ))
+                boundVars
+                varIds
+                |> AssocList.fromList
+    in
+    SubstitutionMap.substituteMono subst monoType
+        |> pure

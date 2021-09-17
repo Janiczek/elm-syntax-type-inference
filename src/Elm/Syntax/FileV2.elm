@@ -1,9 +1,10 @@
-module Elm.Syntax.FileV2 exposing (TypedFile, map)
+module Elm.Syntax.FileV2 exposing (TypedFile, map, moduleName)
 
 import Elm.Syntax.Comments exposing (Comment)
 import Elm.Syntax.DeclarationV2 as DeclarationV2 exposing (DeclarationV2)
+import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Import exposing (Import)
-import Elm.Syntax.Module exposing (Module)
+import Elm.Syntax.Module as Module exposing (Module)
 import Elm.Syntax.NodeV2 as NodeV2 exposing (LocatedNode, TypedMeta)
 
 
@@ -28,3 +29,11 @@ map fn file =
         file.declarations
             |> List.map (NodeV2.map (DeclarationV2.map fn))
     }
+
+
+moduleName : FileV2 meta -> FullModuleName
+moduleName file =
+    file.moduleDefinition
+        |> NodeV2.value
+        |> Module.moduleName
+        |> FullModuleName.fromModuleName_

@@ -1,9 +1,9 @@
 module Elm.TypeInference.State.VarModuleLookup exposing
-    ( qualifiedVarInAliasedModule
-    , qualifiedVarInImportedModule
-    , unqualifiedVarInImportedModule
-    , unqualifiedVarInThisModule
+    ( findModuleOfVar
+    , moduleOfVar
     )
+
+-- TODO rename this to DeclModuleLookup? It's not really about vars inside exprs...
 
 import Dict exposing (Dict)
 import Elm.Syntax.File exposing (File)
@@ -15,6 +15,66 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.Type exposing (Type)
+
+
+{-| We have roughly these options:
+
+  - bar = >baz< (baz being defined elsewhere in this module)
+  - import Foo exposing (baz); bar = >baz<
+  - import Foo; bar = >Foo.baz<
+  - import Foo as F; bar = >F.baz<
+
+In all these cases we need to find the full unaliased module name of the var.
+
+-}
+moduleOfVar :
+    Dict FullModuleName File
+    -> File
+    -> Maybe FullModuleName
+    -> VarName
+    -> Result Error (Maybe FullModuleName)
+moduleOfVar files thisFile maybeModuleName varName =
+    let
+        orElseLazy : (() -> Result Error (Maybe FullModuleName)) -> Result Error (Maybe FullModuleName) -> Result Error (Maybe FullModuleName)
+        orElseLazy after before =
+            case before of
+                Err err ->
+                    Err err
+
+                Ok (Just name) ->
+                    Ok (Just name)
+
+                Ok Nothing ->
+                    after ()
+    in
+    unqualifiedVarInThisModule thisFile maybeModuleName varName
+        |> orElseLazy (\() -> unqualifiedVarInImportedModule files thisFile maybeModuleName varName)
+        |> orElseLazy (\() -> qualifiedVarInImportedModule files maybeModuleName varName)
+        |> orElseLazy (\() -> qualifiedVarInAliasedModule files thisFile maybeModuleName varName)
+
+
+findModuleOfVar :
+    Dict FullModuleName File
+    -> File
+    -> Maybe FullModuleName
+    -> VarName
+    -> TIState FullModuleName
+findModuleOfVar files thisFile maybeModuleName varName =
+    case moduleOfVar files thisFile maybeModuleName varName of
+        Err err ->
+            State.error err
+
+        Ok Nothing ->
+            State.error <|
+                VarNotFound
+                    { varName = varName
+                    , usedIn = File.moduleName thisFile
+                    }
+
+        Ok (Just moduleName) ->
+            State.pure moduleName
 
 
 unqualifiedVarInThisModule :
@@ -83,18 +143,10 @@ unqualifiedVarInImportedModule files thisFile maybeModuleName varName =
                     |> Ok
 
             _ ->
-                let
-                    usedIn : FullModuleName
-                    usedIn =
-                        thisFile.moduleDefinition
-                            |> Node.value
-                            |> Module.moduleName
-                            |> FullModuleName.fromModuleName_
-                in
                 Err <|
                     AmbiguousName
                         { varName = varName
-                        , usedIn = usedIn
+                        , usedIn = File.moduleName thisFile
                         , possibleModules =
                             acceptableImports
                                 |> List.map

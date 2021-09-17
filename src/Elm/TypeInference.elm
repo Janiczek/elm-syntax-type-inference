@@ -91,7 +91,7 @@ infer_ files typeAliases =
                 |> (\str -> "\nAll equations:\n" ++ str ++ "\n\n")
                 |> (\str -> Debug.log str ())
     in
-    State.do (Unify.unifyMany typeAliases allEquations) <| \substitutionMap ->
+    State.do (Unify.unifyMany typeAliases (List.map TypeEquation.dropLabel allEquations)) <| \substitutionMap ->
     let
         _ =
             substitutionMap

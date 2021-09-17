@@ -104,6 +104,22 @@ type TypeVarStyle
     | Named String
 
 
+getNamedTypeVar : TypeVar -> Maybe String
+getNamedTypeVar ( style, super ) =
+    case ( super, style ) of
+        ( Normal, Generated _ ) ->
+            Nothing
+
+        ( Number, Generated _ ) ->
+            Nothing
+
+        ( Normal, Named var ) ->
+            Just var
+
+        ( Number, Named var ) ->
+            Just <| "number" ++ var
+
+
 type SuperType
     = Normal
     | {- Int | Float -} Number
@@ -496,7 +512,6 @@ normalize ((Forall boundVars monoType) as type_) =
         subst =
             List.map2 Tuple.pair allVars newVars
                 |> AssocList.fromList
-                |> Debug.log "subst"
     in
     type_
         |> mapVars

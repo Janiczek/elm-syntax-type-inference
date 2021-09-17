@@ -5,6 +5,7 @@ module Elm.Syntax.PatternV2 exposing
     , TypedPattern
     , fromNodePattern
     , map
+    , varNames
     )
 
 import Elm.Syntax.Node as Node exposing (Node)
@@ -16,6 +17,9 @@ import Elm.Syntax.NodeV2 as NodeV2
         , TypedMeta
         )
 import Elm.Syntax.Pattern as Pattern exposing (Pattern, QualifiedNameRef)
+import Elm.Syntax.VarName exposing (VarName)
+import List.ExtraExtra as List
+import Transform
 
 
 type alias LocatedPattern =
@@ -39,10 +43,10 @@ type PatternV2 meta
     | HexPattern Int
     | FloatPattern Float
     | TuplePattern (List (PatternWith meta))
-    | RecordPattern (List (LocatedNode String))
+    | RecordPattern (List (LocatedNode VarName))
     | UnConsPattern (PatternWith meta) (PatternWith meta)
     | ListPattern (List (PatternWith meta))
-    | VarPattern String
+    | VarPattern VarName
     | NamedPattern QualifiedNameRef (List (PatternWith meta))
     | AsPattern (PatternWith meta) (LocatedNode String)
     | ParenthesizedPattern (PatternWith meta)
@@ -163,3 +167,79 @@ map fn (NodeV2 meta pattern) =
 
             ParenthesizedPattern p1 ->
                 ParenthesizedPattern (map fn p1)
+
+
+varNames : PatternV2 meta -> List VarName
+varNames patternNode =
+    let
+        unwrap nodes =
+            List.map NodeV2.value nodes
+
+        varNames_ : PatternV2 meta -> List VarName
+        varNames_ pattern =
+            case pattern of
+                VarPattern varName ->
+                    [ varName ]
+
+                AsPattern _ varName ->
+                    [ NodeV2.value varName ]
+
+                RecordPattern names ->
+                    List.map NodeV2.value names
+
+                _ ->
+                    []
+    in
+    patternNode
+        |> Transform.children recursiveChildren
+        |> List.fastConcatMap varNames_
+
+
+recursiveChildren : (PatternV2 meta -> List (PatternV2 meta)) -> PatternV2 meta -> List (PatternV2 meta)
+recursiveChildren fn pattern =
+    List.map NodeV2.value <|
+        case pattern of
+            AllPattern ->
+                []
+
+            UnitPattern ->
+                []
+
+            CharPattern _ ->
+                []
+
+            StringPattern _ ->
+                []
+
+            IntPattern _ ->
+                []
+
+            HexPattern _ ->
+                []
+
+            FloatPattern _ ->
+                []
+
+            TuplePattern patterns ->
+                patterns
+
+            RecordPattern _ ->
+                []
+
+            UnConsPattern p1 p2 ->
+                [ p1, p2 ]
+
+            ListPattern patterns ->
+                patterns
+
+            VarPattern _ ->
+                []
+
+            NamedPattern _ patterns ->
+                patterns
+
+            AsPattern p1 _ ->
+                [ p1 ]
+
+            ParenthesizedPattern p1 ->
+                [ p1 ]

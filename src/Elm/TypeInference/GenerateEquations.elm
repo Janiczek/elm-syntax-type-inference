@@ -12,6 +12,7 @@ import Elm.Syntax.ExpressionV2
         , TypedExpr
         )
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.NodeV2 as NodeV2
     exposing
@@ -19,7 +20,7 @@ import Elm.Syntax.NodeV2 as NodeV2
         , NodeV2(..)
         , TypedMeta
         )
-import Elm.Syntax.PatternV2
+import Elm.Syntax.PatternV2 as PatternV2
     exposing
         ( PatternV2(..)
         , TypedPattern
@@ -27,6 +28,7 @@ import Elm.Syntax.PatternV2
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.State.VarModuleLookup as StateLookup
 import Elm.TypeInference.Type as Type
     exposing
         ( Id
@@ -66,7 +68,6 @@ generateExprEquations :
     -> TypedExpr
     -> TIState (List TypeEquation)
 generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
-    -- TODO use Transform.recursiveChildren?
     let
         f : TypedExpr -> TIState (List TypeEquation)
         f =
@@ -76,9 +77,10 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             State.error <| ImpossibleExpr typedExpr
 
         recordSetters :
-            List (LocatedNode (RecordSetter TypedMeta))
+            String
+            -> List (LocatedNode (RecordSetter TypedMeta))
             -> TIState ( Dict VarName MonoType, List TypedExpr, List TypeEquation )
-        recordSetters fieldSetters =
+        recordSetters label fieldSetters =
             State.do (State.traverse (always State.getNextIdAndTick) fieldSetters) <| \fieldIds ->
             let
                 fields : Dict VarName MonoType
@@ -111,6 +113,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                             in
                             ( NodeV2.type_ fieldExpr
                             , Type.id fieldId
+                            , label ++ ": record field"
                             )
                         )
                         fieldSetters
@@ -120,38 +123,44 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
     in
     case expr of
         UnitExpr ->
-            finish [ ( type_, Type.mono Unit ) ]
+            finish [ ( type_, Type.mono Unit, "Unit" ) ]
 
         Application [] ->
             impossibleExpr
 
-        Application ((fn :: _) as exprs) ->
+        Application ((fn :: args) as exprs) ->
             State.do State.getNextIdAndTick <| \resultId ->
-            State.do (State.traverse (always State.getNextIdAndTick) exprs) <| \exprIds ->
+            State.do (State.traverse (always State.getNextIdAndTick) args) <| \argIds ->
             let
                 fnType =
-                    exprIds
+                    argIds
                         |> List.foldr
-                            (\rightArgType leftArgType ->
+                            (\leftArgType rightArgType ->
                                 Function
-                                    { from = leftArgType
-                                    , to = Type.id_ rightArgType
+                                    { from = Type.id_ leftArgType
+                                    , to = rightArgType
                                     }
                             )
                             (Type.id_ resultId)
                         |> Type.mono
             in
             append
-                (( type_, Type.id resultId )
-                    :: ( NodeV2.type_ fn, fnType )
-                    :: List.map2 (\expr_ exprId -> ( NodeV2.type_ expr_, Type.id exprId ))
-                        exprs
-                        exprIds
+                (( type_, Type.id resultId, "Application = its result" )
+                    :: ( NodeV2.type_ fn, fnType, "Application: first is fn" )
+                    :: List.map2
+                        (\arg_ argId ->
+                            ( NodeV2.type_ arg_
+                            , Type.id argId
+                            , "Application: args = their id"
+                            )
+                        )
+                        args
+                        argIds
                 )
                 (list f exprs)
 
         OperatorApplication operator _ e1 e2 ->
-            State.do (State.findModuleOfVar files thisFile Nothing operator) <| \moduleName ->
+            State.do (StateLookup.findModuleOfVar files thisFile Nothing operator) <| \moduleName ->
             State.do State.getNextIdAndTick <| \resultId ->
             State.do State.getNextIdAndTick <| \e1Id ->
             State.do State.getNextIdAndTick <| \e2Id ->
@@ -169,39 +178,43 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             in
             State.do (State.addVarType moduleName operator fnType) <| \() ->
             append
-                [ ( type_, Type.id resultId )
-                , ( NodeV2.type_ e1, Type.id e1Id )
-                , ( NodeV2.type_ e2, Type.id e2Id )
+                [ ( type_, Type.id resultId, "Op application = its result" )
+                , ( NodeV2.type_ e1, Type.id e1Id, "Op application: left" )
+                , ( NodeV2.type_ e2, Type.id e2Id, "Op application: right" )
                 ]
                 (list f [ e1, e2 ])
 
         FunctionOrValue moduleName varName ->
-            {- TODO Diehl uses lookupEnv, do we need it? We seem to have
-               a different strategy of "declaration before usage", so perhaps
-               we're fine with our `addVarType` and dealing with it afterwards.
-            -}
-            State.do
-                (State.findModuleOfVar
+            State.do State.getTypeEnv <| \typeEnv ->
+            case
+                StateLookup.moduleOfVar
                     files
                     thisFile
                     (FullModuleName.fromModuleName moduleName)
                     varName
-                )
-            <| \fullModuleName ->
-            State.do (State.addVarType fullModuleName varName type_) <| \() ->
-            finish []
+            of
+                Ok (Just fullModuleName) ->
+                    State.do (State.addVarType fullModuleName varName type_) <| \() ->
+                    finish []
+
+                Ok Nothing ->
+                    State.do (State.lookupEnv (File.moduleName thisFile) varName) <| \varType ->
+                    finish [ ( type_, Type.mono varType, "FunctionOrValue: var from env" ) ]
+
+                Err err ->
+                    State.error err
 
         IfBlock ((NodeV2 m1 _) as e1) ((NodeV2 m2 _) as e2) ((NodeV2 m3 _) as e3) ->
             list f [ e1, e2, e3 ]
                 |> append
-                    [ ( m1.type_, Type.mono Bool )
-                    , ( m2.type_, m3.type_ )
-                    , ( m2.type_, type_ )
+                    [ ( m1.type_, Type.mono Bool, "If: condition = bool" )
+                    , ( m2.type_, m3.type_, "If: then = else" )
+                    , ( m2.type_, type_, "If: then = result" )
                     ]
 
         PrefixOperator operator ->
             -- operator is a function of two arguments
-            State.do (State.findModuleOfVar files thisFile Nothing operator) <| \moduleName ->
+            State.do (StateLookup.findModuleOfVar files thisFile Nothing operator) <| \moduleName ->
             State.do (State.addVarType moduleName operator type_) <| \() ->
             State.do State.getNextIdAndTick <| \firstArgId ->
             State.do State.getNextIdAndTick <| \secondArgId ->
@@ -217,6 +230,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                     , to = Type.id_ resultId
                                     }
                             }
+                  , "Prefix operator: is a fn"
                   )
                 ]
 
@@ -225,28 +239,28 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
         Integer _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, Type.number numberId ) ]
+            finish [ ( type_, Type.number numberId, "Int" ) ]
 
         Hex _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, Type.number numberId ) ]
+            finish [ ( type_, Type.number numberId, "Hex" ) ]
 
         Floatable _ ->
-            finish [ ( type_, Type.mono Float ) ]
+            finish [ ( type_, Type.mono Float, "Float" ) ]
 
         Negation e1 ->
             State.do State.getNextIdAndTick <| \numberId ->
             f e1
                 |> append
-                    [ ( type_, NodeV2.type_ e1 )
-                    , ( type_, Type.number numberId )
+                    [ ( type_, NodeV2.type_ e1, "Negation = inner" )
+                    , ( type_, Type.number numberId, "Negation = number" )
                     ]
 
         Literal _ ->
-            finish [ ( type_, Type.mono String ) ]
+            finish [ ( type_, Type.mono String, "String" ) ]
 
         CharLiteral _ ->
-            finish [ ( type_, Type.mono Char ) ]
+            finish [ ( type_, Type.mono Char, "Char" ) ]
 
         TupledExpression ([ NodeV2 m1 _, NodeV2 m2 _ ] as exprs) ->
             State.do State.getNextIdAndTick <| \firstId ->
@@ -258,9 +272,10 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                             Tuple
                                 (Type.id_ firstId)
                                 (Type.id_ secondId)
+                      , "Tuple: top"
                       )
-                    , ( m1.type_, Type.id firstId )
-                    , ( m2.type_, Type.id secondId )
+                    , ( m1.type_, Type.id firstId, "Tuple: first" )
+                    , ( m2.type_, Type.id secondId, "Tuple: second" )
                     ]
 
         TupledExpression ([ NodeV2 m1 _, NodeV2 m2 _, NodeV2 m3 _ ] as exprs) ->
@@ -275,10 +290,11 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                 (Type.id_ firstId)
                                 (Type.id_ secondId)
                                 (Type.id_ thirdId)
+                      , "Tuple3: top"
                       )
-                    , ( m1.type_, Type.id firstId )
-                    , ( m2.type_, Type.id secondId )
-                    , ( m3.type_, Type.id thirdId )
+                    , ( m1.type_, Type.id firstId, "Tuple3: first" )
+                    , ( m2.type_, Type.id secondId, "Tuple3: second" )
+                    , ( m3.type_, Type.id thirdId, "Tuple3: third" )
                     ]
 
         TupledExpression _ ->
@@ -286,7 +302,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
         ParenthesizedExpression e ->
             f e
-                |> append [ ( type_, NodeV2.type_ e ) ]
+                |> append [ ( type_, NodeV2.type_ e, "Parenthesized = inner" ) ]
 
         LetExpression _ ->
             -- x == bindingName
@@ -303,7 +319,6 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             Debug.todo "generate eqs: case"
 
         LambdaExpression { args, expression } ->
-            -- TODO Diehl: inEnv infer ...
             State.do (State.traverse (always State.getNextIdAndTick) args) <| \argIds ->
             State.do State.getNextIdAndTick <| \resultId ->
             let
@@ -319,23 +334,52 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                             (Type.id_ resultId)
                         |> Type.mono
             in
-            State.map2
-                (\bodyEqs argPatternEqs ->
-                    ( type_, fnType )
-                        :: ( NodeV2.type_ expression, Type.id resultId )
-                        :: List.map2 (\arg argId -> ( NodeV2.type_ arg, Type.id argId ))
-                            args
-                            argIds
-                        ++ bodyEqs
-                        ++ argPatternEqs
+            State.do (list (generatePatternEquations files thisFile) args) <| \argPatternEqs ->
+            State.do
+                (State.traverse
+                    (\( arg, argId ) ->
+                        case NodeV2.value arg of
+                            VarPattern varName ->
+                                State.addBinding varName (Type.id argId)
+
+                            AsPattern _ varName ->
+                                State.addBinding (NodeV2.value varName) (Type.id argId)
+
+                            RecordPattern fields ->
+                                fields
+                                    |> State.traverse
+                                        (\field ->
+                                            State.do State.getNextIdAndTick <| \fieldId ->
+                                            State.addBinding (NodeV2.value field) (Type.id fieldId)
+                                        )
+                                    |> State.map (always ())
+
+                            _ ->
+                                State.pure ()
+                    )
+                    (List.map2 Tuple.pair args argIds)
                 )
-                (f expression)
-                (list (generatePatternEquations files thisFile) args)
+            <| \_ ->
+            State.do (f expression) <| \bodyEqs ->
+            finish <|
+                ( type_, fnType, "Lambda: is a function" )
+                    :: ( NodeV2.type_ expression, Type.id resultId, "Lambda: expr = result" )
+                    :: List.map2
+                        (\arg argId ->
+                            ( NodeV2.type_ arg
+                            , Type.id argId
+                            , "Lambda: args = their id"
+                            )
+                        )
+                        args
+                        argIds
+                    ++ bodyEqs
+                    ++ argPatternEqs
 
         RecordExpr fieldSetters ->
-            State.do (recordSetters fieldSetters) <| \( fields, subexprs, fieldEquations ) ->
+            State.do (recordSetters "Record" fieldSetters) <| \( fields, subexprs, fieldEquations ) ->
             append
-                (( type_, Type.mono <| Record fields )
+                (( type_, Type.mono <| Record fields, "Record: is a record" )
                     :: fieldEquations
                 )
                 (list f subexprs)
@@ -344,16 +388,23 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             State.do (list f exprs) <| \exprsEquations ->
             State.do State.getNextIdAndTick <| \listItemId ->
             finish
-                (( type_, Type.mono <| List <| Type.id_ listItemId )
+                (( type_, Type.mono <| List <| Type.id_ listItemId, "List: is a list" )
                     :: exprsEquations
-                    ++ List.map (\(NodeV2 m _) -> ( m.type_, Type.id listItemId )) exprs
+                    ++ List.map
+                        (\(NodeV2 m _) ->
+                            ( m.type_
+                            , Type.id listItemId
+                            , "List: pin list type param to all inner"
+                            )
+                        )
+                        exprs
                 )
 
         RecordAccess record fieldNameNode ->
             State.do State.getNextIdAndTick <| \extensibleRecordId ->
             State.do State.getNextIdAndTick <| \resultId ->
             finish
-                [ ( type_, Type.id resultId )
+                [ ( type_, Type.id resultId, "Record access = the field = the result" )
                 , ( NodeV2.type_ record
                   , Type.mono <|
                         ExtensibleRecord
@@ -363,6 +414,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                     (NodeV2.value fieldNameNode)
                                     (Type.id_ resultId)
                             }
+                  , "Record access: left is a record"
                   )
                 ]
 
@@ -382,6 +434,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                     }
                             , to = Type.id_ resultId
                             }
+                  , "Record access fn: is a function"
                   )
                 ]
 
@@ -391,9 +444,9 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     NodeV2.value recordVarNode
             in
             State.do State.getNextIdAndTick <| \recordId ->
-            State.do (State.findModuleOfVar files thisFile Nothing recordVar) <| \moduleName ->
+            State.do (StateLookup.findModuleOfVar files thisFile Nothing recordVar) <| \moduleName ->
             State.do (State.addVarType moduleName recordVar (Type.id recordId)) <| \() ->
-            State.do (recordSetters fieldSetters) <| \( fields, subexprs, fieldEquations ) ->
+            State.do (recordSetters "Record update" fieldSetters) <| \( fields, subexprs, fieldEquations ) ->
             append
                 (( type_
                  , Type.mono <|
@@ -401,6 +454,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                         { type_ = Type.id_ recordId
                         , fields = fields
                         }
+                 , "Record update: is record with at least that field"
                  )
                     :: fieldEquations
                 )
@@ -481,6 +535,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                             , uniforms = declarations.uniforms
                             , varyings = declarations.varyings
                             }
+                  , "GLSLExpression: is a shader"
                   )
                 ]
 
@@ -526,7 +581,8 @@ generateVarEquations =
             (\varTypes ->
                 varTypes
                     |> Dict.values
-                    |> List.fastConcatMap List.consecutivePairs
+                    |> List.fastConcatMap
+                        (List.mapConsecutivePairs (\t1 t2 -> ( t1, t2, "vars linked" )))
             )
 
 
@@ -550,24 +606,24 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
             finish []
 
         UnitPattern ->
-            finish [ ( type_, Type.mono Unit ) ]
+            finish [ ( type_, Type.mono Unit, "Unit pattern" ) ]
 
         CharPattern _ ->
-            finish [ ( type_, Type.mono Char ) ]
+            finish [ ( type_, Type.mono Char, "Char pattern" ) ]
 
         StringPattern _ ->
-            finish [ ( type_, Type.mono String ) ]
+            finish [ ( type_, Type.mono String, "String pattern" ) ]
 
         IntPattern _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, Type.number numberId ) ]
+            finish [ ( type_, Type.number numberId, "Int pattern" ) ]
 
         HexPattern _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, Type.number numberId ) ]
+            finish [ ( type_, Type.number numberId, "Hex pattern" ) ]
 
         FloatPattern _ ->
-            finish [ ( type_, Type.mono Float ) ]
+            finish [ ( type_, Type.mono Float, "Float pattern" ) ]
 
         TuplePattern ([ NodeV2 m1 _, NodeV2 m2 _ ] as patterns) ->
             State.do State.getNextIdAndTick <| \firstId ->
@@ -579,9 +635,10 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                             Tuple
                                 (Type.id_ firstId)
                                 (Type.id_ secondId)
+                      , "Tuple pattern: top"
                       )
-                    , ( m1.type_, Type.id firstId )
-                    , ( m2.type_, Type.id secondId )
+                    , ( m1.type_, Type.id firstId, "Tuple pattern: first" )
+                    , ( m2.type_, Type.id secondId, "Tuple pattern: second" )
                     ]
 
         TuplePattern ([ NodeV2 m1 _, NodeV2 m2 _, NodeV2 m3 _ ] as patterns) ->
@@ -596,10 +653,11 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                                 (Type.id_ firstId)
                                 (Type.id_ secondId)
                                 (Type.id_ thirdId)
+                      , "Tuple3 pattern: top"
                       )
-                    , ( m1.type_, Type.id firstId )
-                    , ( m2.type_, Type.id secondId )
-                    , ( m3.type_, Type.id thirdId )
+                    , ( m1.type_, Type.id firstId, "Tuple3 pattern: first" )
+                    , ( m2.type_, Type.id secondId, "Tuple3 pattern: second" )
+                    , ( m3.type_, Type.id thirdId, "Tuple3 pattern: third" )
                     ]
 
         TuplePattern _ ->
@@ -635,6 +693,7 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                                 { type_ = Type.id_ recordId
                                 , fields = fieldsDict_
                                 }
+                      , "Record pattern"
                       )
                     ]
                 )
@@ -645,9 +704,9 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
             State.do State.getNextIdAndTick <| \listItemId ->
             list f [ p1, p2 ]
                 |> append
-                    [ ( type_, Type.mono <| List <| Type.id_ listItemId )
-                    , ( type_, m2.type_ )
-                    , ( m1.type_, Type.id listItemId )
+                    [ ( type_, Type.mono <| List <| Type.id_ listItemId, "UnCons pattern: result" )
+                    , ( type_, m2.type_, "UnCons pattern: result same as tail" )
+                    , ( m1.type_, Type.id listItemId, "UnCons pattern: head pins list type param" )
                     ]
 
         ListPattern patterns ->
@@ -658,6 +717,7 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                         (\a b ->
                             [ ( NodeV2.type_ a
                               , NodeV2.type_ b
+                              , "ListPattern: homogenous"
                               )
                             ]
                         )
@@ -671,19 +731,19 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                             []
 
                         (NodeV2 mx _) :: _ ->
-                            [ ( mx.type_, Type.id listItemId ) ]
+                            [ ( mx.type_, Type.id listItemId, "ListPattern: first item pins list type param" ) ]
             in
             State.do State.getNextIdAndTick <| \listItemId ->
             list f patterns
                 |> append
-                    (( type_, Type.mono <| List <| Type.id_ listItemId )
+                    (( type_, Type.mono <| List <| Type.id_ listItemId, "ListPattern: result" )
                         :: firstItemEq listItemId
                         ++ homogenousListEqs
                     )
 
-        VarPattern _ ->
-            -- TODO should we remember that var for later use in exprs?
-            finish []
+        VarPattern varName ->
+            State.do State.getNextIdAndTick <| \patternId ->
+            finish [ ( type_, Type.id patternId, "VarPattern" ) ]
 
         NamedPattern customType args ->
             State.map3
@@ -695,13 +755,20 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                             , name = customType.name
                             , args = List.map Type.id_ argIds
                             }
+                    , "NamedPattern: is user defined type"
                     )
                         :: List.fastConcat argEquations
-                        ++ List.map2 (\argNode argId -> ( NodeV2.type_ argNode, Type.id argId ))
+                        ++ List.map2
+                            (\argNode argId ->
+                                ( NodeV2.type_ argNode
+                                , Type.id argId
+                                , "NamedPattern: args = their ids"
+                                )
+                            )
                             args
                             argIds
                 )
-                (State.findModuleOfVar
+                (StateLookup.findModuleOfVar
                     files
                     thisFile
                     (FullModuleName.fromModuleName customType.moduleName)
@@ -710,8 +777,9 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                 (State.traverse f args)
                 (State.traverse (always State.getNextIdAndTick) args)
 
-        AsPattern p1 _ ->
-            -- TODO should we remember that var for later use in exprs?
+        AsPattern p1 varName ->
+            -- TODO did this help?
+            State.do (State.addBinding (NodeV2.value varName) type_) <| \() ->
             f p1
 
         ParenthesizedPattern p1 ->
