@@ -20,7 +20,7 @@ import Elm.Syntax.NodeV2 as NodeV2
         , NodeV2(..)
         , TypedMeta
         )
-import Elm.Syntax.PatternV2 as PatternV2
+import Elm.Syntax.PatternV2
     exposing
         ( PatternV2(..)
         , TypedPattern
@@ -185,7 +185,6 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                 (list f [ e1, e2 ])
 
         FunctionOrValue moduleName varName ->
-            State.do State.getTypeEnv <| \typeEnv ->
             case
                 StateLookup.moduleOfVar
                     files
@@ -741,7 +740,7 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                         ++ homogenousListEqs
                     )
 
-        VarPattern varName ->
+        VarPattern _ ->
             State.do State.getNextIdAndTick <| \patternId ->
             finish [ ( type_, Type.id patternId, "VarPattern" ) ]
 

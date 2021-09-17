@@ -172,9 +172,6 @@ map fn (NodeV2 meta pattern) =
 varNames : PatternV2 meta -> List VarName
 varNames patternNode =
     let
-        unwrap nodes =
-            List.map NodeV2.value nodes
-
         varNames_ : PatternV2 meta -> List VarName
         varNames_ pattern =
             case pattern of
@@ -197,49 +194,53 @@ varNames patternNode =
 
 recursiveChildren : (PatternV2 meta -> List (PatternV2 meta)) -> PatternV2 meta -> List (PatternV2 meta)
 recursiveChildren fn pattern =
-    List.map NodeV2.value <|
-        case pattern of
-            AllPattern ->
-                []
+    let
+        fn_ : PatternWith meta -> List (PatternV2 meta)
+        fn_ patternNode =
+            fn <| NodeV2.value patternNode
+    in
+    case pattern of
+        AllPattern ->
+            []
 
-            UnitPattern ->
-                []
+        UnitPattern ->
+            []
 
-            CharPattern _ ->
-                []
+        CharPattern _ ->
+            []
 
-            StringPattern _ ->
-                []
+        StringPattern _ ->
+            []
 
-            IntPattern _ ->
-                []
+        IntPattern _ ->
+            []
 
-            HexPattern _ ->
-                []
+        HexPattern _ ->
+            []
 
-            FloatPattern _ ->
-                []
+        FloatPattern _ ->
+            []
 
-            TuplePattern patterns ->
-                patterns
+        TuplePattern patterns ->
+            List.fastConcatMap fn_ patterns
 
-            RecordPattern _ ->
-                []
+        RecordPattern _ ->
+            []
 
-            UnConsPattern p1 p2 ->
-                [ p1, p2 ]
+        UnConsPattern p1 p2 ->
+            fn_ p1 ++ fn_ p2
 
-            ListPattern patterns ->
-                patterns
+        ListPattern patterns ->
+            List.fastConcatMap fn_ patterns
 
-            VarPattern _ ->
-                []
+        VarPattern _ ->
+            []
 
-            NamedPattern _ patterns ->
-                patterns
+        NamedPattern _ patterns ->
+            List.fastConcatMap fn_ patterns
 
-            AsPattern p1 _ ->
-                [ p1 ]
+        AsPattern p1 _ ->
+            fn_ p1
 
-            ParenthesizedPattern p1 ->
-                [ p1 ]
+        ParenthesizedPattern p1 ->
+            fn_ p1

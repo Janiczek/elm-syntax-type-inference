@@ -15,7 +15,6 @@ import Elm.TypeInference.Type as Type
         , Type(..)
         , TypeVar
         )
-import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.VarName exposing (VarName)
 
 

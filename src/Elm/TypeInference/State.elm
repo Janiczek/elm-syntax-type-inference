@@ -37,8 +37,6 @@ module Elm.TypeInference.State exposing
 
 import AssocList
 import Dict exposing (Dict)
-import Elm.Syntax.File exposing (File)
-import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
@@ -216,9 +214,11 @@ tickId =
 
 getNextIdAndTick : TIState Id
 getNextIdAndTick =
-    do get <| \{ nextId } ->
-    do tickId <| \() ->
-    pure nextId
+    do get <|
+        \{ nextId } ->
+            do tickId <|
+                \() ->
+                    pure nextId
 
 
 
@@ -287,17 +287,18 @@ addSubstitutions subst =
 
 lookupEnv : FullModuleName -> VarName -> TIState MonoType
 lookupEnv thisModule var =
-    do getTypeEnv <| \env ->
-    case Dict.get var env of
-        Nothing ->
-            error <|
-                VarNotFound
-                    { usedIn = thisModule
-                    , varName = var
-                    }
+    do getTypeEnv <|
+        \env ->
+            case Dict.get var env of
+                Nothing ->
+                    error <|
+                        VarNotFound
+                            { usedIn = thisModule
+                            , varName = var
+                            }
 
-        Just type_ ->
-            instantiate type_
+                Just type_ ->
+                    instantiate type_
 
 
 existsInEnv : VarName -> TIState Bool
@@ -308,14 +309,15 @@ existsInEnv varName =
 
 instantiate : Type -> TIState MonoType
 instantiate (Forall boundVars monoType) =
-    do (traverse (always getNextIdAndTick) boundVars) <| \varIds ->
-    let
-        subst : SubstitutionMap
-        subst =
-            List.map2 (\var id -> ( var, Type.id_ id ))
-                boundVars
-                varIds
-                |> AssocList.fromList
-    in
-    SubstitutionMap.substituteMono subst monoType
-        |> pure
+    do (traverse (always getNextIdAndTick) boundVars) <|
+        \varIds ->
+            let
+                subst : SubstitutionMap
+                subst =
+                    List.map2 (\var id -> ( var, Type.id_ id ))
+                        boundVars
+                        varIds
+                        |> AssocList.fromList
+            in
+            SubstitutionMap.substituteMono subst monoType
+                |> pure

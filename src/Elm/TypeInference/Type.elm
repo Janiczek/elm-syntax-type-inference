@@ -104,22 +104,6 @@ type TypeVarStyle
     | Named String
 
 
-getNamedTypeVar : TypeVar -> Maybe String
-getNamedTypeVar ( style, super ) =
-    case ( super, style ) of
-        ( Normal, Generated _ ) ->
-            Nothing
-
-        ( Number, Generated _ ) ->
-            Nothing
-
-        ( Normal, Named var ) ->
-            Just var
-
-        ( Number, Named var ) ->
-            Just <| "number" ++ var
-
-
 type SuperType
     = Normal
     | {- Int | Float -} Number

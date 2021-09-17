@@ -10,13 +10,11 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Import exposing (Import)
-import Elm.Syntax.Module as Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (Type)
 
 
 {-| We have roughly these options:
