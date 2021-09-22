@@ -38,11 +38,10 @@ unifyMany typeAliases equations =
                     State.pure subst
 
                 ( t1, t2 ) :: restOfEquations ->
-                    State.do (unify typeAliases t1 t2) <|
-                        \subst1 ->
-                            go
-                                (SubstitutionMap.compose subst1 subst)
-                                (List.map (SubstitutionMap.substituteTypeEquation subst1) restOfEquations)
+                    State.do (unify typeAliases t1 t2) <| \subst1 ->
+                    go
+                        (SubstitutionMap.compose subst1 subst)
+                        (List.map (SubstitutionMap.substituteTypeEquation subst1) restOfEquations)
     in
     go SubstitutionMap.empty equations
 
@@ -54,22 +53,20 @@ unifyManyMono typeAliases eqs =
             State.pure AssocList.empty
 
         ( t1, t2 ) :: eqs_ ->
-            State.do (unifyMono typeAliases t1 t2) <|
-                \su1 ->
-                    State.do
-                        (unifyManyMono
-                            typeAliases
-                            (List.map
-                                (Tuple.mapBoth
-                                    (SubstitutionMap.substituteMono su1)
-                                    (SubstitutionMap.substituteMono su1)
-                                )
-                                eqs_
-                            )
+            State.do (unifyMono typeAliases t1 t2) <| \su1 ->
+            State.do
+                (unifyManyMono
+                    typeAliases
+                    (List.map
+                        (Tuple.mapBoth
+                            (SubstitutionMap.substituteMono su1)
+                            (SubstitutionMap.substituteMono su1)
                         )
-                    <|
-                        \su2 ->
-                            State.pure (SubstitutionMap.compose su2 su1)
+                        eqs_
+                    )
+                )
+            <| \su2 ->
+            State.pure (SubstitutionMap.compose su2 su1)
 
 
 unifyMono : Dict ( FullModuleName, VarName ) MonoType -> MonoType -> MonoType -> TIState SubstitutionMap
@@ -175,9 +172,13 @@ unifyMono typeAliases t1 t2 =
         ( Tuple3 _ _ _, _ ) ->
             typeMismatch
 
-        -- TODO records vs extensible records
         ( Record bindings1, Record bindings2 ) ->
             recordBindings bindings1 bindings2
+
+        ( Record r, ExtensibleRecord er ) ->
+            recordBindings
+                (r |> Dict.filter (\k _ -> Dict.member k er.fields))
+                er.fields
 
         ( Record _, _ ) ->
             typeMismatch
@@ -188,6 +189,11 @@ unifyMono typeAliases t1 t2 =
                 [ ( r1.type_, r2.type_ )
                 , ( Record r1.fields, Record r2.fields )
                 ]
+
+        ( ExtensibleRecord er, Record r ) ->
+            recordBindings
+                er.fields
+                (r |> Dict.filter (\k _ -> Dict.member k er.fields))
 
         ( ExtensibleRecord _, _ ) ->
             typeMismatch

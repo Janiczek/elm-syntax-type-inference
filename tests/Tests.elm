@@ -188,6 +188,7 @@ suite =
             , ( "{a = 1, b = ()}", isRecord [ ( "a", isNumber ), ( "b", is Unit ) ] )
             , ( ".a", isFunction (isExtensibleRecord isVar [ ( "a", isVar ) ]) isVar )
             , ( "record.a", isVar ) -- in this example we can't say much more about the fact that `record` is `{ ? | a : ? }`
+            , ( ".a {a = 1}", isNumber )
             , ( "(\\x -> x) 1", isNumber )
             , ( "(\\x y -> x) 1 2", isNumber )
             , ( "(\\x y -> x) 1", isFunction isVar isNumber )
