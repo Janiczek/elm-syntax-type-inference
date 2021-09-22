@@ -49,6 +49,7 @@ import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify
 import List.ExtraExtra as List
 import Maybe.Extra as Maybe
+import Result.Extra as Result
 
 
 {-| The entry-point you probably want to use.
@@ -205,7 +206,10 @@ gatherTypeAliases files =
                                         type_ =
                                             typeAlias.typeAnnotation
                                                 |> Node.value
-                                                |> typeAnnotationToType
+                                                |> Type.fromTypeAnnotation
+                                                |> Result.mapError (State.error << ImpossibleType)
+                                                |> Result.map State.pure
+                                                |> Result.merge
                                     in
                                     type_
                                         |> State.map
@@ -260,6 +264,7 @@ inferFunction :
     -> Expression.Function
     -> TIState ( FunctionV2 TypedMeta, List TypeEquation )
 inferFunction files thisFile function =
+    -- TODO also bind the type annotation against the inferred type: function.signature
     let
         declarationRange : Range
         declarationRange =
@@ -331,104 +336,3 @@ substituteTypesInFiles substitutionMap files =
                     )
                     file
             )
-
-
-typeAnnotationToType : TypeAnnotation -> TIState MonoType
-typeAnnotationToType typeAnnotation =
-    let
-        f : TypeAnnotation -> TIState MonoType
-        f annotation =
-            annotation
-                |> typeAnnotationToType
-
-        recordBindings :
-            List (Node ( Node String, Node TypeAnnotation ))
-            -> TIState (Dict VarName MonoType)
-        recordBindings fields =
-            fields
-                |> List.map
-                    (\fieldNode ->
-                        let
-                            ( fieldNameNode, annotationNode ) =
-                                Node.value fieldNode
-
-                            type_ : TIState MonoType
-                            type_ =
-                                f (Node.value annotationNode)
-                        in
-                        type_
-                            |> State.map (\type__ -> ( Node.value fieldNameNode, type__ ))
-                    )
-                |> State.combine
-                |> State.map Dict.fromList
-    in
-    case typeAnnotation of
-        TypeAnnotation.GenericType name ->
-            State.pure <| TypeVar ( Named name, Normal )
-
-        TypeAnnotation.Typed name annotations ->
-            let
-                ( moduleName, typeName ) =
-                    Node.value name
-
-                fullModuleName : FullModuleName
-                fullModuleName =
-                    FullModuleName.fromModuleName_ moduleName
-
-                args : TIState (List MonoType)
-                args =
-                    annotations
-                        |> List.map (Node.value >> f)
-                        |> State.combine
-            in
-            args
-                |> State.map
-                    (\args_ ->
-                        UserDefinedType
-                            { moduleName = fullModuleName
-                            , name = typeName
-                            , args = args_
-                            }
-                    )
-
-        TypeAnnotation.Unit ->
-            State.pure Unit
-
-        TypeAnnotation.Tupled [ a, b ] ->
-            State.map2 Tuple
-                (f (Node.value a))
-                (f (Node.value b))
-
-        TypeAnnotation.Tupled [ a, b, c ] ->
-            State.map3 Tuple3
-                (f (Node.value a))
-                (f (Node.value b))
-                (f (Node.value c))
-
-        TypeAnnotation.Tupled _ ->
-            State.error <| ImpossibleType typeAnnotation
-
-        TypeAnnotation.Record fields ->
-            recordBindings fields
-                |> State.map Record
-
-        TypeAnnotation.GenericRecord name fields ->
-            recordBindings (Node.value fields)
-                |> State.map
-                    (\fields_ ->
-                        ExtensibleRecord
-                            { type_ = TypeVar ( Named (Node.value name), Normal )
-                            , fields = fields_
-                            }
-                    )
-
-        TypeAnnotation.FunctionTypeAnnotation from to ->
-            State.map2
-                (\from_ to_ ->
-                    Function
-                        { from = from_
-                        , to = to_
-                        }
-                )
-                (f (Node.value from))
-                (f (Node.value to))

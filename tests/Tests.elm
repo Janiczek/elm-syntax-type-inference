@@ -193,7 +193,11 @@ suite =
             , ( "(\\x y -> x) 1 2", isNumber )
             , ( "(\\x y -> x) 1", isFunction isVar isNumber )
             , ( "(\\x y -> y) 1", isFunction isVar isVar )
+            , ( "let x = 1 in x", isNumber )
 
+            -- , ( "let x = 1 in x + 1.0", is Float )
+            -- , ( "let id x = x in id", isFunctionWithSignature "#0 -> #0" )
+            -- , ( "let id x = x in (id 1, id ())", isTuple isNumber (is Unit) )
             -- , ( "if True then 1 else 2", isNumber ) -- TODO will need us to provide all the project deps as files
             -- TODO Application (List (ExprWith meta))
             -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
@@ -214,6 +218,7 @@ suite =
             , ( "fn 1", fails )
             , ( "\\x -> y", fails )
             , ( "(\\x y -> x) 1 2 3", fails )
+            , ( "let x = 1 in y", fails )
             ]
     in
     Test.describe "Elm.TypeInference"

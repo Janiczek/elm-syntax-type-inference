@@ -8,12 +8,15 @@ import Dict exposing (Dict)
 import Elm.Syntax.ExpressionV2
     exposing
         ( ExpressionV2(..)
+        , FunctionImplementationV2
+        , LetDeclaration(..)
         , RecordSetter
         , TypedExpr
         )
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as File
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.Node as Node
 import Elm.Syntax.NodeV2 as NodeV2
     exposing
         ( LocatedNode
@@ -23,8 +26,11 @@ import Elm.Syntax.NodeV2 as NodeV2
 import Elm.Syntax.PatternV2
     exposing
         ( PatternV2(..)
+        , PatternWith
         , TypedPattern
         )
+import Elm.Syntax.Signature exposing (Signature)
+import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (TIState)
@@ -38,6 +44,7 @@ import Elm.TypeInference.Type.External as ExternalType
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import List.ExtraExtra as List
 import Regex exposing (Regex)
+import Result.Extra as Result
 
 
 finish : List TypeEquation -> TIState (List TypeEquation)
@@ -303,16 +310,98 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             f e
                 |> append [ ( type_, NodeV2.type_ e, "Parenthesized = inner" ) ]
 
-        LetExpression _ ->
-            -- x == bindingName
-            -- e1 == bindingBody
-            -- e2 == letBody
-            -- TODO infer binding <| \bindingEqs ->
-            -- TODO runSolve equations from bindingEqs <| \subst ->
+        LetExpression { declarations, expression } ->
+            let
+                exprType =
+                    NodeV2.type_ expression
+
+                generateFnImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> TIState (List TypeEquation)
+                generateFnImplementation declId implNode =
+                    let
+                        impl =
+                            NodeV2.value implNode
+                    in
+                    State.map2
+                        (\patEqsLists exprEqs ->
+                            ( Type.id declId
+                            , NodeV2.type_ impl.expression
+                            , "Let: binding must be consistent with its annotation"
+                            )
+                                :: List.fastConcat patEqsLists
+                                ++ exprEqs
+                        )
+                        (State.traverse (generatePatternEquations files thisFile) impl.arguments)
+                        (f impl.expression)
+
+                generateSignature : Id -> Maybe (LocatedNode Signature) -> TIState (List TypeEquation)
+                generateSignature declId maybeSigNode =
+                    maybeSigNode
+                        |> Maybe.map
+                            (NodeV2.value
+                                >> .typeAnnotation
+                                >> Node.value
+                                >> Type.fromTypeAnnotation
+                                >> Result.mapError (State.error << ImpossibleType)
+                                >> Result.map
+                                    (\annotationType ->
+                                        finish
+                                            [ ( Type.id declId
+                                              , Type.mono annotationType
+                                              , "Let: binding must be consistent with its annotation"
+                                              )
+                                            ]
+                                    )
+                                >> Result.merge
+                            )
+                        |> Maybe.withDefault (finish [])
+
+                generateDecl : ( LetDeclaration TypedMeta, Id ) -> TIState (List TypeEquation)
+                generateDecl ( decl, declId ) =
+                    case decl of
+                        LetFunction fn ->
+                            State.map2 (++)
+                                (generateSignature declId fn.signature)
+                                (generateFnImplementation declId fn.declaration)
+
+                        LetDestructuring pattern e ->
+                            State.map2 (++)
+                                (generatePatternEquations files thisFile pattern)
+                                (f e)
+
+                addDeclBinding : ( LetDeclaration TypedMeta, Id ) -> TIState ()
+                addDeclBinding ( decl, declId ) =
+                    case decl of
+                        LetFunction fn ->
+                            let
+                                impl =
+                                    NodeV2.value fn.declaration
+
+                                varName =
+                                    NodeV2.value impl.name
+                            in
+                            State.addBinding varName (Type.id declId)
+
+                        LetDestructuring pattern e ->
+                            addPatternBinding ( pattern, declId )
+            in
+            State.do (State.traverse (always State.getNextIdAndTick) declarations) <| \declIds ->
+            let
+                declsWithIds : List ( LetDeclaration TypedMeta, Id )
+                declsWithIds =
+                    List.map2 (\declNode declId -> ( NodeV2.value declNode, declId )) declarations declIds
+            in
+            State.do (State.traverse generateDecl declsWithIds) <| \declEqsLists ->
+            State.do (State.traverse addDeclBinding declsWithIds) <| \_ ->
+            State.do (f expression) <| \exprEqs ->
+            -- TODO each decl needs to be generalized
+            -- TODO decls need to be put into expr's env before inferring
+            --
             -- TODO let bindingType = generalize (substituteEnv subst typeEnv) (substituteMono subst bindingMonoType)
             -- TODO (exprType,exprEqs) <- withBinding (name, bindingType) <| withSubstitution subst (infer expression)
-            -- TODO (type_, exprType) :: bindingEqs ++ exprEqs
-            Debug.todo "generate eqs: let"
+            finish <|
+                ( type_, exprType, "Let = its body" )
+                    :: List.fastConcat declEqsLists
+                    ++ exprEqs
 
         CaseExpression _ ->
             Debug.todo "generate eqs: case"
@@ -334,31 +423,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                         |> Type.mono
             in
             State.do (list (generatePatternEquations files thisFile) args) <| \argPatternEqs ->
-            State.do
-                (State.traverse
-                    (\( arg, argId ) ->
-                        case NodeV2.value arg of
-                            VarPattern varName ->
-                                State.addBinding varName (Type.id argId)
-
-                            AsPattern _ varName ->
-                                State.addBinding (NodeV2.value varName) (Type.id argId)
-
-                            RecordPattern fields ->
-                                fields
-                                    |> State.traverse
-                                        (\field ->
-                                            State.do State.getNextIdAndTick <| \fieldId ->
-                                            State.addBinding (NodeV2.value field) (Type.id fieldId)
-                                        )
-                                    |> State.map (always ())
-
-                            _ ->
-                                State.pure ()
-                    )
-                    (List.map2 Tuple.pair args argIds)
-                )
-            <| \_ ->
+            State.do (State.traverse addPatternBinding (List.map2 Tuple.pair args argIds)) <| \_ ->
             State.do (f expression) <| \bodyEqs ->
             finish <|
                 ( type_, fnType, "Lambda: is a function" )
@@ -783,3 +848,25 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
 
         ParenthesizedPattern p1 ->
             f p1
+
+
+addPatternBinding : ( PatternWith meta, Id ) -> TIState ()
+addPatternBinding ( arg, argId ) =
+    case NodeV2.value arg of
+        VarPattern varName ->
+            State.addBinding varName (Type.id argId)
+
+        AsPattern _ varName ->
+            State.addBinding (NodeV2.value varName) (Type.id argId)
+
+        RecordPattern fields ->
+            fields
+                |> State.traverse
+                    (\field ->
+                        State.do State.getNextIdAndTick <| \fieldId ->
+                        State.addBinding (NodeV2.value field) (Type.id fieldId)
+                    )
+                |> State.map (always ())
+
+        _ ->
+            State.pure ()

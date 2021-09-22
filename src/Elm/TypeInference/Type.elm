@@ -10,6 +10,7 @@ module Elm.TypeInference.Type exposing
     , freeVars
     , freeVarsMono
     , freeVarsTypeEnv
+    , fromTypeAnnotation
     , generalize
     , getDebugId
     , id
@@ -35,8 +36,11 @@ import AssocList
 import AssocSet as Set exposing (Set)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.Node as Node exposing (Node)
+import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.VarName exposing (VarName)
 import List.ExtraExtra as List
+import Result.Extra as Result
 import Transform
 
 
@@ -553,3 +557,103 @@ ordToName n =
                 go (i // radix) ++ (String.fromChar <| charFromInt (modBy radix i))
     in
     go n
+
+
+fromTypeAnnotation : TypeAnnotation -> Result TypeAnnotation MonoType
+fromTypeAnnotation typeAnnotation =
+    let
+        f : TypeAnnotation -> Result TypeAnnotation MonoType
+        f annotation =
+            fromTypeAnnotation annotation
+
+        recordBindings :
+            List (Node ( Node String, Node TypeAnnotation ))
+            -> Result TypeAnnotation (Dict VarName MonoType)
+        recordBindings fields =
+            fields
+                |> List.map
+                    (\fieldNode ->
+                        let
+                            ( fieldNameNode, annotationNode ) =
+                                Node.value fieldNode
+
+                            type_ : Result TypeAnnotation MonoType
+                            type_ =
+                                f (Node.value annotationNode)
+                        in
+                        type_
+                            |> Result.map (\type__ -> ( Node.value fieldNameNode, type__ ))
+                    )
+                |> Result.combine
+                |> Result.map Dict.fromList
+    in
+    case typeAnnotation of
+        TypeAnnotation.GenericType name ->
+            Ok <| TypeVar ( Named name, Normal )
+
+        TypeAnnotation.Typed name annotations ->
+            let
+                ( moduleName, typeName ) =
+                    Node.value name
+
+                fullModuleName : FullModuleName
+                fullModuleName =
+                    FullModuleName.fromModuleName_ moduleName
+
+                args : Result TypeAnnotation (List MonoType)
+                args =
+                    annotations
+                        |> List.map (Node.value >> f)
+                        |> Result.combine
+            in
+            args
+                |> Result.map
+                    (\args_ ->
+                        UserDefinedType
+                            { moduleName = fullModuleName
+                            , name = typeName
+                            , args = args_
+                            }
+                    )
+
+        TypeAnnotation.Unit ->
+            Ok Unit
+
+        TypeAnnotation.Tupled [ a, b ] ->
+            Result.map2 Tuple
+                (f (Node.value a))
+                (f (Node.value b))
+
+        TypeAnnotation.Tupled [ a, b, c ] ->
+            Result.map3 Tuple3
+                (f (Node.value a))
+                (f (Node.value b))
+                (f (Node.value c))
+
+        TypeAnnotation.Tupled _ ->
+            Err typeAnnotation
+
+        TypeAnnotation.Record fields ->
+            recordBindings fields
+                |> Result.map Record
+
+        TypeAnnotation.GenericRecord name fields ->
+            recordBindings (Node.value fields)
+                |> Result.map
+                    (\fields_ ->
+                        ExtensibleRecord
+                            { type_ = TypeVar ( Named (Node.value name), Normal )
+                            , fields = fields_
+                            }
+                    )
+
+        TypeAnnotation.FunctionTypeAnnotation from to ->
+            Result.map2
+                (\from_ to_ ->
+                    Function
+                        { from = from_
+                        , to = to_
+                        }
+                )
+                (f (Node.value from))
+                (f (Node.value to))
