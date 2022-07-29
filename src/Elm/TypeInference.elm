@@ -52,6 +52,20 @@ import Maybe.Extra as Maybe
 import Result.Extra as Result
 
 
+
+-- inferAll : Dict (List String) File -> Result Error OpaqueContext
+-- ... : OpaqueContext -> useful stuff
+-- ... : OpaqueContext -> useful stuff
+-- ... : OpaqueContext -> useful stuff
+-- ... : OpaqueContext -> useful stuff
+-- TODO implement stuff in terms of Dict Range Type etc.
+-- instead of NodeV2, ExprV2 etc.
+{- TODO Look at converting between our Type
+   and https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-TypeAnnotation
+   and https://package.elm-lang.org/packages/elm/project-metadata-utils/latest/Elm-Type
+-}
+
+
 {-| The entry-point you probably want to use.
 -}
 infer : Dict FullModuleName File -> Result Error (Dict FullModuleName TypedFile)
