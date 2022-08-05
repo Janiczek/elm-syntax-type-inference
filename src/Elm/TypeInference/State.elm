@@ -203,7 +203,9 @@ init : Dict VarName Type -> State
 init env =
     { nextId = 0
     , varTypes = Dict.empty
-    , typeEnv = env
+    , typeEnv =
+        -- When testing, you can populate this with types without having actual definitions present.
+        env
     }
 
 
@@ -214,11 +216,9 @@ tickId =
 
 getNextIdAndTick : TIState Id
 getNextIdAndTick =
-    do get <|
-        \{ nextId } ->
-            do tickId <|
-                \() ->
-                    pure nextId
+    do get <| \{ nextId } ->
+    do tickId <| \() ->
+    pure nextId
 
 
 
@@ -287,18 +287,21 @@ addSubstitutions subst =
 
 lookupEnv : FullModuleName -> VarName -> TIState MonoType
 lookupEnv thisModule var =
-    do getTypeEnv <|
-        \env ->
-            case Dict.get var env of
-                Nothing ->
-                    error <|
-                        VarNotFound
-                            { usedIn = thisModule
-                            , varName = var
-                            }
+    do getTypeEnv <| \env ->
+    case Dict.get var env of
+        Nothing ->
+            let
+                _ =
+                    Debug.log "lookupEnv" ( var, env )
+            in
+            error <|
+                VarNotFound
+                    { usedIn = thisModule
+                    , varName = var
+                    }
 
-                Just type_ ->
-                    instantiate type_
+        Just type_ ->
+            instantiate type_
 
 
 existsInEnv : VarName -> TIState Bool
@@ -309,15 +312,14 @@ existsInEnv varName =
 
 instantiate : Type -> TIState MonoType
 instantiate (Forall boundVars monoType) =
-    do (traverse (always getNextIdAndTick) boundVars) <|
-        \varIds ->
-            let
-                subst : SubstitutionMap
-                subst =
-                    List.map2 (\var id -> ( var, Type.id_ id ))
-                        boundVars
-                        varIds
-                        |> AssocList.fromList
-            in
-            SubstitutionMap.substituteMono subst monoType
-                |> pure
+    do (traverse (always getNextIdAndTick) boundVars) <| \varIds ->
+    let
+        subst : SubstitutionMap
+        subst =
+            List.map2 (\var id -> ( var, Type.id_ id ))
+                boundVars
+                varIds
+                |> AssocList.fromList
+    in
+    SubstitutionMap.substituteMono subst monoType
+        |> pure

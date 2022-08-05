@@ -1,0 +1,8 @@
+{
+  "name": "elm-syntax-type-inference",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "git@github.com:Janiczek/elm-syntax-type-inference.git",
+  "author": "Martin Janiczek <martin@janiczek.cz>",
+  "license": "MIT"
+}

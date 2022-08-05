@@ -15,6 +15,7 @@ import Elm.Syntax.Node as Node
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (TIState)
+import Result.ExtraExtra as Result
 
 
 {-| We have roughly these options:
@@ -34,23 +35,10 @@ moduleOfVar :
     -> VarName
     -> Result Error (Maybe FullModuleName)
 moduleOfVar files thisFile maybeModuleName varName =
-    let
-        orElseLazy : (() -> Result Error (Maybe FullModuleName)) -> Result Error (Maybe FullModuleName) -> Result Error (Maybe FullModuleName)
-        orElseLazy after before =
-            case before of
-                Err err ->
-                    Err err
-
-                Ok (Just name) ->
-                    Ok (Just name)
-
-                Ok Nothing ->
-                    after ()
-    in
     unqualifiedVarInThisModule thisFile maybeModuleName varName
-        |> orElseLazy (\() -> unqualifiedVarInImportedModule files thisFile maybeModuleName varName)
-        |> orElseLazy (\() -> qualifiedVarInImportedModule files maybeModuleName varName)
-        |> orElseLazy (\() -> qualifiedVarInAliasedModule files thisFile maybeModuleName varName)
+        |> Result.orElseLazy (\() -> unqualifiedVarInImportedModule files thisFile maybeModuleName varName)
+        |> Result.orElseLazy (\() -> qualifiedVarInImportedModule files maybeModuleName varName)
+        |> Result.orElseLazy (\() -> qualifiedVarInAliasedModule files thisFile maybeModuleName varName)
 
 
 findModuleOfVar :

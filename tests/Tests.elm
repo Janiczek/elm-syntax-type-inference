@@ -10,14 +10,19 @@ import Elm.TypeInference.Type as Type
         , Type(..)
         )
 import Expect
+import String.ExtraExtra as String
 import Test exposing (Test)
 
 
 testExpr : ( String, Result Error Type -> Bool ) -> Test
 testExpr ( exprCode, predicate ) =
-    Test.test exprCode <|
+    let
+        trimmedExprCode =
+            String.multilineInput exprCode
+    in
+    Test.test trimmedExprCode <|
         \() ->
-            case getExprType exprCode of
+            case getExprType trimmedExprCode of
                 Err (CouldntInfer err) ->
                     predicate (Err err)
                         |> Expect.true ("Has failed in a bad way: " ++ Debug.toString err)
@@ -194,11 +199,20 @@ suite =
             , ( "(\\x y -> x) 1", isFunction isVar isNumber )
             , ( "(\\x y -> y) 1", isFunction isVar isVar )
             , ( "let x = 1 in x", isNumber )
+            , ( "let id x = x in id", isFunctionWithSignature "#0 -> #0" )
 
-            -- , ( "let x = 1 in x + 1.0", is Float )
-            -- , ( "let id x = x in id", isFunctionWithSignature "#0 -> #0" )
+            --, ( """
+            --    let
+            --        x : Float
+            --        x = 1
+            --    in
+            --    x
+            --    """, is Float )
             -- , ( "let id x = x in (id 1, id ())", isTuple isNumber (is Unit) )
             -- , ( "if True then 1 else 2", isNumber ) -- TODO will need us to provide all the project deps as files
+            -- , ( "let x = 1 in x + 1.0", is Float ) -- needs to know about `+`
+            -- TODO check type annotations are checked in let
+            -- TODO check type annotations are checked in top-level declarations
             -- TODO Application (List (ExprWith meta))
             -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
             -- TODO FunctionOrValue ModuleName String

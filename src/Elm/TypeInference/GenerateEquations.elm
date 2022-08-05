@@ -321,17 +321,51 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                         impl =
                             NodeV2.value implNode
                     in
-                    State.map2
-                        (\patEqsLists exprEqs ->
-                            ( Type.id declId
-                            , NodeV2.type_ impl.expression
-                            , "Let: binding must be consistent with its annotation"
-                            )
-                                :: List.fastConcat patEqsLists
-                                ++ exprEqs
-                        )
-                        (State.traverse (generatePatternEquations files thisFile) impl.arguments)
-                        (f impl.expression)
+                    if List.isEmpty impl.arguments then
+                        generateConstantImplementation declId implNode impl
+
+                    else
+                        generateFnWithArgumentsImplementation declId implNode impl
+
+                generateConstantImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> FunctionImplementationV2 TypedMeta -> TIState (List TypeEquation)
+                generateConstantImplementation declId implNode impl =
+                    Debug.todo "generateConstantImplementation"
+
+                generateFnWithArgumentsImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> FunctionImplementationV2 TypedMeta -> TIState (List TypeEquation)
+                generateFnWithArgumentsImplementation declId implNode impl =
+                    -- This is really similar to LambdaExpression over in `generateExprEquations`:
+                    State.do (State.traverse (always State.getNextIdAndTick) impl.arguments) <| \argIds ->
+                    State.do State.getNextIdAndTick <| \resultId ->
+                    let
+                        fnType =
+                            argIds
+                                |> List.foldr
+                                    (\leftArgType rightArgType ->
+                                        Function
+                                            { from = Type.id_ leftArgType
+                                            , to = rightArgType
+                                            }
+                                    )
+                                    (Type.id_ resultId)
+                                |> Type.mono
+                    in
+                    State.do (list (generatePatternEquations files thisFile) impl.arguments) <| \argPatternEqs ->
+                    State.do (State.traverse addPatternBinding (List.map2 Tuple.pair impl.arguments argIds)) <| \_ ->
+                    State.do (f impl.expression) <| \bodyEqs ->
+                    finish <|
+                        ( type_, fnType, "Let function binding: is a function" )
+                            :: ( NodeV2.type_ expression, Type.id resultId, "Let function binding: expr = result" )
+                            :: List.map2
+                                (\arg argId ->
+                                    ( NodeV2.type_ arg
+                                    , Type.id argId
+                                    , "Let function binding: args = their id"
+                                    )
+                                )
+                                impl.arguments
+                                argIds
+                            ++ bodyEqs
+                            ++ argPatternEqs
 
                 generateSignature : Id -> Maybe (LocatedNode Signature) -> TIState (List TypeEquation)
                 generateSignature declId maybeSigNode =
@@ -805,9 +839,14 @@ generatePatternEquations files thisFile ((NodeV2 { type_ } pattern) as typedPatt
                         ++ homogenousListEqs
                     )
 
-        VarPattern _ ->
+        VarPattern var ->
             State.do State.getNextIdAndTick <| \patternId ->
-            finish [ ( type_, Type.id patternId, "VarPattern" ) ]
+            let
+                id =
+                    Type.id patternId
+            in
+            State.do (State.addBinding var id) <| \() ->
+            finish [ ( type_, id, "VarPattern" ) ]
 
         NamedPattern customType args ->
             State.map3

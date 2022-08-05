@@ -8,6 +8,7 @@ import Elm.Syntax.NodeV2 as NodeV2 exposing (NodeV2(..), TypedMeta)
 import Elm.TypeInference
 import Elm.TypeInference.Error exposing (Error)
 import Elm.TypeInference.Type exposing (Type)
+import String.ExtraExtra as String
 
 
 type TestError
@@ -21,12 +22,17 @@ type TestError
 getExprType : String -> Result TestError Type
 getExprType exprCode =
     let
+        indentedExprCode =
+            String.indent 4 exprCode
+
         moduleCode =
             """
 module Main exposing (main)
-main = {EXPR}
+
+main = 
+{EXPR}
 """
-                |> String.replace "{EXPR}" exprCode
+                |> String.replace "{EXPR}" indentedExprCode
 
         mainModule =
             ( "Main", [] )
