@@ -1,6 +1,6 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, init
-    , pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
+    , pure, fromTuple, fromMaybe, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
@@ -16,7 +16,7 @@ module Elm.TypeInference.State exposing
 
 # Utilities
 
-@docs pure, fromTuple, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
+@docs pure, fromTuple, fromMaybe, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
 
 
 # Next ID
@@ -92,6 +92,16 @@ error error_ =
 fromTuple : ( Result Error a, State ) -> TIState a
 fromTuple tuple =
     \_ -> tuple
+
+
+fromMaybe : Error -> Maybe a -> TIState a
+fromMaybe err maybe =
+    case maybe of
+        Nothing ->
+            error err
+
+        Just value ->
+            pure value
 
 
 run : State -> TIState a -> ( Result Error a, State )

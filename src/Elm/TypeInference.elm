@@ -23,6 +23,7 @@ import Elm.Syntax.ExpressionV2 as ExpressionV2
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FileV2 as FileV2 exposing (TypedFile)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.ModuleName as ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.NodeV2 as NodeV2
     exposing
@@ -50,30 +51,48 @@ import Elm.TypeInference.Unify as Unify
 import List.ExtraExtra as List
 import Maybe.Extra as Maybe
 import Result.Extra as Result
+import TypeLookupTable exposing (TypeLookupTable)
 
 
 
--- inferAll : Dict (List String) File -> Result Error OpaqueContext
 -- ... : OpaqueContext -> useful stuff
 -- ... : OpaqueContext -> useful stuff
 -- ... : OpaqueContext -> useful stuff
 -- ... : OpaqueContext -> useful stuff
--- TODO implement stuff in terms of Dict Range Type etc.
--- instead of NodeV2, ExprV2 etc.
 {- TODO Look at converting between our Type
    and https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-TypeAnnotation
    and https://package.elm-lang.org/packages/elm/project-metadata-utils/latest/Elm-Type
 -}
 
 
-{-| The entry-point you probably want to use.
+{-| TODO docs
 -}
-infer : Dict FullModuleName File -> Result Error (Dict FullModuleName TypedFile)
+infer : Dict ModuleName File -> Result Error (Dict ModuleName TypeLookupTable)
 infer files =
-    gatherTypeAliases files
-        |> State.andThen (infer_ files)
+    files
+        |> parseModuleNameKeys
+        |> State.fromMaybe MissingModuleName
+        |> State.andThen
+            (\files_ ->
+                files_
+                    |> gatherTypeAliases
+                    |> State.andThen (infer_ files_)
+            )
         |> State.run (State.init Dict.empty)
         |> Tuple.first
+        |> Result.map TypeLookupTable.fromTypedFiles
+
+
+parseModuleNameKeys : Dict ModuleName a -> Maybe (Dict FullModuleName a)
+parseModuleNameKeys dict =
+    dict
+        |> Dict.toList
+        |> Maybe.traverse
+            (\( moduleName, value ) ->
+                FullModuleName.fromModuleName moduleName
+                    |> Maybe.map (\fullModuleName -> ( fullModuleName, value ))
+            )
+        |> Maybe.map Dict.fromList
 
 
 infer_ :
@@ -81,46 +100,49 @@ infer_ :
     -> Dict ( FullModuleName, VarName ) MonoType
     -> TIState (Dict FullModuleName TypedFile)
 infer_ files typeAliases =
-    State.do (State.traverse (inferFile files) (Dict.toList files)) <| \typedFilesAndEquations ->
-    let
-        typedFiles =
-            typedFilesAndEquations
-                |> List.map Tuple.first
+    State.do (State.traverse (inferFile files) (Dict.toList files)) <|
+        \typedFilesAndEquations ->
+            let
+                typedFiles =
+                    typedFilesAndEquations
+                        |> List.map Tuple.first
 
-        fileEquations : List TypeEquation
-        fileEquations =
-            typedFilesAndEquations
-                |> List.fastConcatMap Tuple.second
-    in
-    State.do GenerateEquations.generateVarEquations <| \varEquations ->
-    let
-        allEquations : List TypeEquation
-        allEquations =
-            fileEquations ++ varEquations
+                fileEquations : List TypeEquation
+                fileEquations =
+                    typedFilesAndEquations
+                        |> List.fastConcatMap Tuple.second
+            in
+            State.do GenerateEquations.generateVarEquations <|
+                \varEquations ->
+                    let
+                        allEquations : List TypeEquation
+                        allEquations =
+                            fileEquations ++ varEquations
 
-        _ =
-            allEquations
-                |> List.map (\eq -> "  " ++ TypeEquation.toString eq)
-                |> List.sort
-                |> String.join "\n"
-                |> (\str -> "\nAll equations:\n" ++ str ++ "\n\n")
-                |> (\str -> Debug.log str ())
-    in
-    State.do (Unify.unifyMany typeAliases (List.map TypeEquation.dropLabel allEquations)) <| \substitutionMap ->
-    let
-        _ =
-            substitutionMap
-                |> AssocList.toList
-                |> List.map (\( var, type_ ) -> "  " ++ Type.varToString var ++ " ≡ " ++ Type.monoTypeToString type_)
-                |> List.sort
-                |> String.join "\n"
-                |> (\str -> "\nSubstitution map:\n" ++ str ++ "\n\n")
-                |> (\str -> Debug.log str ())
-    in
-    typedFiles
-        |> Dict.fromList
-        |> substituteTypesInFiles substitutionMap
-        |> State.pure
+                        _ =
+                            allEquations
+                                |> List.map (\eq -> "  " ++ TypeEquation.toString eq)
+                                |> List.sort
+                                |> String.join "\n"
+                                |> (\str -> "\nAll equations:\n" ++ str ++ "\n\n")
+                                |> (\str -> Debug.log str ())
+                    in
+                    State.do (Unify.unifyMany typeAliases (List.map TypeEquation.dropLabel allEquations)) <|
+                        \substitutionMap ->
+                            let
+                                _ =
+                                    substitutionMap
+                                        |> AssocList.toList
+                                        |> List.map (\( var, type_ ) -> "  " ++ Type.varToString var ++ " ≡ " ++ Type.monoTypeToString type_)
+                                        |> List.sort
+                                        |> String.join "\n"
+                                        |> (\str -> "\nSubstitution map:\n" ++ str ++ "\n\n")
+                                        |> (\str -> Debug.log str ())
+                            in
+                            typedFiles
+                                |> Dict.fromList
+                                |> substituteTypesInFiles substitutionMap
+                                |> State.pure
 
 
 inferFile :
@@ -250,15 +272,17 @@ inferExpr :
     -> LocatedExpr
     -> TIState ( TypedExpr, List TypeEquation )
 inferExpr files thisFile expr =
-    State.do (AssignIds.assignIds expr) <| \exprWithIds ->
-    let
-        _ =
-            exprWithIds
-                |> ExpressionV2.map (\{ type_ } -> Type.getDebugId type_)
-                |> Debug.log "expr"
-    in
-    State.do (GenerateEquations.generateExprEquations files thisFile exprWithIds) <| \exprEquations ->
-    State.pure ( exprWithIds, exprEquations )
+    State.do (AssignIds.assignIds expr) <|
+        \exprWithIds ->
+            let
+                _ =
+                    exprWithIds
+                        |> ExpressionV2.map (\{ type_ } -> Type.getDebugId type_)
+                        |> Debug.log "expr"
+            in
+            State.do (GenerateEquations.generateExprEquations files thisFile exprWithIds) <|
+                \exprEquations ->
+                    State.pure ( exprWithIds, exprEquations )
 
 
 inferPattern :
@@ -267,9 +291,11 @@ inferPattern :
     -> LocatedPattern
     -> TIState ( TypedPattern, List TypeEquation )
 inferPattern files thisFile patternNode =
-    State.do (AssignIds.assignIdsToPattern patternNode) <| \patternWithIds ->
-    State.do (GenerateEquations.generatePatternEquations files thisFile patternWithIds) <| \patternEquations ->
-    State.pure ( patternWithIds, patternEquations )
+    State.do (AssignIds.assignIdsToPattern patternNode) <|
+        \patternWithIds ->
+            State.do (GenerateEquations.generatePatternEquations files thisFile patternWithIds) <|
+                \patternEquations ->
+                    State.pure ( patternWithIds, patternEquations )
 
 
 inferFunction :

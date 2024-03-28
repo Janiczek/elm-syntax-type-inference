@@ -13,6 +13,7 @@ type Error
       ImpossibleExpr TypedExpr
     | ImpossiblePattern TypedPattern
     | ImpossibleType TypeAnnotation
+    | MissingModuleName
       -- Var qualification errors
     | VarNotFound { usedIn : FullModuleName, varName : VarName }
     | AmbiguousName { usedIn : FullModuleName, varName : VarName, possibleModules : List FullModuleName }
