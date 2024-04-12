@@ -64,6 +64,17 @@ toTypeLookupTables typedFiles =
 
 toTypeLookupTable : FileV2 TypedMeta -> TypeLookupTable
 toTypeLookupTable file =
-    file.declarations
-        |> List.concatMap DeclarationV2.toTypeLookupTable
-        |> TypeLookupTable.union
+    let
+        moduleName_ =
+            file.moduleDefinition
+                |> NodeV2.value
+                |> Module.moduleName
+
+        empty =
+            TypeLookupTable.empty moduleName_
+
+        all =
+            file.declarations
+                |> List.map DeclarationV2.toTypeLookupTable
+    in
+    TypeLookupTable.union ( empty, all )

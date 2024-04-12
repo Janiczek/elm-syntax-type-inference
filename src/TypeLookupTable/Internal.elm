@@ -17,6 +17,8 @@ type TypeLookupTable
     = TypeLookupTable ModuleName (Dict RangeLike Type)
 
 
+{-| This represents (from, to) where each number contains both the row and column.
+-}
 type alias RangeLike =
     ( Int, Int )
 
