@@ -87,7 +87,7 @@ parseModuleNameKeys : Dict ModuleName a -> Maybe (Dict FullModuleName a)
 parseModuleNameKeys dict =
     dict
         |> Dict.toList
-        |> Maybe.traverse
+        |> Maybe.combineMap
             (\( moduleName, value ) ->
                 FullModuleName.fromModuleName moduleName
                     |> Maybe.map (\fullModuleName -> ( fullModuleName, value ))

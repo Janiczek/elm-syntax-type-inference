@@ -25,11 +25,13 @@ testExpr ( exprCode, predicate ) =
             case getExprType trimmedExprCode of
                 Err (CouldntInfer err) ->
                     predicate (Err err)
-                        |> Expect.true ("Has failed in a bad way: " ++ Debug.toString err)
+                        |> Expect.equal True
+                        |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
                 Ok type_ ->
                     predicate (Ok type_)
-                        |> Expect.true ("Has inferred a bad type: " ++ Type.toString type_)
+                        |> Expect.equal True
+                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
 
                 Err err ->
                     Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
