@@ -320,6 +320,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     let
                         impl =
                             NodeV2.value implNode
+                                |> Debug.log "generate fn implementation"
                     in
                     if List.isEmpty impl.arguments then
                         generateConstantImplementation declId implNode impl
@@ -329,7 +330,12 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
                 generateConstantImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> FunctionImplementationV2 TypedMeta -> TIState (List TypeEquation)
                 generateConstantImplementation declId implNode impl =
-                    Debug.todo "generateConstantImplementation"
+                    -- let x = e1 in e2
+                    State.do State.getNextIdAndTick <| \resultId ->
+                    State.do (f impl.expression) <| \bodyEqs ->
+                    finish <|
+                        ( NodeV2.type_ expression, Type.id resultId, "Let constant binding: expr = result" )
+                            :: bodyEqs
 
                 generateFnWithArgumentsImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> FunctionImplementationV2 TypedMeta -> TIState (List TypeEquation)
                 generateFnWithArgumentsImplementation declId implNode impl =
