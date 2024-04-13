@@ -320,7 +320,6 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     let
                         impl =
                             NodeV2.value implNode
-                                |> Debug.log "generate fn implementation"
                     in
                     if List.isEmpty impl.arguments then
                         generateConstantImplementation declId implNode impl
@@ -330,11 +329,11 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
                 generateConstantImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> FunctionImplementationV2 TypedMeta -> TIState (List TypeEquation)
                 generateConstantImplementation declId implNode impl =
-                    -- let x = e1 in e2
+                    -- (let) x = e1 (in e2)
                     State.do State.getNextIdAndTick <| \resultId ->
                     State.do (f impl.expression) <| \bodyEqs ->
                     finish <|
-                        ( NodeV2.type_ expression, Type.id resultId, "Let constant binding: expr = result" )
+                        ( exprType, NodeV2.type_ impl.expression, "Let constant binding: name = body" )
                             :: bodyEqs
 
                 generateFnWithArgumentsImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> FunctionImplementationV2 TypedMeta -> TIState (List TypeEquation)
@@ -428,7 +427,9 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             let
                 declsWithIds : List ( LetDeclaration TypedMeta, Id )
                 declsWithIds =
-                    List.map2 (\declNode declId -> ( NodeV2.value declNode, declId )) declarations declIds
+                    List.map2 (\declNode declId -> ( NodeV2.value declNode, declId ))
+                        declarations
+                        declIds
             in
             State.do (State.traverse generateDecl declsWithIds) <| \declEqsLists ->
             State.do (State.traverse addDeclBinding declsWithIds) <| \_ ->
