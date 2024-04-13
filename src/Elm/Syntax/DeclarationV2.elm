@@ -6,12 +6,13 @@ module Elm.Syntax.DeclarationV2 exposing
 
 import Elm.Syntax.ExpressionV2 as ExpressionV2 exposing (ExprWith, FunctionV2)
 import Elm.Syntax.Infix exposing (Infix)
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.NodeV2 as NodeV2 exposing (LocatedNode, NodeV2(..), TypedMeta)
 import Elm.Syntax.PatternV2 as PatternV2 exposing (PatternWith)
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.Type exposing (Type)
 import Elm.Syntax.TypeAlias exposing (TypeAlias)
-import TypeLookupTable.Internal exposing (TypeLookupTable)
+import TypeLookupTable exposing (TypeLookupTable)
 
 
 type DeclarationV2 meta
@@ -47,6 +48,47 @@ map fn declaration =
                 (ExpressionV2.map fn expr)
 
 
-toTypeLookupTable : LocatedNode (DeclarationV2 TypedMeta) -> TypeLookupTable
-toTypeLookupTable (NodeV2 _ _) =
-    Debug.todo "DeclarationV2.toTypeLookupTable"
+toTypeLookupTable : ModuleName -> LocatedNode (DeclarationV2 TypedMeta) -> TypeLookupTable
+toTypeLookupTable moduleName (NodeV2 _ decl) =
+    case decl of
+        FunctionDeclaration { declaration } ->
+            let
+                (NodeV2 _ impl) =
+                    declaration
+
+                (NodeV2 exprMeta _) =
+                    impl.expression
+
+                (NodeV2 nameMeta _) =
+                    impl.name
+
+                exprType =
+                    exprMeta.type_
+
+                exprRange =
+                    exprMeta.range
+
+                nameRange =
+                    nameMeta.range
+
+                -- TODO arguments
+            in
+            TypeLookupTable.fromList moduleName
+                [ ( nameRange, exprType )
+                , ( exprRange, exprType )
+                ]
+
+        AliasDeclaration _ ->
+            Debug.todo "DeclarationV2.toTypeLookupTable: AliasDeclaration"
+
+        CustomTypeDeclaration _ ->
+            Debug.todo "DeclarationV2.toTypeLookupTable: CustomTypeDeclaration"
+
+        PortDeclaration _ ->
+            Debug.todo "DeclarationV2.toTypeLookupTable: PortDeclaration"
+
+        InfixDeclaration _ ->
+            Debug.todo "DeclarationV2.toTypeLookupTable: InfixDeclaration"
+
+        Destructuring _ _ ->
+            Debug.todo "DeclarationV2.toTypeLookupTable: Destructuring"

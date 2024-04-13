@@ -14,8 +14,7 @@ import Elm.Syntax.Import exposing (Import)
 import Elm.Syntax.Module as Module exposing (Module)
 import Elm.Syntax.ModuleName as ModuleName exposing (ModuleName)
 import Elm.Syntax.NodeV2 as NodeV2 exposing (LocatedNode, TypedMeta)
-import TypeLookupTable
-import TypeLookupTable.Internal exposing (TypeLookupTable)
+import TypeLookupTable exposing (TypeLookupTable)
 
 
 type alias TypedFile =
@@ -75,6 +74,6 @@ toTypeLookupTable file =
 
         all =
             file.declarations
-                |> List.map DeclarationV2.toTypeLookupTable
+                |> List.map (DeclarationV2.toTypeLookupTable moduleName_)
     in
     TypeLookupTable.union ( empty, all )
