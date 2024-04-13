@@ -492,7 +492,7 @@ normalize ((Forall boundVars monoType) as type_) =
                                 ( nextId, nextVarOrd + 1, ( Named (ordToName nextVarOrd), super ) :: acc )
                     )
                     ( 0, 0, [] )
-                |> (\( _, _, vars ) -> vars)
+                |> (\( _, _, vars ) -> List.reverse vars)
 
         -- We can't use SubstitutionMap.substitute because it works recursively
         -- We need to replace the vars just once and not follow the links.
