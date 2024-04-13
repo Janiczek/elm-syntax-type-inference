@@ -1,6 +1,8 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, init
-    , pure, fromTuple, fromMaybe, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
+    , pure, error, fromTuple, fromMaybe, run
+    , map, map2, map3, andMap, mapError
+    , do, andThen, traverse, combine
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
     , getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
@@ -16,7 +18,9 @@ module Elm.TypeInference.State exposing
 
 # Utilities
 
-@docs pure, fromTuple, fromMaybe, run, map, map2, map3, andMap, mapError, do, andThen, traverse, combine, error
+@docs pure, error, fromTuple, fromMaybe, run
+@docs map, map2, map3, andMap, mapError
+@docs do, andThen, traverse, combine
 
 
 # Next ID
@@ -24,12 +28,12 @@ module Elm.TypeInference.State exposing
 @docs getNextIdAndTick
 
 
-# Var types
+# Var types:
 
 @docs getVarTypes, getTypesForVar, addVarType
 
 
-# Type env
+# Type env: useful for let..in scoping etc.
 
 @docs getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
 
