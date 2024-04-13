@@ -183,7 +183,7 @@ suite =
             , ( "[(1,'a'),(2,'b')]", isList (isTuple isNumber (is Char)) )
             , ( "\\x -> 1", isFunction isVar isNumber )
             , ( "\\x -> x", isFunctionWithSignature "#0 -> #0" )
-            , ( "\\x y -> x", isFunctionWithSignature "#1 -> #0 -> #1" ) -- TODO weirdness
+            , ( "\\x y -> x", isFunctionWithSignature "#0 -> #1 -> #0" )
             , ( "\\x y -> y", isFunctionWithSignature "#0 -> #1 -> #1" )
             , ( "\\x y -> 1", isFunction isVar (isFunction isVar isNumber) )
             , ( "\\() -> 1", isFunction (is Unit) isNumber )
