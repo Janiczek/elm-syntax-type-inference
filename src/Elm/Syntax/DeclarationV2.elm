@@ -53,13 +53,13 @@ toTypeLookupTable moduleName (NodeV2 _ decl) =
     case decl of
         FunctionDeclaration { declaration } ->
             let
-                (NodeV2 _ impl) =
+                (NodeV2 declMeta impl) =
                     declaration
 
-                (NodeV2 exprMeta _) =
+                (NodeV2 exprMeta expr) =
                     impl.expression
 
-                (NodeV2 nameMeta _) =
+                (NodeV2 nameMeta name) =
                     impl.name
 
                 exprType =
@@ -71,11 +71,15 @@ toTypeLookupTable moduleName (NodeV2 _ decl) =
                 nameRange =
                     nameMeta.range
 
+                declRange =
+                    declMeta.range
+
                 -- TODO arguments
             in
             TypeLookupTable.fromList moduleName
-                [ ( nameRange, exprType )
-                , ( exprRange, exprType )
+                [ ( nameRange, exprType, "fn decl name: " ++ name )
+                , ( exprRange, exprType, "fn decl expr" )
+                , ( declRange, exprType, "fn decl" )
                 ]
 
         AliasDeclaration _ ->

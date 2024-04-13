@@ -20,21 +20,20 @@ testExpr ( exprCode, predicate ) =
         trimmedExprCode =
             String.multilineInput exprCode
     in
-    Test.test trimmedExprCode <|
-        \() ->
-            case getExprType trimmedExprCode of
-                Err (CouldntInfer err) ->
-                    predicate (Err err)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
+    Test.test trimmedExprCode <| \() ->
+    case getExprType trimmedExprCode of
+        Err (CouldntInfer err) ->
+            predicate (Err err)
+                |> Expect.equal True
+                |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
-                Ok type_ ->
-                    predicate (Ok type_)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
+        Ok type_ ->
+            predicate (Ok type_)
+                |> Expect.equal True
+                |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
 
-                Err err ->
-                    Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+        Err err ->
+            Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
 
 
 is : MonoType -> Result Error Type -> Bool
@@ -244,10 +243,9 @@ suite =
             , Test.describe "e == (e)" <|
                 List.map
                     (\( expr, _ ) ->
-                        Test.test expr <|
-                            \() ->
-                                Result.map Type.normalize (getExprType ("(" ++ expr ++ ")"))
-                                    |> Expect.equal (Result.map Type.normalize (getExprType expr))
+                        Test.test expr <| \() ->
+                        Result.map Type.normalize (getExprType ("(" ++ expr ++ ")"))
+                            |> Expect.equal (Result.map Type.normalize (getExprType expr))
                     )
                     goodExprs
             ]

@@ -17,7 +17,7 @@ import NonemptyList exposing (NonemptyList)
 
 
 type TypeLookupTable
-    = TypeLookupTable ModuleName (Dict RangeLike Type)
+    = TypeLookupTable ModuleName (Dict RangeLike ( Type, String ))
 
 
 {-| This represents (from, to) where each number contains both the row and column.
@@ -29,6 +29,7 @@ type alias RangeLike =
 get : Range -> TypeLookupTable -> Maybe Type
 get range (TypeLookupTable _ dict) =
     Dict.get (toRangeLike range) dict
+        |> Maybe.map Tuple.first
 
 
 union : NonemptyList TypeLookupTable -> TypeLookupTable
@@ -58,15 +59,15 @@ toRangeLike { start, end } =
     )
 
 
-insert : Range -> Type -> TypeLookupTable -> TypeLookupTable
-insert range type_ (TypeLookupTable moduleName dict) =
+insert : Range -> Type -> String -> TypeLookupTable -> TypeLookupTable
+insert range type_ debugInfo (TypeLookupTable moduleName dict) =
     TypeLookupTable moduleName
-        (Dict.insert (toRangeLike range) type_ dict)
+        (Dict.insert (toRangeLike range) ( type_, debugInfo ) dict)
 
 
-fromList : ModuleName -> List ( Range, Type ) -> TypeLookupTable
+fromList : ModuleName -> List ( Range, Type, String ) -> TypeLookupTable
 fromList moduleName list =
     List.foldl
-        (\( range, type_ ) acc -> insert range type_ acc)
+        (\( range, type_, debugInfo ) acc -> insert range type_ debugInfo acc)
         (empty moduleName)
         list
