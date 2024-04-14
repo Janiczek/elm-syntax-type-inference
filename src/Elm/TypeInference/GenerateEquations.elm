@@ -205,6 +205,16 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
                 Ok Nothing ->
                     State.do (State.lookupEnv (File.moduleName thisFile) varName) <| \varType ->
+                    {- TODO let poly: do we need to instantiate here?
+                       Inside the below code, this is the 2 === 4 equation.
+
+                        let id x = x in id
+                        ------------------ 3
+                            -------- 4
+                              -- 1
+                                  -- 0
+                                        -- 2
+                    -}
                     finish [ ( type_, Type.mono varType, "FunctionOrValue: var from env" ) ]
 
                 Err err ->
@@ -338,7 +348,9 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
                 generateFnWithArgumentsImplementation : Id -> LocatedNode (FunctionImplementationV2 TypedMeta) -> FunctionImplementationV2 TypedMeta -> TIState (List TypeEquation)
                 generateFnWithArgumentsImplementation declId implNode impl =
-                    -- This is really similar to LambdaExpression over in `generateExprEquations`:
+                    -- This is really similar to LambdaExpression over in `generateExprEquations`
+                    -- It differs by doing let polymorphism though
+                    -- https://www.youtube.com/watch?v=me-Ll7mjNh8
                     State.do (State.traverse (always State.getNextIdAndTick) impl.arguments) <| \argIds ->
                     State.do State.getNextIdAndTick <| \resultId ->
                     let
@@ -352,14 +364,14 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                             }
                                     )
                                     (Type.id_ resultId)
+                                -- TODO let poly: this is wrong: generalize!
                                 |> Type.mono
                     in
                     State.do (list (generatePatternEquations files thisFile) impl.arguments) <| \argPatternEqs ->
                     State.do (State.traverse addPatternBinding (List.map2 Tuple.pair impl.arguments argIds)) <| \_ ->
                     State.do (f impl.expression) <| \bodyEqs ->
                     finish <|
-                        ( type_, fnType, "Let function binding: is a function" )
-                            :: ( NodeV2.type_ expression, Type.id resultId, "Let function binding: expr = result" )
+                        ( NodeV2.type_ expression, Type.id resultId, "Let function binding: expr = result" )
                             :: List.map2
                                 (\arg argId ->
                                     ( NodeV2.type_ arg
@@ -409,6 +421,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
                 addDeclBinding : ( LetDeclaration TypedMeta, Id ) -> TIState ()
                 addDeclBinding ( decl, declId ) =
+                    -- ...to the env we'll later lookup the var name from inside `FunctionOrValue`
                     case decl of
                         LetFunction fn ->
                             let
@@ -433,12 +446,8 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             in
             State.do (State.traverse generateDecl declsWithIds) <| \declEqsLists ->
             State.do (State.traverse addDeclBinding declsWithIds) <| \_ ->
+            -- TODO let poly: each use of an generalized binding needs to be instantiated
             State.do (f expression) <| \exprEqs ->
-            -- TODO each decl needs to be generalized
-            -- TODO decls need to be put into expr's env before inferring
-            --
-            -- TODO let bindingType = generalize (substituteEnv subst typeEnv) (substituteMono subst bindingMonoType)
-            -- TODO (exprType,exprEqs) <- withBinding (name, bindingType) <| withSubstitution subst (infer expression)
             finish <|
                 ( type_, exprType, "Let = its body" )
                     :: List.fastConcat declEqsLists
