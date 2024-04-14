@@ -4,6 +4,7 @@ module Elm.TypeInference.GenerateEquations exposing
     , generateVarEquations
     )
 
+import Debug.Extra
 import Dict exposing (Dict)
 import Elm.Syntax.ExpressionV2
     exposing
@@ -205,6 +206,10 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
                 Ok Nothing ->
                     State.do (State.lookupEnv (File.moduleName thisFile) varName) <| \varType ->
+                    --let
+                    --    _ =
+                    --        Debug.log (Debug.Extra.standOutInfo "var name, type") ( varName, varType )
+                    --in
                     {- TODO let poly: do we need to instantiate here?
                        Inside the below code, this is the 2 === 4 equation.
 
@@ -352,7 +357,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     -- It differs by doing let polymorphism though
                     -- https://www.youtube.com/watch?v=me-Ll7mjNh8
                     State.do (State.traverse (always State.getNextIdAndTick) impl.arguments) <| \argIds ->
-                    State.do State.getNextIdAndTick <| \resultId ->
+                    State.do State.getNextIdAndTick <| \fnResultId ->
                     let
                         fnType =
                             argIds
@@ -363,7 +368,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                             , to = rightArgType
                                             }
                                     )
-                                    (Type.id_ resultId)
+                                    (Type.id_ fnResultId)
                                 -- TODO let poly: this is wrong: generalize!
                                 |> Type.mono
                     in
@@ -371,7 +376,8 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     State.do (State.traverse addPatternBinding (List.map2 Tuple.pair impl.arguments argIds)) <| \_ ->
                     State.do (f impl.expression) <| \bodyEqs ->
                     finish <|
-                        ( NodeV2.type_ expression, Type.id resultId, "Let function binding: expr = result" )
+                        ( Type.id declId, fnType, "Let function binding: is a function (from args to result)" )
+                            :: ( Type.id fnResultId, NodeV2.type_ impl.expression, "Let function binding: fnResult = expr" )
                             :: List.map2
                                 (\arg argId ->
                                     ( NodeV2.type_ arg
