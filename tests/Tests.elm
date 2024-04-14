@@ -31,7 +31,7 @@ testExpr ( exprCode, predicate ) =
                 Ok type_ ->
                     predicate (Ok type_)
                         |> Expect.equal True
-                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
+                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
 
                 Err err ->
                     Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
