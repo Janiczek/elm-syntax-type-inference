@@ -5,7 +5,7 @@ module Elm.TypeInference.State exposing
     , do, andThen, traverse, combine
     , getNextIdAndTick
     , getVarTypes, getTypesForVar, addVarType
-    , getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
+    , getTypeEnv, addBinding, removeBinding, addSubstitutions, existsInEnv, lookupEnv
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -35,7 +35,7 @@ module Elm.TypeInference.State exposing
 
 # Type env: useful for let..in scoping etc.
 
-@docs getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
+@docs getTypeEnv, addBinding, removeBinding, addSubstitutions, existsInEnv, lookupEnv
 
 -}
 
@@ -292,6 +292,11 @@ addBinding var type_ =
        need to do that as on collision the new item wins.
     -}
     modifyTypeEnv (Dict.insert var type_)
+
+
+removeBinding : VarName -> TIState ()
+removeBinding var =
+    modifyTypeEnv (Dict.remove var)
 
 
 addSubstitutions : SubstitutionMap -> TIState ()

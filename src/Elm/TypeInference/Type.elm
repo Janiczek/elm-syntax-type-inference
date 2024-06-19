@@ -18,6 +18,7 @@ module Elm.TypeInference.Type exposing
     , isParametric
     , mono
     , monoTypeToString
+    , naivelySubstitute
     , normalize
     , number
     , number_
@@ -353,16 +354,14 @@ toString : Type -> String
 toString (Forall boundVars monoType) =
     let
         preamble =
-            boundVars
-                |> List.map (\var -> "∀" ++ varToString var)
-                |> String.join " "
-                |> (\str ->
-                        if String.isEmpty str then
-                            str
+            if List.isEmpty boundVars then
+                ""
 
-                        else
-                            str ++ ". "
-                   )
+            else
+                boundVars
+                    |> List.map varToString
+                    |> String.join " "
+                    |> (\str -> "forall " ++ str ++ ". ")
     in
     preamble ++ monoTypeToString monoType
 
@@ -657,3 +656,19 @@ fromTypeAnnotation typeAnnotation =
                 )
                 (f (Node.value from))
                 (f (Node.value to))
+
+
+naivelySubstitute : Dict Id Id -> MonoType -> MonoType
+naivelySubstitute substitutions monoType =
+    monoType
+        |> mapVarsMono
+            (\var ->
+                case var of
+                    ( Generated id__, Normal ) ->
+                        Dict.get id__ substitutions
+                            |> Maybe.map (\substitutedId -> ( Generated substitutedId, Normal ))
+                            |> Maybe.withDefault var
+
+                    _ ->
+                        var
+            )

@@ -1,40 +1,42 @@
-module Debug.Extra exposing
-    ( standOutErr
-    , standOutInfo
-    )
+module Debug.Extra exposing (blue, red)
 
 
-standOutErr : String -> String
-standOutErr str =
+red : String -> String
+red str =
     str
-        |> bold
-        |> bgRed
-        |> white
+        |> format.bold
+        |> bg.red
+        |> fg.white
 
 
-standOutInfo : String -> String
-standOutInfo str =
+blue : String -> String
+blue str =
     str
-        |> bold
-        |> bgBlue
-        |> white
+        |> format.bold
+        |> bg.blue
+        |> fg.white
 
 
-bold : String -> String
-bold str =
-    String.join "" [ "\u{001B}[1m", str, "\u{001B}[22m" ]
+format =
+    { bold = wrapIn 1 22
+    }
 
 
-white : String -> String
-white str =
-    String.join "" [ "\u{001B}[37m", str, "\u{001B}[39m" ]
+fg =
+    { white = wrapIn 37 39
+    }
 
 
-bgBlue : String -> String
-bgBlue str =
-    String.join "" [ "\u{001B}[44m", str, "\u{001B}[49m" ]
+bg =
+    { blue = wrapIn 44 49
+    , red = wrapIn 41 49
+    }
 
 
-bgRed : String -> String
-bgRed str =
-    String.join "" [ "\u{001B}[41m", str, "\u{001B}[49m" ]
+wrapIn : Int -> Int -> String -> String
+wrapIn start end str =
+    let
+        esc code =
+            "\u{001B}[" ++ String.fromInt code ++ "m"
+    in
+    String.join "" [ esc start, str, esc end ]

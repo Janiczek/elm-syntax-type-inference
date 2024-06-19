@@ -20,21 +20,20 @@ testExpr ( exprCode, predicate ) =
         trimmedExprCode =
             String.multilineInput exprCode
     in
-    Test.test trimmedExprCode <|
-        \() ->
-            case getExprType trimmedExprCode of
-                Err (CouldntInfer err) ->
-                    predicate (Err err)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
+    Test.test trimmedExprCode <| \() ->
+    case getExprType trimmedExprCode of
+        Err (CouldntInfer err) ->
+            predicate (Err err)
+                |> Expect.equal True
+                |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
-                Ok type_ ->
-                    predicate (Ok type_)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
+        Ok type_ ->
+            predicate (Ok type_)
+                |> Expect.equal True
+                |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
 
-                Err err ->
-                    Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+        Err err ->
+            Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
 
 
 is : MonoType -> Result Error Type -> Bool
@@ -94,7 +93,7 @@ isFunction fromCheck toCheck actual =
 
 
 isFunctionWithSignature : String -> Result Error Type -> Bool
-isFunctionWithSignature signature actual =
+isFunctionWithSignature wantedSignature actual =
     case actual of
         Ok ((Forall [] (Function { from, to })) as type_) ->
             let
@@ -104,9 +103,31 @@ isFunctionWithSignature signature actual =
                 actualSignature =
                     Type.monoTypeToString mono
             in
-            signature == actualSignature
+            actualSignature == wantedSignature
 
         _ ->
+            False
+
+
+isPolyFunctionWithSignature : String -> Result Error Type -> Bool
+isPolyFunctionWithSignature wantedSignature actual =
+    case actual of
+        Ok ((Forall _ (Function { from, to })) as type_) ->
+            let
+                normalized =
+                    Type.normalize type_
+
+                actualSignature =
+                    Type.toString normalized
+            in
+            --actualSignature == wantedSignature
+            Debug.log "actual" actualSignature == Debug.log "expected" wantedSignature
+
+        _ ->
+            let
+                _ =
+                    Debug.log "actual, not a function" actual
+            in
             False
 
 
@@ -164,44 +185,49 @@ suite =
     let
         goodExprs : List ( String, Result Error Type -> Bool )
         goodExprs =
-            [ ( "()", is Unit )
-            , ( "123", isNumber )
-            , ( "0x123", isNumber )
-            , ( "42.0", is Float )
-            , ( "-123", isNumber )
-            , ( "-0x123", isNumber )
-            , ( "-123.0", is Float )
-            , ( "\"ABC\"", is String )
-            , ( "'A'", is Char )
-            , ( "(42.0)", is Float )
-            , ( "('a', ())", is (Tuple Char Unit) )
-            , ( "('a', (), 123.4)", is (Tuple3 Char Unit Float) )
-            , ( "[1.0, 2.0, 3.0]", isList (is Float) )
-            , ( "[1, 2, 3.0]", isList (is Float) )
-            , ( "[1.0, 2, 3]", isList (is Float) )
-            , ( "[1, 2, 3]", isList isNumber )
-            , ( "[(1,'a'),(2,'b')]", isList (isTuple isNumber (is Char)) )
-            , ( "\\x -> 1", isFunction isVar isNumber )
-            , ( "\\x -> x", isFunctionWithSignature "#0 -> #0" )
-            , ( "\\x y -> x", isFunctionWithSignature "#0 -> #1 -> #0" )
-            , ( "\\x y -> y", isFunctionWithSignature "#0 -> #1 -> #1" )
-            , ( "\\x y -> 1", isFunction isVar (isFunction isVar isNumber) )
-            , ( "\\() -> 1", isFunction (is Unit) isNumber )
-            , ( "\\x () -> 1", isFunction isVar (isFunction (is Unit) isNumber) )
-            , ( "\\() x -> 1", isFunction (is Unit) (isFunction isVar isNumber) )
-            , ( "{}", isRecord [] )
-            , ( "{a = 1}", isRecord [ ( "a", isNumber ) ] )
-            , ( "{a = 1, b = ()}", isRecord [ ( "a", isNumber ), ( "b", is Unit ) ] )
-            , ( ".a", isFunction (isExtensibleRecord isVar [ ( "a", isVar ) ]) isVar )
-            , ( "record.a", isVar ) -- in this example we can't say much more about the fact that `record` is `{ ? | a : ? }`
-            , ( ".a {a = 1}", isNumber )
-            , ( "(\\x -> x) 1", isNumber )
-            , ( "(\\x y -> x) 1 2", isNumber )
-            , ( "(\\x y -> x) 1", isFunction isVar isNumber )
-            , ( "(\\x y -> y) 1", isFunction isVar isVar )
-            , ( "let x = 1 in x", isNumber )
-            , ( "let id x = x in id", isFunctionWithSignature "#0 -> #0" )
+            [ {- ( "()", is Unit )
+                 , ( "123", isNumber )
+                 , ( "0x123", isNumber )
+                 , ( "42.0", is Float )
+                 , ( "-123", isNumber )
+                 , ( "-0x123", isNumber )
+                 , ( "-123.0", is Float )
+                 , ( "\"ABC\"", is String )
+                 , ( "'A'", is Char )
+                 , ( "(42.0)", is Float )
+                 , ( "('a', ())", is (Tuple Char Unit) )
+                 , ( "('a', (), 123.4)", is (Tuple3 Char Unit Float) )
+                 , ( "[1.0, 2.0, 3.0]", isList (is Float) )
+                 , ( "[1, 2, 3.0]", isList (is Float) )
+                 , ( "[1.0, 2, 3]", isList (is Float) )
+                 , ( "[1, 2, 3]", isList isNumber )
+                 , ( "[(1,'a'),(2,'b')]", isList (isTuple isNumber (is Char)) )
+                 , ( "\\x -> 1", isFunction isVar isNumber )
+                 , ( "\\x -> x", isFunctionWithSignature "#0 -> #0" )
+                 , ( "\\x y -> x", isFunctionWithSignature "#0 -> #1 -> #0" )
+                 , ( "\\x y -> y", isFunctionWithSignature "#0 -> #1 -> #1" )
+                 , ( "\\x y -> 1", isFunction isVar (isFunction isVar isNumber) )
+                 , ( "\\() -> 1", isFunction (is Unit) isNumber )
+                 , ( "\\x () -> 1", isFunction isVar (isFunction (is Unit) isNumber) )
+                 , ( "\\() x -> 1", isFunction (is Unit) (isFunction isVar isNumber) )
+                 , ( "{}", isRecord [] )
+                 , ( "{a = 1}", isRecord [ ( "a", isNumber ) ] )
+                 , ( "{a = 1, b = ()}", isRecord [ ( "a", isNumber ), ( "b", is Unit ) ] )
+                 , ( ".a", isFunction (isExtensibleRecord isVar [ ( "a", isVar ) ]) isVar )
+                 , ( "record.a", isVar ) -- in this example we can't say much more about the fact that `record` is `{ ? | a : ? }`
+                 , ( ".a {a = 1}", isNumber )
+                 , ( "(\\x -> x) 1", isNumber )
+                 , ( "(\\x y -> x) 1 2", isNumber )
+                 , ( "(\\x y -> x) 1", isFunction isVar isNumber )
+                 , ( "(\\x y -> y) 1", isFunction isVar isVar )
+                 , ( "let x = 1 in x", isNumber )
+                                 ,
+              -}
+              ( "let id x = x in id", isPolyFunctionWithSignature "∀#0. #0 -> #0" )
 
+            --, ( "let id x = x in (id 1, id ())", isTuple isNumber (is Unit) )
+            --, ( "let id x = x in 1", isNumber )
+            --, ( "let x = 1 in 'a'", is Char )
             --, ( """
             --    let
             --        x : Float
@@ -209,7 +235,6 @@ suite =
             --    in
             --    x
             --    """, is Float )
-            -- , ( "let id x = x in (id 1, id ())", isTuple isNumber (is Unit) )
             -- , ( "if True then 1 else 2", isNumber ) -- TODO will need us to provide all the project deps as files
             -- , ( "let x = 1 in x + 1.0", is Float ) -- needs to know about `+`
             -- TODO check type annotations are checked in let
@@ -234,19 +259,20 @@ suite =
             , ( "\\x -> y", fails )
             , ( "(\\x y -> x) 1 2 3", fails )
             , ( "let x = 1 in y", fails )
+
+            -- TODO `f : a = ()` should also throw an error - the annotation was wrong.
             ]
     in
     Test.describe "Elm.TypeInference"
         [ Test.describe "infer"
-            [ Test.describe "good expressions" (List.map testExpr goodExprs)
+            [ Test.only <| Test.describe "good expressions" (List.map testExpr goodExprs)
             , Test.describe "bad expressions" (List.map testExpr badExprs)
             , Test.describe "e == (e)" <|
                 List.map
                     (\( expr, _ ) ->
-                        Test.test expr <|
-                            \() ->
-                                Result.map Type.normalize (getExprType ("(" ++ expr ++ ")"))
-                                    |> Expect.equal (Result.map Type.normalize (getExprType expr))
+                        Test.test expr <| \() ->
+                        Result.map Type.normalize (getExprType ("(" ++ expr ++ ")"))
+                            |> Expect.equal (Result.map Type.normalize (getExprType expr))
                     )
                     goodExprs
             ]

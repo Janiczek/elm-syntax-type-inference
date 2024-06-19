@@ -40,12 +40,18 @@ import Elm.TypeInference.Type as Type
     exposing
         ( Id
         , MonoType(..)
+        , SuperType(..)
+        , Type(..)
+        , TypeVarStyle(..)
         )
 import Elm.TypeInference.Type.External as ExternalType
-import Elm.TypeInference.TypeEquation exposing (TypeEquation)
+import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
+import List.Extra
 import List.ExtraExtra as List
+import Maybe.Extra
 import Regex exposing (Regex)
-import Result.Extra as Result
+import Result.Extra
+import Set exposing (Set)
 
 
 finish : List TypeEquation -> TIState (List TypeEquation)
@@ -208,18 +214,8 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     State.do (State.lookupEnv (File.moduleName thisFile) varName) <| \varType ->
                     --let
                     --    _ =
-                    --        Debug.log (Debug.Extra.standOutInfo "var name, type") ( varName, varType )
+                    --        Debug.log (Debug.Extra.blue "var name, type") ( varName, varType )
                     --in
-                    {- TODO let poly: do we need to instantiate here?
-                       Inside the below code, this is the 2 === 4 equation.
-
-                        let id x = x in id
-                        ------------------ 3
-                            -------- 4
-                              -- 1
-                                  -- 0
-                                        -- 2
-                    -}
                     finish [ ( type_, Type.mono varType, "FunctionOrValue: var from env" ) ]
 
                 Err err ->
@@ -358,6 +354,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                     -- https://www.youtube.com/watch?v=me-Ll7mjNh8
                     State.do (State.traverse (always State.getNextIdAndTick) impl.arguments) <| \argIds ->
                     State.do State.getNextIdAndTick <| \fnResultId ->
+                    State.do State.getTypeEnv <| \typeEnv ->
                     let
                         fnType =
                             argIds
@@ -369,12 +366,13 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                             }
                                     )
                                     (Type.id_ fnResultId)
-                                -- TODO let poly: this is wrong: generalize!
-                                |> Type.mono
+                                |> -- TODO we can only generalize over vars that are free in the env. Does that already happen inside Type.generalize?
+                                   Type.generalize typeEnv
                     in
                     State.do (list (generatePatternEquations files thisFile) impl.arguments) <| \argPatternEqs ->
                     State.do (State.traverse addPatternBinding (List.map2 Tuple.pair impl.arguments argIds)) <| \_ ->
                     State.do (f impl.expression) <| \bodyEqs ->
+                    State.do (State.traverse removePatternBinding impl.arguments) <| \_ ->
                     finish <|
                         ( Type.id declId, fnType, "Let function binding: is a function (from args to result)" )
                             :: ( Type.id fnResultId, NodeV2.type_ impl.expression, "Let function binding: fnResult = expr" )
@@ -408,7 +406,7 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
                                               )
                                             ]
                                     )
-                                >> Result.merge
+                                >> Result.Extra.merge
                             )
                         |> Maybe.withDefault (finish [])
 
@@ -441,6 +439,47 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
 
                         LetDestructuring pattern e ->
                             addPatternBinding ( pattern, declId )
+
+                instantiate : Set Id -> List (List TypeEquation) -> TypeEquation -> TIState TypeEquation
+                instantiate declIds declEqsLists (( t1, t2, reason ) as eq) =
+                    let
+                        idToPolyType : Dict Id Type
+                        idToPolyType =
+                            declIds
+                                |> Set.toList
+                                |> List.filterMap
+                                    (\id ->
+                                        declEqsLists
+                                            |> List.Extra.findMap (List.Extra.findMap (TypeEquation.monoVarCounterpart id))
+                                            |> Maybe.map (Tuple.pair id)
+                                    )
+                                |> Dict.fromList
+
+                        try : Type -> Type -> Maybe (TIState TypeEquation)
+                        try perhapsVarType otherType =
+                            case perhapsVarType of
+                                Forall [] (TypeVar ( Generated id, Normal )) ->
+                                    Dict.get id idToPolyType
+                                        |> Maybe.map
+                                            (\(Forall vars monoTypeUsingForallVars) ->
+                                                State.do (State.traverse (always State.getNextIdAndTick) vars) <| \newVarIds ->
+                                                let
+                                                    instantiatedMonoType =
+                                                        monoTypeUsingForallVars
+                                                            |> Type.naivelySubstitute
+                                                                (List.map2 Tuple.pair vars newVarIds
+                                                                    |> Dict.fromList
+                                                                )
+                                                in
+                                                State.pure ( otherType, Type.mono instantiatedMonoType, reason )
+                                            )
+
+                                _ ->
+                                    Nothing
+                    in
+                    try t1 t2
+                        |> Maybe.Extra.orElseLazy (\() -> try t2 t1)
+                        |> Maybe.withDefault (State.pure ( t1, t2, reason ))
             in
             State.do (State.traverse (always State.getNextIdAndTick) declarations) <| \declIds ->
             let
@@ -452,12 +491,21 @@ generateExprEquations files thisFile ((NodeV2 { type_ } expr) as typedExpr) =
             in
             State.do (State.traverse generateDecl declsWithIds) <| \declEqsLists ->
             State.do (State.traverse addDeclBinding declsWithIds) <| \_ ->
-            -- TODO let poly: each use of an generalized binding needs to be instantiated
             State.do (f expression) <| \exprEqs ->
+            let
+                declIdsSet : Set Id
+                declIdsSet =
+                    Set.fromList declIds
+            in
+            State.do (State.traverse (instantiate declIdsSet declEqsLists) exprEqs) <| \instantiatedExprEqs ->
+            let
+                _ =
+                    Debug.log (Debug.Extra.red "instantiated expr eqs") instantiatedExprEqs
+            in
             finish <|
                 ( type_, exprType, "Let = its body" )
                     :: List.fastConcat declEqsLists
-                    ++ exprEqs
+                    ++ instantiatedExprEqs
 
         CaseExpression _ ->
             Debug.todo "generate eqs: case"
@@ -927,6 +975,24 @@ addPatternBinding ( arg, argId ) =
                         State.do State.getNextIdAndTick <| \fieldId ->
                         State.addBinding (NodeV2.value field) (Type.id fieldId)
                     )
+                |> State.map (always ())
+
+        _ ->
+            State.pure ()
+
+
+removePatternBinding : PatternWith meta -> TIState ()
+removePatternBinding arg =
+    case NodeV2.value arg of
+        VarPattern varName ->
+            State.removeBinding varName
+
+        AsPattern _ varName ->
+            State.removeBinding (NodeV2.value varName)
+
+        RecordPattern fields ->
+            fields
+                |> State.traverse (\field -> State.removeBinding (NodeV2.value field))
                 |> State.map (always ())
 
         _ ->

@@ -270,12 +270,6 @@ inferExpr :
     -> TIState ( TypedExpr, List TypeEquation )
 inferExpr files thisFile expr =
     State.do (AssignIds.assignIds expr) <| \exprWithIds ->
-    let
-        _ =
-            exprWithIds
-                |> ExpressionV2.map (\{ type_ } -> Type.getDebugId type_)
-                |> Debug.log "expr"
-    in
     State.do (GenerateEquations.generateExprEquations files thisFile exprWithIds) <| \exprEquations ->
     State.pure ( exprWithIds, exprEquations )
 
