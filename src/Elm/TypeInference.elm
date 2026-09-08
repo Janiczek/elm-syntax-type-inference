@@ -21,7 +21,7 @@ import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type exposing (Id, MonoType)
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
-import Elm.TypeInference.Unify as Unify
+import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import List.ExtraExtra as List
 import Maybe.Extra as Maybe
 import RangeLike exposing (RangeLike)
@@ -66,7 +66,7 @@ parseModuleNameKeys dict =
 
 infer_ :
     Dict FullModuleName File
-    -> Dict ( FullModuleName, VarName ) MonoType
+    -> Dict ( FullModuleName, VarName ) TypeAlias
     -> TIState (Dict ModuleName TypeLookupTable)
 infer_ files typeAliases =
     State.do (State.traverse (inferFile files) (Dict.toList files)) <| \fileEquations ->
@@ -123,7 +123,7 @@ toTypeLookupTable substitutionMap nodeIds fullModuleName =
 
 gatherTypeAliases :
     Dict FullModuleName File
-    -> TIState (Dict ( FullModuleName, VarName ) MonoType)
+    -> TIState (Dict ( FullModuleName, VarName ) TypeAlias)
 gatherTypeAliases files =
     files
         |> Dict.toList
@@ -149,7 +149,9 @@ gatherTypeAliases files =
                                             (\type__ ->
                                                 Just
                                                     ( ( moduleName, Node.value typeAlias.name )
-                                                    , type__
+                                                    , { args = List.map Node.value typeAlias.generics
+                                                      , type_ = type__
+                                                      }
                                                     )
                                             )
 

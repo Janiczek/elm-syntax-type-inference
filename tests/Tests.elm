@@ -1,14 +1,19 @@
 module Tests exposing (..)
 
-import Dict
+import Dict exposing (Dict)
+import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.TypeInference.Error exposing (Error)
 import Elm.TypeInference.Helpers exposing (TestError(..), getExprType, inferMainModule)
+import Elm.TypeInference.State as State
+import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type
     exposing
         ( MonoType(..)
         , SuperType(..)
         , Type(..)
+        , TypeVarStyle(..)
         )
+import Elm.TypeInference.Unify as Unify
 import Expect
 import String.ExtraExtra as String
 import Test exposing (Test)
@@ -160,6 +165,41 @@ isExtensibleRecord baseRecordCheck fieldChecks actual =
             False
 
 
+{-| Like `isExtensibleRecord`, but doesn't care about order of ext.record nesting
+-}
+isExtensibleRecordWithFields : List ( String, Result Error Type -> Bool ) -> Result Error Type -> Bool
+isExtensibleRecordWithFields fieldChecks actual =
+    let
+        flatten : MonoType -> Dict String MonoType
+        flatten mono =
+            case mono of
+                ExtensibleRecord r ->
+                    Dict.union r.fields (flatten r.type_)
+
+                _ ->
+                    Dict.empty
+    in
+    case actual of
+        Ok (Forall [] ((ExtensibleRecord _) as mono)) ->
+            let
+                allFields =
+                    flatten mono
+            in
+            List.all
+                (\( field, check ) ->
+                    case Dict.get field allFields of
+                        Nothing ->
+                            False
+
+                        Just fieldType ->
+                            check (Ok (Forall [] fieldType))
+                )
+                fieldChecks
+
+        _ ->
+            False
+
+
 suite : Test
 suite =
     let
@@ -190,18 +230,29 @@ suite =
             , ( "\\() -> 1", isFunction (is Unit) isNumber )
             , ( "\\x () -> 1", isFunction isVar (isFunction (is Unit) isNumber) )
             , ( "\\() x -> 1", isFunction (is Unit) (isFunction isVar isNumber) )
+            , ( "\\(x, y) -> x", isFunction (isTuple isVar isVar) isVar )
+            , ( "\\(x, y) -> y", isFunction (isTuple isVar isVar) isVar )
             , ( "{}", isRecord [] )
             , ( "{a = 1}", isRecord [ ( "a", isNumber ) ] )
             , ( "{a = 1, b = ()}", isRecord [ ( "a", isNumber ), ( "b", is Unit ) ] )
             , ( ".a", isFunction (isExtensibleRecord isVar [ ( "a", isVar ) ]) isVar )
-            , ( "record.a", isVar ) -- in this example we can't say much more about the fact that `record` is `{ ? | a : ? }`
+            , ( "let record = { a = 1 } in record.a", isNumber )
+            , ( "\\record -> record.a", isFunction (isExtensibleRecord isVar [ ( "a", isVar ) ]) isVar )
             , ( ".a {a = 1}", isNumber )
             , ( "(\\x -> x) 1", isNumber )
             , ( "(\\x y -> x) 1 2", isNumber )
             , ( "(\\x y -> x) 1", isFunction isVar isNumber )
             , ( "(\\x y -> y) 1", isFunction isVar isVar )
             , ( "let x = 1 in x", isNumber )
+            , ( "let x = 1 in ()", is Unit )
             , ( "let id x = x in id", isFunctionWithSignature "#0 -> #0" )
+            , ( "\\f x -> (f x).a", isFunction (isFunction isVar (isExtensibleRecord isVar [ ( "a", isVar ) ])) (isFunction isVar isVar) )
+            , ( "case 1 of\n    1 -> 'a'\n    _ -> 'b'", is Char )
+            , ( "case ('a', 'b') of\n    ( x, _ ) -> x", is Char )
+            , -- Extensible record - two usages, final record must satisfy both
+              ( "\\r -> (r.a, r.b)", isFunction (isExtensibleRecordWithFields [ ( "a", isVar ), ( "b", isVar ) ]) (isTuple isVar isVar) )
+            , -- Extensible record works with more complex types
+              ( "\\r -> ( r.a, [ r.a, 1.0 ] )", isFunction (isExtensibleRecordWithFields [ ( "a", is Float ) ]) (isTuple (is Float) (isList (is Float))) )
 
             --, ( """
             --    let
@@ -235,6 +286,9 @@ suite =
             , ( "\\x -> y", fails )
             , ( "(\\x y -> x) 1 2 3", fails )
             , ( "let x = 1 in y", fails )
+            , ( "case 1 of\n    'a' -> 1\n    _ -> 2", fails ) -- pattern doesn't match scrutinee
+            , ( "case 1 of\n    1 -> 'a'\n    _ -> 2", fails ) -- branch bodies disagree
+            , ( "\\r -> ( [ r.a, 1.0 ], [ r.a, 'x' ] )", fails ) -- `r.a` forced to both Float and Char via row unification
             ]
     in
     Test.describe "Elm.TypeInference"
@@ -305,4 +359,71 @@ main = ()
 
         -- TODO number later used with an int -> coerced into an int
         -- TODO number later used with a float -> coerced into a float
+        , unifyAliasSuite
+        ]
+
+
+mainModule =
+    FullModuleName.fromModuleName_ [ "Main" ]
+
+
+var : Int -> MonoType
+var n =
+    TypeVar ( Generated n, Normal )
+
+
+runUnify : Dict ( FullModuleName.FullModuleName, String ) Unify.TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+runUnify typeAliases eqs =
+    Unify.unifyMany typeAliases (List.map (Tuple.mapBoth Type.mono Type.mono) eqs)
+        |> State.run (State.init Dict.empty)
+        |> Tuple.first
+
+
+{-| Temporary suite before we refactor/fix `Type.fromTypeAnnotation`'s
+unqualified-name resolution bug.
+-}
+unifyAliasSuite : Test
+unifyAliasSuite =
+    let
+        pairAlias : Unify.TypeAlias
+        pairAlias =
+            { args = [ "a" ]
+            , type_ = Tuple (TypeVar ( Named "a", Normal )) (TypeVar ( Named "a", Normal ))
+            }
+
+        typeAliases =
+            Dict.singleton ( mainModule, "Pair" ) pairAlias
+
+        pairOf : MonoType -> MonoType
+        pairOf t =
+            UserDefinedType { moduleName = mainModule, name = "Pair", args = [ t ] }
+
+        run : List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+        run =
+            runUnify typeAliases
+    in
+    Test.describe "Unify: type alias expansion"
+        [ Test.test "a Pair Float unifies with (Float, Float)" <|
+            \() ->
+                run [ ( pairOf Float, Tuple (var 0) (var 1) ) ]
+                    |> Result.map (\subst -> SubstitutionMap.substituteMono subst (Tuple (var 0) (var 1)))
+                    |> Expect.equal (Ok (Tuple Float Float))
+        , Test.test "two different uses of the same alias don't leak into each other" <|
+            \() ->
+                run
+                    [ ( pairOf Float, Tuple (var 0) (var 1) )
+                    , ( pairOf Char, Tuple (var 2) (var 3) )
+                    ]
+                    |> Result.map
+                        (\subst ->
+                            ( SubstitutionMap.substituteMono subst (var 0)
+                            , SubstitutionMap.substituteMono subst (var 2)
+                            )
+                        )
+                    |> Expect.equal (Ok ( Float, Char ))
+        , Test.test "a Pair Float does not unify with (Float, Char)" <|
+            \() ->
+                run [ ( pairOf Float, Tuple Float Char ) ]
+                    |> Result.map (always ())
+                    |> Expect.err
         ]

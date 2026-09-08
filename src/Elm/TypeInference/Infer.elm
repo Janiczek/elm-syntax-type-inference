@@ -344,8 +344,54 @@ inferExpr ctx exprNode =
                     :: List.fastConcatMap Tuple.second declInferreds
                     ++ bodyEqs
 
-        CaseExpression _ ->
-            Debug.todo "infer: case"
+        CaseExpression { expression, cases } ->
+            State.do (f expression) <| \( scrutineeId, scrutineeEqs ) ->
+            State.do
+                (State.traverse
+                    (\( patternNode, bodyNode ) ->
+                        State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
+                        State.do (f bodyNode) <| \( bodyId, bodyEqs ) ->
+                        State.pure ( ( patternId, bodyId ), patternEqs ++ bodyEqs )
+                    )
+                    cases
+                )
+            <| \caseInferreds ->
+            let
+                caseIds : List ( Id, Id )
+                caseIds =
+                    List.map Tuple.first caseInferreds
+
+                caseEqs : List TypeEquation
+                caseEqs =
+                    List.fastConcatMap Tuple.second caseInferreds
+
+                scrutineeEquations : List TypeEquation
+                scrutineeEquations =
+                    caseIds
+                        |> List.map
+                            (\( patternId, _ ) ->
+                                ( Type.id scrutineeId
+                                , Type.id patternId
+                                , "Case: scrutinee = branch pattern"
+                                )
+                            )
+
+                bodyEquations : List TypeEquation
+                bodyEquations =
+                    caseIds
+                        |> List.map
+                            (\( _, bodyId ) ->
+                                ( type_
+                                , Type.id bodyId
+                                , "Case: result = branch body"
+                                )
+                            )
+            in
+            finish <|
+                scrutineeEquations
+                    ++ bodyEquations
+                    ++ scrutineeEqs
+                    ++ caseEqs
 
         LambdaExpression { args, expression } ->
             State.do (inferMany (inferPattern ctx) args) <| \( argIds, argEqs ) ->
@@ -378,13 +424,10 @@ inferExpr ctx exprNode =
                     ++ eqs
 
         RecordAccess recordNode fieldNameNode ->
-            {- TODO we don't recurse into the record subexpression, so `(f x).a`
-               generates no equations for `f x`.
-            -}
-            State.do (State.idForNode ctx.thisModuleName recordNode) <| \recordNodeId ->
+            State.do (f recordNode) <| \( recordNodeId, recordEqs ) ->
             State.do State.getNextIdAndTick <| \extensibleRecordId ->
             State.do State.getNextIdAndTick <| \resultId ->
-            finish
+            finish <|
                 [ ( type_, Type.id resultId, "Record access = the field = the result" )
                 , ( Type.id recordNodeId
                   , Type.mono <|
@@ -398,6 +441,7 @@ inferExpr ctx exprNode =
                   , "Record access: left is a record"
                   )
                 ]
+                    ++ recordEqs
 
         RecordAccessFunction fieldName ->
             State.do State.getNextIdAndTick <| \recordId ->

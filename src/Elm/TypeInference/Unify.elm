@@ -1,4 +1,4 @@
-module Elm.TypeInference.Unify exposing (unifyMany)
+module Elm.TypeInference.Unify exposing (TypeAlias, unifyMany)
 
 import AssocList
 import AssocSet
@@ -13,11 +13,18 @@ import Elm.TypeInference.Type as Type
         , SuperType(..)
         , Type(..)
         , TypeVar
+        , TypeVarStyle(..)
         )
 import Elm.TypeInference.VarName exposing (VarName)
 
 
-unify : Dict ( FullModuleName, VarName ) MonoType -> Type -> Type -> TIState SubstitutionMap
+type alias TypeAlias =
+    { args : List VarName
+    , type_ : MonoType
+    }
+
+
+unify : Dict ( FullModuleName, VarName ) TypeAlias -> Type -> Type -> TIState SubstitutionMap
 unify typeAliases ((Forall boundVars1 mono1) as t1) ((Forall boundVars2 mono2) as t2) =
     if List.length boundVars1 /= List.length boundVars2 then
         State.error <| TypeMismatch t1 t2
@@ -27,7 +34,7 @@ unify typeAliases ((Forall boundVars1 mono1) as t1) ((Forall boundVars2 mono2) a
         unifyMono typeAliases mono1 mono2
 
 
-unifyMany : Dict ( FullModuleName, VarName ) MonoType -> List ( Type, Type ) -> TIState SubstitutionMap
+unifyMany : Dict ( FullModuleName, VarName ) TypeAlias -> List ( Type, Type ) -> TIState SubstitutionMap
 unifyMany typeAliases equations =
     let
         go : SubstitutionMap -> List ( Type, Type ) -> TIState SubstitutionMap
@@ -45,7 +52,7 @@ unifyMany typeAliases equations =
     go SubstitutionMap.empty equations
 
 
-unifyManyMono : Dict ( FullModuleName, VarName ) MonoType -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
+unifyManyMono : Dict ( FullModuleName, VarName ) TypeAlias -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
 unifyManyMono typeAliases eqs =
     case eqs of
         [] ->
@@ -68,9 +75,43 @@ unifyManyMono typeAliases eqs =
             State.pure (SubstitutionMap.compose su2 su1)
 
 
-unifyMono : Dict ( FullModuleName, VarName ) MonoType -> MonoType -> MonoType -> TIState SubstitutionMap
-unifyMono typeAliases t1 t2 =
+{-| Expand alias (substitute its args) recursively.
+Elm aliases can't form infinite cycles.
+-}
+expandAlias : Dict ( FullModuleName, VarName ) TypeAlias -> MonoType -> MonoType
+expandAlias typeAliases type_ =
+    case type_ of
+        UserDefinedType ut ->
+            case Dict.get ( ut.moduleName, ut.name ) typeAliases of
+                Nothing ->
+                    type_
+
+                Just alias_ ->
+                    let
+                        subst : SubstitutionMap
+                        subst =
+                            List.map2 (\argName actualArg -> ( ( Named argName, Normal ), actualArg ))
+                                alias_.args
+                                ut.args
+                                |> AssocList.fromList
+                    in
+                    expandAlias typeAliases (SubstitutionMap.substituteMono subst alias_.type_)
+
+        _ ->
+            type_
+
+
+unifyMono : Dict ( FullModuleName, VarName ) TypeAlias -> MonoType -> MonoType -> TIState SubstitutionMap
+unifyMono typeAliases rawT1 rawT2 =
     let
+        t1 : MonoType
+        t1 =
+            expandAlias typeAliases rawT1
+
+        t2 : MonoType
+        t2 =
+            expandAlias typeAliases rawT2
+
         noSubstitutionNeeded : TIState SubstitutionMap
         noSubstitutionNeeded =
             State.pure AssocList.empty
@@ -89,6 +130,29 @@ unifyMono typeAliases t1 t2 =
                     (List.map2 (\b1 b2 -> ( Type.mono b1, Type.mono b2 ))
                         (Dict.values bindings1)
                         (Dict.values bindings2)
+                    )
+
+        recordVsExtensible :
+            Dict VarName MonoType
+            -> { type_ : MonoType, fields : Dict VarName MonoType }
+            -> TIState SubstitutionMap
+        recordVsExtensible recordFields er =
+            if not (List.all (\k -> Dict.member k recordFields) (Dict.keys er.fields)) then
+                typeMismatch
+
+            else
+                let
+                    residual : Dict VarName MonoType
+                    residual =
+                        Dict.filter (\k _ -> not (Dict.member k er.fields)) recordFields
+
+                    matched : Dict VarName MonoType
+                    matched =
+                        Dict.filter (\k _ -> Dict.member k er.fields) recordFields
+                in
+                unifyManyMono typeAliases
+                    (( er.type_, Record residual )
+                        :: List.map2 Tuple.pair (Dict.values matched) (Dict.values er.fields)
                     )
     in
     case ( t1, t2 ) of
@@ -175,43 +239,72 @@ unifyMono typeAliases t1 t2 =
             recordBindings bindings1 bindings2
 
         ( Record r, ExtensibleRecord er ) ->
-            recordBindings
-                (r |> Dict.filter (\k _ -> Dict.member k er.fields))
-                er.fields
+            recordVsExtensible r er
 
         ( Record _, _ ) ->
             typeMismatch
 
         ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
+            {- Fields that only one side mentions must be added to the other
+               side's required fields.
+               Both sides' extensible record typevars (the r in { r | ... })
+               now need to be the same var.
+
+               ie.
+               - getX : { row1 | x : Float } -> Float
+               - getY : { row2 | y : Float } -> Float
+               - sum r = getX r + getY r
+               Use them both on the same record and you get
+               - sum : { commonVar | x : Float, y : Float } -> Float
+            -}
+            let
+                onlyIn1 : Dict VarName MonoType
+                onlyIn1 =
+                    Dict.filter (\k _ -> not (Dict.member k r2.fields)) r1.fields
+
+                onlyIn2 : Dict VarName MonoType
+                onlyIn2 =
+                    Dict.filter (\k _ -> not (Dict.member k r1.fields)) r2.fields
+
+                sharedEqs : List ( MonoType, MonoType )
+                sharedEqs =
+                    List.map2 Tuple.pair
+                        (Dict.values (Dict.filter (\k _ -> Dict.member k r2.fields) r1.fields))
+                        (Dict.values (Dict.filter (\k _ -> Dict.member k r1.fields) r2.fields))
+            in
+            State.do State.getNextIdAndTick <| \tailId ->
+            let
+                tail : MonoType
+                tail =
+                    Type.id_ tailId
+            in
             unifyManyMono
                 typeAliases
-                [ ( r1.type_, r2.type_ )
-                , ( Record r1.fields, Record r2.fields )
-                ]
+                (( r1.type_, ExtensibleRecord { type_ = tail, fields = onlyIn2 } )
+                    :: ( r2.type_, ExtensibleRecord { type_ = tail, fields = onlyIn1 } )
+                    :: sharedEqs
+                )
 
         ( ExtensibleRecord er, Record r ) ->
-            recordBindings
-                er.fields
-                (r |> Dict.filter (\k _ -> Dict.member k er.fields))
+            recordVsExtensible r er
 
         ( ExtensibleRecord _, _ ) ->
             typeMismatch
 
         ( UserDefinedType ut1, UserDefinedType ut2 ) ->
-            if ut1.name /= ut2.name || List.length ut1.args /= List.length ut2.args then
+            if
+                (ut1.moduleName /= ut2.moduleName)
+                    || (ut1.name /= ut2.name)
+                    || (List.length ut1.args /= List.length ut2.args)
+            then
                 typeMismatch
 
             else
                 List.map2 Tuple.pair ut1.args ut2.args
                     |> unifyManyMono typeAliases
 
-        ( UserDefinedType ut, _ ) ->
-            case Dict.get ( ut.moduleName, ut.name ) typeAliases of
-                Nothing ->
-                    typeMismatch
-
-                Just aliasedType ->
-                    unifyMono typeAliases aliasedType t2
+        ( UserDefinedType _, _ ) ->
+            typeMismatch
 
         ( WebGLShader webgl1, WebGLShader webgl2 ) ->
             unifyManyMono
