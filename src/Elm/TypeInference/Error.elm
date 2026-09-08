@@ -1,8 +1,9 @@
 module Elm.TypeInference.Error exposing (Error(..))
 
-import Elm.Syntax.ExpressionV2 exposing (TypedExpr)
+import Elm.Syntax.Expression exposing (Expression)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
-import Elm.Syntax.PatternV2 exposing (TypedPattern)
+import Elm.Syntax.Node exposing (Node)
+import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Type exposing (MonoType, SuperType, Type, TypeVar)
@@ -10,8 +11,8 @@ import Elm.TypeInference.Type exposing (MonoType, SuperType, Type, TypeVar)
 
 type Error
     = -- Syntax errors
-      ImpossibleExpr TypedExpr
-    | ImpossiblePattern TypedPattern
+      ImpossibleExpr (Node Expression)
+    | ImpossiblePattern (Node Pattern)
     | ImpossibleType TypeAnnotation
     | MissingModuleName
       -- Var qualification errors

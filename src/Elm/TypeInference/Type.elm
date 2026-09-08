@@ -378,15 +378,32 @@ monoTypeToString type_ =
                 |> Dict.toList
                 |> List.map (\( fieldName, fieldType ) -> fieldName ++ " : " ++ f fieldType)
                 |> String.join ", "
+
+        {- Wraps a type in parentheses when it wouldn't parse back unambiguously
+           in argument position (of `->` or of a type constructor application).
+        -}
+        wrapped t =
+            case t of
+                Function _ ->
+                    "(" ++ f t ++ ")"
+
+                UserDefinedType r ->
+                    if List.isEmpty r.args then
+                        f t
+
+                    else
+                        "(" ++ f t ++ ")"
+
+                _ ->
+                    f t
     in
     case type_ of
         TypeVar var ->
             varToString var
 
         Function { from, to } ->
-            [ from, to ]
-                |> List.map f
-                |> String.join " -> "
+            -- `->` is right-associative, so only the left side is ambiguous
+            wrapped from ++ " -> " ++ f to
 
         Int ->
             "Int"
@@ -404,7 +421,7 @@ monoTypeToString type_ =
             "Bool"
 
         List inner ->
-            "List " ++ f inner
+            "List " ++ wrapped inner
 
         Unit ->
             "()"
@@ -427,11 +444,10 @@ monoTypeToString type_ =
             "{ " ++ f r.type_ ++ " | " ++ recordBindings r.fields ++ " }"
 
         UserDefinedType r ->
-            FullModuleName.toString r.moduleName
-                ++ "."
-                ++ r.name
-                ++ " "
-                ++ (r.args |> List.map f |> String.join " ")
+            ((FullModuleName.toString r.moduleName ++ "." ++ r.name)
+                :: List.map wrapped r.args
+            )
+                |> String.join " "
 
         WebGLShader r ->
             "Shader "

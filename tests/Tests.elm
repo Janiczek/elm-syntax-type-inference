@@ -2,7 +2,7 @@ module Tests exposing (..)
 
 import Dict
 import Elm.TypeInference.Error exposing (Error)
-import Elm.TypeInference.Helpers exposing (TestError(..), getExprType)
+import Elm.TypeInference.Helpers exposing (TestError(..), getExprType, inferMainModule)
 import Elm.TypeInference.Type as Type
     exposing
         ( MonoType(..)
@@ -12,6 +12,7 @@ import Elm.TypeInference.Type as Type
 import Expect
 import String.ExtraExtra as String
 import Test exposing (Test)
+import TypeLookupTable
 
 
 testExpr : ( String, Result Error Type -> Bool ) -> Test
@@ -240,6 +241,57 @@ suite =
         [ Test.describe "infer"
             [ Test.describe "good expressions" (List.map testExpr goodExprs)
             , Test.describe "bad expressions" (List.map testExpr badExprs)
+            , Test.describe "subexpressions"
+                [ Test.test "the `2` in `main = [1.0, 2]` is a Float" <|
+                    \() ->
+                        """module Main exposing (main)
+
+main = [1.0, 2]
+"""
+                            |> inferMainModule
+                            |> Result.map
+                                (Tuple.second
+                                    >> TypeLookupTable.get
+                                        { start = { row = 3, column = 14 }
+                                        , end = { row = 3, column = 15 }
+                                        }
+                                )
+                            |> Expect.equal (Ok (Just (Forall [] Float)))
+                , Test.test "a top-level function reports its function type, not its body's" <|
+                    \() ->
+                        """module Main exposing (main)
+
+main x = x
+"""
+                            |> inferMainModule
+                            |> Result.map
+                                (Tuple.second
+                                    >> TypeLookupTable.get
+                                        { start = { row = 3, column = 1 }
+                                        , end = { row = 3, column = 11 }
+                                        }
+                                    >> Maybe.map (Type.normalize >> Type.toString)
+                                )
+                            |> Expect.equal (Ok (Just "#0 -> #0"))
+                ]
+            , Test.describe "declarations other than functions"
+                [ Test.test "a type alias and a custom type don't crash the inference" <|
+                    \() ->
+                        """module Main exposing (main)
+
+type alias Foo =
+    { a : Float }
+
+type Bar
+    = Baz
+    | Qux Float
+
+main = ()
+"""
+                            |> inferMainModule
+                            |> Result.map (always ())
+                            |> Expect.equal (Ok ())
+                ]
             , Test.describe "e == (e)" <|
                 List.map
                     (\( expr, _ ) ->

@@ -4,7 +4,6 @@ import AssocList
 import AssocSet
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)

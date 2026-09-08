@@ -4,5 +4,10 @@
   "main": "index.js",
   "repository": "git@github.com:Janiczek/elm-syntax-type-inference.git",
   "author": "Martin Janiczek <martin@janiczek.cz>",
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "elm-test-rs --compiler ~/.elm/elm-tooling/elm/0.19.1/elm",
+    "review": "elm-review --compiler ~/.elm/elm-tooling/elm/0.19.1/elm",
+    "review:fix": "elm-review --compiler ~/.elm/elm-tooling/elm/0.19.1/elm --fix"
+  }
 }

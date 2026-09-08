@@ -1,5 +1,7 @@
 module ReviewConfig exposing (config)
 
+import NoDebug.Log
+import NoDebug.TodoOrToString
 import NoSlowConcat
 import NoUnused.CustomTypeConstructors
 import NoUnused.Dependencies
@@ -16,6 +18,8 @@ config =
     , NoUnused.Parameters.rule
     , NoUnused.Patterns.rule
     , NoUnused.Variables.rule
+    , NoDebug.Log.rule
+    , NoDebug.TodoOrToString.rule
 
     -- custom
     , NoSlowConcat.rule

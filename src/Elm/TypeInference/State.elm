@@ -4,6 +4,7 @@ module Elm.TypeInference.State exposing
     , map, map2, map3, andMap, mapError
     , do, andThen, traverse, combine
     , getNextIdAndTick
+    , getNodeIds, idForNode, aliasNodeId
     , getVarTypes, getTypesForVar, addVarType
     , getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
     )
@@ -28,6 +29,11 @@ module Elm.TypeInference.State exposing
 @docs getNextIdAndTick
 
 
+# Node IDs: the `Range -> Id` dict we're building up
+
+@docs getNodeIds, idForNode, aliasNodeId
+
+
 # Var types:
 
 @docs getVarTypes, getTypesForVar, addVarType
@@ -42,10 +48,13 @@ module Elm.TypeInference.State exposing
 import AssocList
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
+import Elm.Syntax.Node as Node exposing (Node)
+import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type exposing (Id, MonoType, Type(..))
+import RangeLike exposing (RangeLike)
 
 
 
@@ -70,6 +79,8 @@ type alias State =
          together.
       -}
       varTypes : Dict ( FullModuleName, VarName ) (List Type)
+    , -- Type ID for each AST node. Ends up being TypeLookupTable.
+      nodeIds : Dict FullModuleName (Dict RangeLike Id)
     , {- Environment holding types for our various variables and bindings.
 
          This is not global state, as it will change and flow as we go in and out
@@ -217,6 +228,7 @@ init : Dict VarName Type -> State
 init env =
     { nextId = 0
     , varTypes = Dict.empty
+    , nodeIds = Dict.empty
     , typeEnv =
         -- When testing, you can populate this with types without having actual definitions present.
         env
@@ -233,6 +245,49 @@ getNextIdAndTick =
     do get <| \{ nextId } ->
     do tickId <| \() ->
     pure nextId
+
+
+
+-- NODE IDS
+
+
+getNodeIds : TIState (Dict FullModuleName (Dict RangeLike Id))
+getNodeIds =
+    get
+        |> map .nodeIds
+
+
+{-| Give the node a fresh type ID and remember it under the node's range.
+-}
+idForNode : FullModuleName -> Node a -> TIState Id
+idForNode moduleName node =
+    do getNextIdAndTick <| \theId ->
+    do (aliasNodeId moduleName (Node.range node) theId) <| \() ->
+    pure theId
+
+
+{-| Make another range point to an already assigned ID.
+
+Needed for when elm-syntax gives two nodes the same range:
+
+  - `Declaration` and its `FunctionImplementation` when there's no documentation and no signature
+  - similarly for `LetDeclaration`
+
+-}
+aliasNodeId : FullModuleName -> Range -> Id -> TIState ()
+aliasNodeId moduleName range theId =
+    modify
+        (\state ->
+            { state
+                | nodeIds =
+                    state.nodeIds
+                        |> Dict.update moduleName
+                            (Maybe.withDefault Dict.empty
+                                >> Dict.insert (RangeLike.fromRange range) theId
+                                >> Just
+                            )
+            }
+        )
 
 
 
@@ -304,10 +359,6 @@ lookupEnv thisModule var =
     do getTypeEnv <| \env ->
     case Dict.get var env of
         Nothing ->
-            let
-                _ =
-                    Debug.log "lookupEnv" ( var, env )
-            in
             error <|
                 VarNotFound
                     { usedIn = thisModule
