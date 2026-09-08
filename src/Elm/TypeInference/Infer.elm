@@ -198,7 +198,7 @@ topLevelMember ctx declNode fn =
         }
 
 
-{-| A `let..in` function declaration. Adds a binding to lexical `typeEnv`
+{-| A `let..in` function declaration. Adds a binding to lexical `lexicalEnv`
 -}
 letFunctionMember : Ctx -> Node LetDeclaration -> Expression.Function -> TIState BindingGroup.Member
 letFunctionMember ctx declNode fn =

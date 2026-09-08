@@ -20,7 +20,7 @@ type alias Member =
       id : Id
     , maybeAnnotation : Maybe Type
     , -- top-level decls get installed into `globalEnv`
-      -- let..in bindings get installed into `typeEnv`
+      -- let..in bindings get installed into `lexicalEnv`
       install : Type -> TIState ()
     , -- monadic action to generate equations. Must be run after members'
       -- placeholders/annotations have been installed as they can reference each
@@ -31,7 +31,7 @@ type alias Member =
 
 solveGroup : Dict ( FullModuleName, VarName ) TypeAlias -> List Member -> TIState ()
 solveGroup typeAliases members =
-    State.do State.getTypeEnv <| \outerEnv ->
+    State.do State.getLexicalEnv <| \outerEnv ->
     State.do
         (State.traverse
             (\member ->

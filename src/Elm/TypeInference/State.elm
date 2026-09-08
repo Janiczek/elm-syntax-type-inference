@@ -6,7 +6,7 @@ module Elm.TypeInference.State exposing
     , getNextIdAndTick
     , getNodeIds, idForNode, aliasNodeId
     , getSubst, composeSubst
-    , getTypeEnv, addBinding, existsInEnv, lookupEnv, withScopedEnv
+    , getLexicalEnv, addBinding, existsInEnv, lookupEnv, withScopedEnv
     , getGlobalEnv, addGlobalBinding, lookupGlobalEnv
     , generalize
     )
@@ -41,9 +41,9 @@ module Elm.TypeInference.State exposing
 @docs getSubst, composeSubst
 
 
-# Type env: lexical scoping (lambda args, let..in, case branches)
+# Lexical env: scoping (lambda args, let..in, case branches)
 
-@docs getTypeEnv, addBinding, existsInEnv, lookupEnv, withScopedEnv
+@docs getLexicalEnv, addBinding, existsInEnv, lookupEnv, withScopedEnv
 
 
 # Global env: top-level declarations, constructors, ports, (later) dependencies
@@ -101,7 +101,7 @@ type alias State =
          case branch patterns. Scoped in and out via `withScopedEnv`, unlike
          `globalEnv` below.
       -}
-      typeEnv : Dict VarName Type
+      lexicalEnv : Dict VarName Type
     , {- Top-level declarations, constructors, ports, and (later) dependency
          values.
          Never scoped away: once binding group solves and generalizes, the final
@@ -254,7 +254,7 @@ init : Dict VarName Type -> State
 init env =
     { nextId = 0
     , nodeIds = Dict.empty
-    , typeEnv =
+    , lexicalEnv =
         -- When testing, you can populate this with types without having actual definitions present.
         env
     , globalEnv = Dict.empty
@@ -337,18 +337,18 @@ composeSubst newSubst =
 
 
 
--- TYPE ENV (lexical)
+-- LEXICAL ENV
 
 
-getTypeEnv : TIState (Dict VarName Type)
-getTypeEnv =
+getLexicalEnv : TIState (Dict VarName Type)
+getLexicalEnv =
     get
-        |> map .typeEnv
+        |> map .lexicalEnv
 
 
-modifyTypeEnv : (Dict VarName Type -> Dict VarName Type) -> TIState ()
-modifyTypeEnv fn =
-    modify (\state -> { state | typeEnv = fn state.typeEnv })
+modifyLexicalEnv : (Dict VarName Type -> Dict VarName Type) -> TIState ()
+modifyLexicalEnv fn =
+    modify (\state -> { state | lexicalEnv = fn state.lexicalEnv })
 
 
 addBinding : VarName -> Type -> TIState ()
@@ -356,10 +356,10 @@ addBinding var type_ =
     {- Diehl removes the key from the dict first... but I think we don't
        need to do that as on collision the new item wins.
     -}
-    modifyTypeEnv (Dict.insert var type_)
+    modifyLexicalEnv (Dict.insert var type_)
 
 
-{-| Run `action`, then restore `typeEnv` back.
+{-| Run `action`, then restore `lexicalEnv` back.
 Leave `nextId`, `nodeIds`, `globalEnv` and `subst` updated.
 
 This makes args, let bindings etc. not leak into the rest of the program.
@@ -372,12 +372,12 @@ withScopedEnv action =
             ( result, newState ) =
                 action state
         in
-        ( result, { newState | typeEnv = state.typeEnv } )
+        ( result, { newState | lexicalEnv = state.lexicalEnv } )
 
 
 existsInEnv : VarName -> TIState Bool
 existsInEnv varName =
-    getTypeEnv
+    getLexicalEnv
         |> map (Dict.member varName)
 
 
@@ -386,7 +386,7 @@ typevars that we can.
 -}
 lookupEnv : FullModuleName -> VarName -> TIState MonoType
 lookupEnv thisModule var =
-    do getTypeEnv <| \env ->
+    do getLexicalEnv <| \env ->
     case Dict.get var env of
         Nothing ->
             error <|
