@@ -1,6 +1,7 @@
 module Elm.TypeInference.State.VarModuleLookup exposing
     ( findModuleOfVar
     , moduleOfVar
+    , resolveOperatorFunction
     )
 
 -- TODO rename this to DeclModuleLookup? It's not really about vars inside exprs...
@@ -61,6 +62,31 @@ findModuleOfVar files thisFile maybeModuleName varName =
 
         Ok (Just moduleName) ->
             State.pure moduleName
+
+
+{-| `infix left 6 (+) = add` only gives unqualified `add`.
+`add` could be defined in this module, or perhaps imported? (I didn't check what
+the compiler allows as defining operators is pretty niche functionality only
+reserved for elm/\* packages).
+-}
+resolveOperatorFunction :
+    Dict FullModuleName File
+    -> FullModuleName
+    -> VarName
+    -> Result Error (Maybe ( FullModuleName, VarName ))
+resolveOperatorFunction files operatorModuleName operator =
+    case Dict.get operatorModuleName files of
+        Nothing ->
+            Ok Nothing
+
+        Just operatorFile ->
+            case File.resolveOperatorFunction operator operatorFile of
+                Nothing ->
+                    Ok Nothing
+
+                Just functionName ->
+                    moduleOfVar files operatorFile Nothing functionName
+                        |> Result.map (Maybe.map (\functionModuleName -> ( functionModuleName, functionName )))
 
 
 unqualifiedVarInThisModule :

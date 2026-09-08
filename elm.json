@@ -20,6 +20,7 @@
         "stil4m/elm-syntax": "7.3.9 <= v < 8.0.0"
     },
     "test-dependencies": {
+        "Janiczek/elm-list-cartesian": "1.0.2 <= v < 2.0.0",
         "elm-explorations/test": "2.2.0 <= v < 3.0.0"
     }
 }

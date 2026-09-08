@@ -10,6 +10,7 @@ module Elm.TypeInference.Type exposing
     , freeVars
     , freeVarsMono
     , freeVarsTypeEnv
+    , freshVar
     , fromTypeAnnotation
     , generalize
     , getDebugId
@@ -66,6 +67,14 @@ number theId =
 number_ : Id -> MonoType
 number_ theId =
     TypeVar ( Generated theId, Number )
+
+
+{-| When instantiating, we want to keep the supertype (eg. `number`) when making
+the fresh variable.
+-}
+freshVar : SuperType -> Id -> MonoType
+freshVar super theId =
+    TypeVar ( Generated theId, super )
 
 
 {-| TODO maybe remove some hardcoded types and refer to them with `external` == UserDefinedType?
@@ -333,17 +342,17 @@ closeOver : MonoType -> Type
 closeOver monoType =
     -- TODO Diehl normalizes the type var names to a,b,... but we want to keep them... maybe
     monoType
-        |> generalize Dict.empty
+        |> generalize Set.empty
 
 
-generalize : Dict VarName Type -> MonoType -> Type
-generalize typeEnv monoType =
+generalize : Set TypeVar -> MonoType -> Type
+generalize envFreeVars monoType =
     let
         boundIds : List TypeVar
         boundIds =
             Set.diff
                 (freeVarsMono monoType)
-                (freeVarsTypeEnv typeEnv)
+                envFreeVars
                 |> Set.toList
     in
     Forall boundIds monoType

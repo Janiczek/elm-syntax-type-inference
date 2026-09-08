@@ -11,7 +11,6 @@ import Elm.TypeInference.Type as Type
     exposing
         ( MonoType(..)
         , SuperType(..)
-        , Type(..)
         , TypeVar
         , TypeVarStyle(..)
         )
@@ -24,36 +23,8 @@ type alias TypeAlias =
     }
 
 
-unify : Dict ( FullModuleName, VarName ) TypeAlias -> Type -> Type -> TIState SubstitutionMap
-unify typeAliases ((Forall boundVars1 mono1) as t1) ((Forall boundVars2 mono2) as t2) =
-    if List.length boundVars1 /= List.length boundVars2 then
-        State.error <| TypeMismatch t1 t2
-
-    else
-        -- TODO this is most likely wrong
-        unifyMono typeAliases mono1 mono2
-
-
-unifyMany : Dict ( FullModuleName, VarName ) TypeAlias -> List ( Type, Type ) -> TIState SubstitutionMap
-unifyMany typeAliases equations =
-    let
-        go : SubstitutionMap -> List ( Type, Type ) -> TIState SubstitutionMap
-        go subst equations_ =
-            case equations_ of
-                [] ->
-                    State.pure subst
-
-                ( t1, t2 ) :: restOfEquations ->
-                    State.do (unify typeAliases t1 t2) <| \subst1 ->
-                    go
-                        (SubstitutionMap.compose subst1 subst)
-                        (List.map (SubstitutionMap.substituteTypeEquation subst1) restOfEquations)
-    in
-    go SubstitutionMap.empty equations
-
-
-unifyManyMono : Dict ( FullModuleName, VarName ) TypeAlias -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
-unifyManyMono typeAliases eqs =
+unifyMany : Dict ( FullModuleName, VarName ) TypeAlias -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
+unifyMany typeAliases eqs =
     case eqs of
         [] ->
             State.pure AssocList.empty
@@ -61,7 +32,7 @@ unifyManyMono typeAliases eqs =
         ( t1, t2 ) :: eqs_ ->
             State.do (unifyMono typeAliases t1 t2) <| \su1 ->
             State.do
-                (unifyManyMono
+                (unifyMany
                     typeAliases
                     (List.map
                         (Tuple.mapBoth
@@ -127,7 +98,7 @@ unifyMono typeAliases rawT1 rawT2 =
 
             else
                 unifyMany typeAliases
-                    (List.map2 (\b1 b2 -> ( Type.mono b1, Type.mono b2 ))
+                    (List.map2 Tuple.pair
                         (Dict.values bindings1)
                         (Dict.values bindings2)
                     )
@@ -150,7 +121,7 @@ unifyMono typeAliases rawT1 rawT2 =
                     matched =
                         Dict.filter (\k _ -> Dict.member k er.fields) recordFields
                 in
-                unifyManyMono typeAliases
+                unifyMany typeAliases
                     (( er.type_, Record residual )
                         :: List.map2 Tuple.pair (Dict.values matched) (Dict.values er.fields)
                     )
@@ -199,7 +170,7 @@ unifyMono typeAliases rawT1 rawT2 =
             typeMismatch
 
         ( Function a, Function b ) ->
-            unifyManyMono
+            unifyMany
                 typeAliases
                 [ ( a.from, b.from )
                 , ( a.to, b.to )
@@ -215,7 +186,7 @@ unifyMono typeAliases rawT1 rawT2 =
             typeMismatch
 
         ( Tuple t1e1 t1e2, Tuple t2e1 t2e2 ) ->
-            unifyManyMono
+            unifyMany
                 typeAliases
                 [ ( t1e1, t2e1 )
                 , ( t1e2, t2e2 )
@@ -225,7 +196,7 @@ unifyMono typeAliases rawT1 rawT2 =
             typeMismatch
 
         ( Tuple3 t1e1 t1e2 t1e3, Tuple3 t2e1 t2e2 t2e3 ) ->
-            unifyManyMono
+            unifyMany
                 typeAliases
                 [ ( t1e1, t2e1 )
                 , ( t1e2, t2e2 )
@@ -278,7 +249,7 @@ unifyMono typeAliases rawT1 rawT2 =
                 tail =
                     Type.id_ tailId
             in
-            unifyManyMono
+            unifyMany
                 typeAliases
                 (( r1.type_, ExtensibleRecord { type_ = tail, fields = onlyIn2 } )
                     :: ( r2.type_, ExtensibleRecord { type_ = tail, fields = onlyIn1 } )
@@ -301,13 +272,13 @@ unifyMono typeAliases rawT1 rawT2 =
 
             else
                 List.map2 Tuple.pair ut1.args ut2.args
-                    |> unifyManyMono typeAliases
+                    |> unifyMany typeAliases
 
         ( UserDefinedType _, _ ) ->
             typeMismatch
 
         ( WebGLShader webgl1, WebGLShader webgl2 ) ->
-            unifyManyMono
+            unifyMany
                 typeAliases
                 [ ( Record webgl1.attributes, Record webgl2.attributes )
                 , ( Record webgl1.uniforms, Record webgl2.uniforms )

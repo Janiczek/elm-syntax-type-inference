@@ -1,6 +1,6 @@
-module Elm.TypeInference.Helpers exposing (TestError(..), getExprType, inferMainModule)
+module Elm.TypeInference.Helpers exposing (TestError(..), getDeclType, getExprType, inferMainModule, inferModules)
 
-import Dict
+import Dict exposing (Dict)
 import Elm.Parser
 import Elm.Processing
 import Elm.Syntax.Declaration as Declaration exposing (Declaration)
@@ -64,6 +64,57 @@ main =
                     |> List.find (\declNode -> getFunctionName (Node.value declNode) == Just "main")
                     |> Maybe.andThen (\mainNode -> TypeLookupTable.get (Node.range mainNode) lookupTable)
                     |> Result.fromMaybe CouldntFindMainDeclaration
+            )
+
+
+inferModules : Dict ModuleName String -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
+inferModules modules =
+    modules
+        |> Dict.foldl
+            (\moduleName code acc ->
+                acc
+                    |> Result.andThen
+                        (\filesAcc ->
+                            code
+                                |> Elm.Parser.parse
+                                |> Result.map (Elm.Processing.process Elm.Processing.init)
+                                |> Result.mapError (List.map Debug.toString >> CouldntParse)
+                                |> Result.map (\file -> Dict.insert moduleName file filesAcc)
+                        )
+            )
+            (Ok Dict.empty)
+        |> Result.andThen
+            (\files ->
+                Elm.TypeInference.infer files
+                    |> Result.mapError CouldntInfer
+                    |> Result.map
+                        (\lookupTables ->
+                            files
+                                |> Dict.map
+                                    (\moduleName file ->
+                                        ( file
+                                        , Dict.get moduleName lookupTables
+                                            |> Maybe.withDefault (TypeLookupTable.fromDict moduleName Dict.empty)
+                                        )
+                                    )
+                        )
+            )
+
+
+getDeclType : Dict ModuleName String -> ModuleName -> String -> Result TestError Type
+getDeclType modules moduleName declName =
+    inferModules modules
+        |> Result.andThen
+            (\inferred ->
+                Dict.get moduleName inferred
+                    |> Result.fromMaybe CouldntFindMainModule
+                    |> Result.andThen
+                        (\( file, lookupTable ) ->
+                            file.declarations
+                                |> List.find (\declNode -> getFunctionName (Node.value declNode) == Just declName)
+                                |> Maybe.andThen (\declNode -> TypeLookupTable.get (Node.range declNode) lookupTable)
+                                |> Result.fromMaybe CouldntFindMainDeclaration
+                        )
             )
 
 

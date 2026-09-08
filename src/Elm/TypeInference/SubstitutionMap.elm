@@ -7,7 +7,6 @@ module Elm.TypeInference.SubstitutionMap exposing
     , substitute
     , substituteMono
     , substituteTypeEnv
-    , substituteTypeEquation
     )
 
 import AssocList
@@ -84,10 +83,3 @@ substituteMono substitutions monoType =
 substituteTypeEnv : SubstitutionMap -> Dict VarName Type -> Dict VarName Type
 substituteTypeEnv substitutions env =
     Dict.map (always (substitute substitutions)) env
-
-
-substituteTypeEquation : AssocList.Dict TypeVar MonoType -> ( Type, Type ) -> ( Type, Type )
-substituteTypeEquation substitutions ( t1, t2 ) =
-    ( substitute substitutions t1
-    , substitute substitutions t2
-    )

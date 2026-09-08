@@ -1,12 +1,14 @@
 module Elm.TypeInference.State exposing
-    ( TIState, State, init
+    ( TIState, State, PackageName, GlobalKey, init
     , pure, error, fromTuple, fromMaybe, run
     , map, map2, map3, andMap, mapError
     , do, andThen, traverse, combine
     , getNextIdAndTick
     , getNodeIds, idForNode, aliasNodeId
-    , getVarTypes, getTypesForVar, addVarType
-    , getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
+    , getSubst, composeSubst
+    , getTypeEnv, addBinding, existsInEnv, lookupEnv, withScopedEnv
+    , getGlobalEnv, addGlobalBinding, lookupGlobalEnv
+    , generalize
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -14,7 +16,7 @@ module Elm.TypeInference.State exposing
 
 # General
 
-@docs TIState, State, init
+@docs TIState, State, PackageName, GlobalKey, init
 
 
 # Utilities
@@ -34,14 +36,24 @@ module Elm.TypeInference.State exposing
 @docs getNodeIds, idForNode, aliasNodeId
 
 
-# Var types:
+# The accumulated solution
 
-@docs getVarTypes, getTypesForVar, addVarType
+@docs getSubst, composeSubst
 
 
-# Type env: useful for let..in scoping etc.
+# Type env: lexical scoping (lambda args, let..in, case branches)
 
-@docs getTypeEnv, addBinding, addSubstitutions, existsInEnv, lookupEnv
+@docs getTypeEnv, addBinding, existsInEnv, lookupEnv, withScopedEnv
+
+
+# Global env: top-level declarations, constructors, ports, (later) dependencies
+
+@docs getGlobalEnv, addGlobalBinding, lookupGlobalEnv
+
+
+# Generalization
+
+@docs generalize
 
 -}
 
@@ -61,32 +73,46 @@ import RangeLike exposing (RangeLike)
 -- GENERAL
 
 
+{-| `""` for the first-party project being inferred,
+package name ("foo/bar") for deps from `docs.json` (TODO)
+-}
+type alias PackageName =
+    String
+
+
+{-| Key into `globalEnv`: we need to qualify by package as well because of
+situations where full qualified module names are not unique (eg.
+`stil4m/elm-syntax` has its own `Char.Extra` while a project using it might use
+`Char.Extra` from `elmcraft/core-extra`).
+-}
+type alias GlobalKey =
+    ( PackageName, FullModuleName, VarName )
+
+
 type alias State =
     { {- ID counter, making sure every expression gets its own unique ID
          number. As long as we only expose `getNextIdAndTick` as a way to get
          the ID, they'll automatically increment.
       -}
       nextId : Id
-    , {- A dict from variable names to their types/type IDs.
-
-         This is mainly important because we allow any order of declarations vs
-         their usages. We can't really look stuff up in the environment as we
-         find the usages; we need to defer that until later.
-
-         Usually one of these IDs will be something of substance (type taken
-         from the actual expression in the declaration of a var) and the rest
-         will be just type IDs of its usages. That way we can link them
-         together.
-      -}
-      varTypes : Dict ( FullModuleName, VarName ) (List Type)
     , -- Type ID for each AST node. Ends up being TypeLookupTable.
       nodeIds : Dict FullModuleName (Dict RangeLike Id)
-    , {- Environment holding types for our various variables and bindings.
-
-         This is not global state, as it will change and flow as we go in and out
-         of let..in expressions and lambdas etc.
+    , {- Environment holding types for lexical bindings: lambda args, let..in,
+         case branch patterns. Scoped in and out via `withScopedEnv`, unlike
+         `globalEnv` below.
       -}
       typeEnv : Dict VarName Type
+    , {- Top-level declarations, constructors, ports, and (later) dependency
+         values.
+         Never scoped away: once binding group solves and generalizes, the final
+         type stays here forever.
+      -}
+      globalEnv : Dict GlobalKey Type
+    , {- The solution accumulated so far.
+         Never scoped away, a constraint discovered inside a lambda about an
+         outer binding must survive the lambda.
+      -}
+      subst : SubstitutionMap
     }
 
 
@@ -227,11 +253,12 @@ modify fn =
 init : Dict VarName Type -> State
 init env =
     { nextId = 0
-    , varTypes = Dict.empty
     , nodeIds = Dict.empty
     , typeEnv =
         -- When testing, you can populate this with types without having actual definitions present.
         env
+    , globalEnv = Dict.empty
+    , subst = SubstitutionMap.empty
     }
 
 
@@ -291,43 +318,26 @@ aliasNodeId moduleName range theId =
 
 
 
--- VAR TYPES
+-- THE ACCUMULATED SOLUTION
 
 
-getVarTypes : TIState (Dict ( FullModuleName, VarName ) (List Type))
-getVarTypes =
+getSubst : TIState SubstitutionMap
+getSubst =
     get
-        |> map .varTypes
+        |> map .subst
 
 
-getTypesForVar : FullModuleName -> VarName -> TIState (List Type)
-getTypesForVar moduleName varName =
-    getVarTypes
-        |> map (Dict.get ( moduleName, varName ) >> Maybe.withDefault [])
-
-
-addVarType : FullModuleName -> VarName -> Type -> TIState ()
-addVarType moduleName varName type_ =
-    modify
-        (\state ->
-            { state
-                | varTypes =
-                    state.varTypes
-                        |> Dict.update ( moduleName, varName )
-                            (\maybeTypes ->
-                                case maybeTypes of
-                                    Nothing ->
-                                        Just [ type_ ]
-
-                                    Just types ->
-                                        Just (type_ :: types)
-                            )
-            }
-        )
+{-| Add a new subst to what we already have.
+Left-biased: `newSubst` wins over `state.subst` (but that should never matter,
+each group binds its own fresh vars).
+-}
+composeSubst : SubstitutionMap -> TIState ()
+composeSubst newSubst =
+    modify (\state -> { state | subst = SubstitutionMap.compose newSubst state.subst })
 
 
 
--- TYPE ENV
+-- TYPE ENV (lexical)
 
 
 getTypeEnv : TIState (Dict VarName Type)
@@ -349,11 +359,31 @@ addBinding var type_ =
     modifyTypeEnv (Dict.insert var type_)
 
 
-addSubstitutions : SubstitutionMap -> TIState ()
-addSubstitutions subst =
-    modifyTypeEnv (SubstitutionMap.substituteTypeEnv subst)
+{-| Run `action`, then restore `typeEnv` back.
+Leave `nextId`, `nodeIds`, `globalEnv` and `subst` updated.
+
+This makes args, let bindings etc. not leak into the rest of the program.
+
+-}
+withScopedEnv : TIState a -> TIState a
+withScopedEnv action =
+    \state ->
+        let
+            ( result, newState ) =
+                action state
+        in
+        ( result, { newState | typeEnv = state.typeEnv } )
 
 
+existsInEnv : VarName -> TIState Bool
+existsInEnv varName =
+    getTypeEnv
+        |> map (Dict.member varName)
+
+
+{-| Look up a lexical binding (let..in var, lambda arg, ...), substituting all
+typevars that we can.
+-}
 lookupEnv : FullModuleName -> VarName -> TIState MonoType
 lookupEnv thisModule var =
     do getTypeEnv <| \env ->
@@ -366,13 +396,42 @@ lookupEnv thisModule var =
                     }
 
         Just type_ ->
-            instantiate type_
+            do getSubst <| \subst ->
+            instantiate (SubstitutionMap.substitute subst type_)
 
 
-existsInEnv : VarName -> TIState Bool
-existsInEnv varName =
-    getTypeEnv
-        |> map (Dict.member varName)
+
+-- GLOBAL ENV
+
+
+getGlobalEnv : TIState (Dict GlobalKey Type)
+getGlobalEnv =
+    get
+        |> map .globalEnv
+
+
+addGlobalBinding : GlobalKey -> Type -> TIState ()
+addGlobalBinding key type_ =
+    modify (\state -> { state | globalEnv = Dict.insert key type_ state.globalEnv })
+
+
+{-| Look up a global name (top-level/constructor/port/dependency), substituting
+all typevars that we can.
+-}
+lookupGlobalEnv : FullModuleName -> VarName -> TIState MonoType
+lookupGlobalEnv moduleName var =
+    do getGlobalEnv <| \env ->
+    case Dict.get ( "", moduleName, var ) env of
+        Nothing ->
+            error <|
+                VarNotFound
+                    { usedIn = moduleName
+                    , varName = var
+                    }
+
+        Just type_ ->
+            do getSubst <| \subst ->
+            instantiate (SubstitutionMap.substitute subst type_)
 
 
 instantiate : Type -> TIState MonoType
@@ -381,10 +440,35 @@ instantiate (Forall boundVars monoType) =
     let
         subst : SubstitutionMap
         subst =
-            List.map2 (\var id -> ( var, Type.id_ id ))
+            List.map2
+                (\(( _, super ) as var) freshId ->
+                    ( var
+                    , -- keep the constraint (eg. `number`)
+                      Type.freshVar super freshId
+                    )
+                )
                 boundVars
                 varIds
                 |> AssocList.fromList
     in
     SubstitutionMap.substituteMono subst monoType
         |> pure
+
+
+
+-- GENERALIZATION
+
+
+generalize : Dict VarName Type -> MonoType -> TIState Type
+generalize env monoType =
+    do getSubst <| \subst ->
+    let
+        substitutedEnv : Dict VarName Type
+        substitutedEnv =
+            SubstitutionMap.substituteTypeEnv subst env
+
+        substitutedMono : MonoType
+        substitutedMono =
+            SubstitutionMap.substituteMono subst monoType
+    in
+    pure <| Type.generalize (Type.freeVarsTypeEnv substitutedEnv) substitutedMono

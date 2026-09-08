@@ -3,7 +3,7 @@ module Tests exposing (..)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.TypeInference.Error exposing (Error)
-import Elm.TypeInference.Helpers exposing (TestError(..), getExprType, inferMainModule)
+import Elm.TypeInference.Helpers exposing (TestError(..), getDeclType, getExprType, inferMainModule)
 import Elm.TypeInference.State as State
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type
@@ -253,6 +253,13 @@ suite =
               ( "\\r -> (r.a, r.b)", isFunction (isExtensibleRecordWithFields [ ( "a", isVar ), ( "b", isVar ) ]) (isTuple isVar isVar) )
             , -- Extensible record works with more complex types
               ( "\\r -> ( r.a, [ r.a, 1.0 ] )", isFunction (isExtensibleRecordWithFields [ ( "a", is Float ) ]) (isTuple (is Float) (isList (is Float))) )
+            , -- Let-polymorphism: `id` is used with two different types
+              ( "let id x = x in (id 1, id ())", isTuple isNumber (is Unit) )
+            , ( "let const x y = x in (const 1 'a', const () \"b\")", isTuple isNumber (is Unit) )
+            , -- Nested generalization
+              ( "let f x = x in let g y = f y in (g 1, g ())", isTuple isNumber (is Unit) )
+            , -- Self-recursion doesn't block generalization
+              ( "let loop x = loop x in (loop 1, loop ())", isTuple isVar isVar )
 
             --, ( """
             --    let
@@ -261,7 +268,6 @@ suite =
             --    in
             --    x
             --    """, is Float )
-            -- , ( "let id x = x in (id 1, id ())", isTuple isNumber (is Unit) )
             -- , ( "if True then 1 else 2", isNumber ) -- TODO will need us to provide all the project deps as files
             -- , ( "let x = 1 in x + 1.0", is Float ) -- needs to know about `+`
             -- TODO check type annotations are checked in let
@@ -289,6 +295,11 @@ suite =
             , ( "case 1 of\n    'a' -> 1\n    _ -> 2", fails ) -- pattern doesn't match scrutinee
             , ( "case 1 of\n    1 -> 'a'\n    _ -> 2", fails ) -- branch bodies disagree
             , ( "\\r -> ( [ r.a, 1.0 ], [ r.a, 'x' ] )", fails ) -- `r.a` forced to both Float and Char via row unification
+            , ( "let a = (\\x -> x) 1 in x", fails ) -- inner scope must not leak
+            , ( "(\\y -> (\\x -> x) y) x", fails )
+            , ( "\\f -> (f 1, f ())", fails ) -- Lambdas don't generalize, only let-polymorphism does
+            , ( "\\f -> let g = f in (g 1, g ())", fails )
+            , ( "let f x = (f 1, f ()) in f", fails )
             ]
     in
     Test.describe "Elm.TypeInference"
@@ -360,6 +371,144 @@ main = ()
         -- TODO number later used with an int -> coerced into an int
         -- TODO number later used with a float -> coerced into a float
         , unifyAliasSuite
+        , bindingGroupSuite
+        ]
+
+
+bindingGroupSuite : Test
+bindingGroupSuite =
+    Test.describe "binding groups"
+        [ Test.test "top-level declaration order doesn't matter" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main = helper 1
+helper x = x
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "number0")
+
+        {- , Test.todo """
+           mutual recursion between two top-level declarations
+
+           module Main exposing (main)
+
+           isEven n = if n == 0 then True else isOdd n
+           isOdd n = if n == 0 then False else isEven n
+           main = isEven
+           """
+        -}
+        , Test.test "a top-level var is usable, at its own inferred type, across modules" <|
+            \() ->
+                let
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Other" ]
+                              , """
+module Other exposing (identity)
+
+identity x = x
+"""
+                              )
+                            , ( [ "Main" ]
+                              , """
+module Main exposing (main)
+
+import Other
+
+main = Other.identity 1
+"""
+                              )
+                            ]
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Ok >> isNumber)
+                    |> Expect.equal (Ok True)
+        , Test.test "a project's own custom-type constructor is usable in an expression" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+type Box a = Box a
+main = Box 1
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Main.Box number0")
+        , Test.test "a custom operator declaration is type-checked (infix usage)" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+myAdd a b = a
+
+infix left 6 (+) = myAdd
+
+main = 1 + 2
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Ok >> isNumber)
+                    |> Expect.equal (Ok True)
+        , Test.test "a custom operator declaration is type-checked (prefix usage)" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+myAdd a b = a
+
+infix left 6 (+) = myAdd
+
+main = (+) 1 2
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Ok >> isNumber)
+                    |> Expect.equal (Ok True)
+        , Test.test "a custom operator declaration aliasing an imported function is type-checked" <|
+            \() ->
+                let
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Other" ]
+                              , """
+module Other exposing (myAdd)
+
+myAdd a b = a
+"""
+                              )
+                            , ( [ "Main" ]
+                              , """
+module Main exposing (main)
+
+import Other exposing (myAdd)
+
+infix left 6 (+) = myAdd
+
+main = 1 + 2
+"""
+                              )
+                            ]
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Ok >> isNumber)
+                    |> Expect.equal (Ok True)
         ]
 
 
@@ -374,7 +523,7 @@ var n =
 
 runUnify : Dict ( FullModuleName.FullModuleName, String ) Unify.TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
-    Unify.unifyMany typeAliases (List.map (Tuple.mapBoth Type.mono Type.mono) eqs)
+    Unify.unifyMany typeAliases eqs
         |> State.run (State.init Dict.empty)
         |> Tuple.first
 

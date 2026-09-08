@@ -2,6 +2,7 @@ module Elm.Syntax.File.Extra exposing
     ( containsDeclaration
     , exposes
     , moduleName
+    , resolveOperatorFunction
     , unalias
     )
 
@@ -50,6 +51,25 @@ containsDeclaration varName file =
                     Destructuring pattern _ ->
                         List.member varName (Pattern.varNames (Node.value pattern))
             )
+
+
+resolveOperatorFunction : VarName -> File -> Maybe VarName
+resolveOperatorFunction operator file =
+    file.declarations
+        |> List.filterMap
+            (\declNode ->
+                case Node.value declNode of
+                    InfixDeclaration infix ->
+                        if Node.value infix.operator == operator then
+                            Just (Node.value infix.function)
+
+                        else
+                            Nothing
+
+                    _ ->
+                        Nothing
+            )
+        |> List.head
 
 
 exposes : VarName -> File -> Bool
