@@ -25,9 +25,9 @@ import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies, DependencyPackage)
 import Elm.TypeInference.Error as Error exposing (Error(..))
 import Elm.TypeInference.Infer as Infer
+import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (PackageName, TIState)
-import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type as Type exposing (Id, MonoType(..), TypeResolver)
 import Elm.TypeInference.Unify exposing (TypeAlias)
@@ -133,12 +133,12 @@ infer_ deps files typeAliases =
                         -- Resolve operator aliases to the underlying functions
                         |> List.filterMap
                             (\( maybeModuleName, varName ) ->
-                                case VarModuleLookup.moduleOfVar deps files file (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
+                                case ModuleLookup.moduleOfVar deps files file (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
                                     Ok (Just ( "", fullModuleName )) ->
                                         let
                                             resolvedKey : ( FullModuleName, VarName )
                                             resolvedKey =
-                                                VarModuleLookup.resolveOperatorFunction files fullModuleName varName
+                                                ModuleLookup.resolveOperatorFunction files fullModuleName varName
                                                     |> Result.withDefault Nothing
                                                     |> Maybe.withDefault ( fullModuleName, varName )
                                         in
@@ -219,7 +219,7 @@ gatherTypeAliases deps files =
                 let
                     resolver : TypeResolver
                     resolver =
-                        VarModuleLookup.typeResolverFor deps files file
+                        ModuleLookup.typeResolverFor deps files file
                 in
                 file.declarations
                     |> List.map
@@ -266,7 +266,7 @@ registerConstructorsAndPorts deps files =
                 let
                     resolver : TypeResolver
                     resolver =
-                        VarModuleLookup.typeResolverFor deps files file
+                        ModuleLookup.typeResolverFor deps files file
                 in
                 file.declarations
                     |> State.traverse

@@ -395,18 +395,19 @@ meet a b =
             ( Appendable, Number ) ->
                 Nothing
 
-            -- TODO the following ones feel weird. Why not return Just here?
+            -- The a == b guard above makes these diagonal branches unreachable
+            -- but let's not use wildcards anyways
             ( Number, Number ) ->
-                Nothing
+                Just a
 
             ( Comparable, Comparable ) ->
-                Nothing
+                Just a
 
             ( Appendable, Appendable ) ->
-                Nothing
+                Just a
 
             ( CompAppend, CompAppend ) ->
-                Nothing
+                Just a
 
 
 accepts : SuperType -> MonoType -> Bool

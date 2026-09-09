@@ -1,11 +1,9 @@
-module Elm.TypeInference.State.VarModuleLookup exposing
+module Elm.TypeInference.ModuleLookup exposing
     ( findModuleOfVar
     , moduleOfVar
     , resolveOperatorFunction
     , typeResolverFor
     )
-
--- TODO rename this to DeclModuleLookup? It's not really about vars inside exprs...
 
 import Dict exposing (Dict)
 import Elm.Docs

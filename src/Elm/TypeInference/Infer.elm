@@ -31,9 +31,9 @@ import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error as Error exposing (Error(..))
+import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (PackageName, TIState)
-import Elm.TypeInference.State.VarModuleLookup as StateLookup
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type
     exposing
@@ -62,7 +62,7 @@ type alias Ctx =
 
 typeResolver : Ctx -> TypeResolver
 typeResolver ctx =
-    StateLookup.typeResolverFor ctx.dependencies ctx.files ctx.thisFile
+    ModuleLookup.typeResolverFor ctx.dependencies ctx.files ctx.thisFile
 
 
 type alias Inferred =
@@ -94,11 +94,11 @@ functionType argIds resultId =
 -}
 lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> TIState MonoType
 lookupVarOrOperator ctx maybeModuleName name =
-    State.do (StateLookup.findModuleOfVar ctx.dependencies ctx.files ctx.thisFile maybeModuleName name) <| \( package, moduleName ) ->
+    State.do (ModuleLookup.findModuleOfVar ctx.dependencies ctx.files ctx.thisFile maybeModuleName name) <| \( package, moduleName ) ->
     let
         ( aliasedPackage, aliasedModuleName, aliasedName ) =
             if package == "" then
-                StateLookup.resolveOperatorFunction ctx.files moduleName name
+                ModuleLookup.resolveOperatorFunction ctx.files moduleName name
                     |> Result.withDefault Nothing
                     |> Maybe.map (\( m, n ) -> ( "", m, n ))
                     |> Maybe.withDefault ( package, moduleName, name )
@@ -292,7 +292,7 @@ inferExpr ctx exprNode =
 
         FunctionOrValue moduleName varName ->
             case
-                StateLookup.moduleOfVar
+                ModuleLookup.moduleOfVar
                     ctx.dependencies
                     ctx.files
                     ctx.thisFile
@@ -821,7 +821,7 @@ inferPattern ctx patternNode =
 
         NamedPattern customType args ->
             State.do
-                (StateLookup.findModuleOfVar
+                (ModuleLookup.findModuleOfVar
                     ctx.dependencies
                     ctx.files
                     ctx.thisFile

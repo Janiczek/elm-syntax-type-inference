@@ -22,7 +22,7 @@ import Transform
 
 
 type alias SubstitutionMap =
-    -- TODO shouldn't this be to Type instead?
+    -- values in the Dict are MonoType <=> Elm doesn't have higher-rank polymorphism
     AssocList.Dict TypeVar MonoType
 
 

@@ -374,7 +374,6 @@ freeVarsTypeEnv env =
 
 closeOver : MonoType -> Type
 closeOver monoType =
-    -- TODO Diehl normalizes the type var names to a,b,... but we want to keep them... maybe
     monoType
         |> generalize Set.empty
 
