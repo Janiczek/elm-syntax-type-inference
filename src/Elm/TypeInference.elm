@@ -2,7 +2,9 @@ module Elm.TypeInference exposing (infer)
 
 {-| TODO write docs
 
-TODO check declarations against their type annotations
+Note: Type annotations are trusted, not checked: this library is written with
+elm-review in mind, which runs _after_ Elm compiler has typechecked the code.
+If you would benefit from this library checking annotations, let me know!
 
 @docs infer
 

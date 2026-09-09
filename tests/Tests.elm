@@ -294,18 +294,10 @@ suite =
             --    in
             --    x
             --    """, is Float )
-            -- , ( "if True then 1 else 2", isNumber ) -- TODO will need us to provide all the project deps as files
-            -- , ( "let x = 1 in x + 1.0", is Float ) -- needs to know about `+`
             -- TODO check type annotations are checked in let
             -- TODO check type annotations are checked in top-level declarations
-            -- TODO Application (List (ExprWith meta))
-            -- TODO OperatorApplication String InfixDirection (ExprWith meta) (ExprWith meta)
-            -- TODO FunctionOrValue ModuleName String
-            -- TODO IfBlock (ExprWith meta) (ExprWith meta) (ExprWith meta)
-            -- TODO PrefixOperator String
-            -- TODO Operator String
-            -- TODO LetExpression (LetBlock meta)
-            -- TODO CaseExpression (CaseBlock meta)
+            -- Operator String is desugared away by Elm.Processing.process before we
+            -- see it (Infer.elm maps it to impossibleExpr), so it's untestable here.
             -- TODO RecordUpdateExpression (LocatedNode String) (List (LocatedNode (RecordSetter meta)))
             -- , ( "{ record | a = 123 }", isRecord [ ( "a", isNumber ) ] ) -- TODO needs `record` in scope
             -- TODO GLSLExpression String

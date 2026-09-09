@@ -74,7 +74,7 @@ import RangeLike exposing (RangeLike)
 
 
 {-| `""` for the first-party project being inferred,
-package name ("foo/bar") for deps from `docs.json` (TODO)
+package name ("foo/bar") for deps from `docs.json`
 -}
 type alias PackageName =
     String

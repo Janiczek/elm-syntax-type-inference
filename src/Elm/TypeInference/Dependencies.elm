@@ -255,10 +255,8 @@ registerUnion pkgName fullModuleName resolver union =
         resultType : MonoType
         resultType =
             if pkgName == "elm/core" && FullModuleName.toString fullModuleName == "Basics" && union.name == "Bool" then
-                -- `Bool`/`True`/`False` are a `MonoType` primitive, not a `UserDefinedType`
-                -- (every other place in this codebase, eg. `IfBlock`'s condition
-                -- equation, assumes `Bool` the constructor, not a nominal type).
-                -- TODO explain why
+                -- Bool/True/False are a MonoType primitive, not an UserDefinedType.
+                -- The type inference algorithm later expects it in IfBlocks etc.
                 Bool
 
             else
