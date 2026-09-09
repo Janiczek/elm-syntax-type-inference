@@ -10,6 +10,7 @@ module Elm.TypeInference.Type exposing
     , TypeVar
     , TypeVarStyle(..)
     , closeOver
+    , collapsePrimitive
     , external
     , freeVars
     , freeVarsMono
@@ -44,6 +45,7 @@ import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
+import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.VarName exposing (VarName)
 import List.ExtraExtra
 import Result.Extra
@@ -106,23 +108,11 @@ freshVar super theId =
     TypeVar ( Generated theId, super )
 
 
-{-| TODO maybe remove some hardcoded types and refer to them with `external` == UserDefinedType?
-
-Candidates:
-
-  - Int
-  - Float
-  - Char
-  - String
-  - Bool
-  - List
-
-See here:
-<https://github.com/elm/compiler/blob/39949053f9469862b17006e3965f3b440414d13c/compiler/src/Type/Type.hs#L196-L201>
-
-(Evan for some reason never needed to define a list type, while we do...)
-(Also, he defined Never. Why do we _not_ need that one?)
-
+{-| `Int`, `Float`, `Char`, `String`, `Bool` and `List` are deliberately kept as
+`MonoType` primitives instead of `UserDefinedType`, since that would make `elm/core`
+`docs.json` a hard prerequisite for all inference and turn `Unify`'s primitive arms
+into string comparisons. We actually do the inverse - turn qualified `Basics.Int`
+into the primitive in `collapsePrimitive`.
 -}
 type Type
     = Forall (List TypeVar) MonoType
@@ -217,6 +207,38 @@ external package moduleName typeName =
 mono : MonoType -> Type
 mono =
     Forall []
+
+
+{-| Converts `elm/core` `UserDefinedType` into a `MonoType` primitive
+(Int, Float, Bool, Char, String, List).
+-}
+collapsePrimitive : PackageName -> FullModuleName -> VarName -> List MonoType -> Maybe MonoType
+collapsePrimitive package moduleName name args =
+    if package /= ImplicitImports.package then
+        Nothing
+
+    else
+        case ( FullModuleName.toString moduleName, name, args ) of
+            ( "Basics", "Int", [] ) ->
+                Just Int
+
+            ( "Basics", "Float", [] ) ->
+                Just Float
+
+            ( "Basics", "Bool", [] ) ->
+                Just Bool
+
+            ( "Char", "Char", [] ) ->
+                Just Char
+
+            ( "String", "String", [] ) ->
+                Just String
+
+            ( "List", "List", [ inner ] ) ->
+                Just (List inner)
+
+            _ ->
+                Nothing
 
 
 
@@ -735,12 +757,15 @@ fromTypeAnnotation resolver typeAnnotation =
                                 |> Result.mapError AmbiguousModuleName
                                 |> Result.map
                                     (\( package, fullModuleName ) ->
-                                        UserDefinedType
-                                            { package = package
-                                            , moduleName = fullModuleName
-                                            , name = typeName
-                                            , args = args_
-                                            }
+                                        collapsePrimitive package fullModuleName typeName args_
+                                            |> Maybe.withDefault
+                                                (UserDefinedType
+                                                    { package = package
+                                                    , moduleName = fullModuleName
+                                                    , name = typeName
+                                                    , args = args_
+                                                    }
+                                                )
                                     )
                         )
                         args

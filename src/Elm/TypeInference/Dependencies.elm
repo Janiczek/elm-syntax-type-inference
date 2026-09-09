@@ -136,24 +136,6 @@ fromDocsType resolver type_ =
         Elm.Type.Tuple _ ->
             Err (ImpossibleDocsType type_)
 
-        Elm.Type.Type "Basics.Int" [] ->
-            Ok Int
-
-        Elm.Type.Type "Basics.Float" [] ->
-            Ok Float
-
-        Elm.Type.Type "Basics.Bool" [] ->
-            Ok Bool
-
-        Elm.Type.Type "Char.Char" [] ->
-            Ok Char
-
-        Elm.Type.Type "String.String" [] ->
-            Ok String
-
-        Elm.Type.Type "List.List" [ inner ] ->
-            Result.map List (fromDocsType resolver inner)
-
         Elm.Type.Type qualifiedName args ->
             let
                 ( moduleNameStr, typeName ) =
@@ -164,12 +146,15 @@ fromDocsType resolver type_ =
                     Result.Extra.combineMap (fromDocsType resolver) args
                         |> Result.map
                             (\argTypes ->
-                                UserDefinedType
-                                    { package = package
-                                    , moduleName = fullModuleName
-                                    , name = typeName
-                                    , args = argTypes
-                                    }
+                                Type.collapsePrimitive package fullModuleName typeName argTypes
+                                    |> Maybe.withDefault
+                                        (UserDefinedType
+                                            { package = package
+                                            , moduleName = fullModuleName
+                                            , name = typeName
+                                            , args = argTypes
+                                            }
+                                        )
                             )
                 )
                 (resolver moduleNameStr)
@@ -250,20 +235,23 @@ registerModule pkgName resolver mod =
 registerUnion : PackageName -> FullModuleName -> Resolver -> Elm.Docs.Union -> TIState ()
 registerUnion pkgName fullModuleName resolver union =
     let
+        args : List MonoType
+        args =
+            union.args |> List.map (\argName -> TypeVar ( Type.Named argName, Type.Normal ))
+
         resultType : MonoType
         resultType =
-            if pkgName == "elm/core" && FullModuleName.toString fullModuleName == "Basics" && union.name == "Bool" then
-                -- Bool/True/False are a MonoType primitive, not an UserDefinedType.
-                -- The type inference algorithm later expects it in IfBlocks etc.
-                Bool
-
-            else
-                UserDefinedType
-                    { package = pkgName
-                    , moduleName = fullModuleName
-                    , name = union.name
-                    , args = union.args |> List.map (\argName -> TypeVar ( Type.Named argName, Type.Normal ))
-                    }
+            -- We later expect eg. Bools in IfBlock conditions instead of
+            -- UserDefinedType "Bool"s, so let's collapse here
+            Type.collapsePrimitive pkgName fullModuleName union.name args
+                |> Maybe.withDefault
+                    (UserDefinedType
+                        { package = pkgName
+                        , moduleName = fullModuleName
+                        , name = union.name
+                        , args = args
+                        }
+                    )
     in
     union.tags
         |> State.traverse

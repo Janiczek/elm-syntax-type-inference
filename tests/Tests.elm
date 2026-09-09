@@ -707,7 +707,7 @@ main = Cmd.none
                 let
                     pkgCustomOps =
                         { name = "author/custom-ops"
-                        , dependencies = []
+                        , dependencies = [ "elm/core" ]
                         , modules =
                             [ { name = "CustomOps"
                               , comment = ""
@@ -742,8 +742,55 @@ import CustomOps exposing ((|=))
 main = 1 |= 2
 """
                 in
-                getDeclTypeWithDeps [ pkgCustomOps ] modules [ "Main" ] "main"
+                getDeclTypeWithDeps [ CoreFixture.core, pkgCustomOps ] modules [ "Main" ] "main"
                     |> Result.map (Ok >> is Int)
+                    |> Expect.equal (Ok True)
+        , Test.test "`Basics.Bool` unifies with `True` (qualified primitive)" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (x)
+
+x : Basics.Bool
+x = True
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "x"
+                    |> Result.map (Ok >> is Bool)
+                    |> Expect.equal (Ok True)
+        , Test.test "`x : B.Int` (aliased import) unifies with an Int literal" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (x)
+
+import Basics as B
+
+x : B.Int
+x = 1
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "x"
+                    |> Result.map (Ok >> is Int)
+                    |> Expect.equal (Ok True)
+        , Test.test "`x : Char.Char` unifies with a Char literal" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (x)
+
+x : Char.Char
+x = 'a'
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "x"
+                    |> Result.map (Ok >> is Char)
                     |> Expect.equal (Ok True)
         ]
 

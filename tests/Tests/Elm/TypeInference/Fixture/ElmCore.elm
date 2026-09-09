@@ -12,7 +12,7 @@ core : DependencyPackage
 core =
     { name = "elm/core"
     , dependencies = []
-    , modules = [ basics, maybe, list, platformCmd ]
+    , modules = [ basics, maybe, list, platformCmd, char ]
     }
 
 
@@ -30,6 +30,11 @@ basics =
           , comment = ""
           , args = []
           , tags = [ ( "LT", [] ), ( "EQ", [] ), ( "GT", [] ) ]
+          }
+        , { name = "Int"
+          , comment = ""
+          , args = []
+          , tags = [] -- opaque, matching real elm/core docs.json
           }
         ]
     , aliases = []
@@ -131,5 +136,22 @@ platformCmd =
           , tipe = Type "Platform.Cmd.Cmd" [ Var "msg" ]
           }
         ]
+    , binops = []
+    }
+
+
+char : Elm.Docs.Module
+char =
+    { name = "Char"
+    , comment = ""
+    , unions =
+        [ { name = "Char"
+          , comment = ""
+          , args = []
+          , tags = [] -- opaque, matching real elm/core docs.json
+          }
+        ]
+    , aliases = []
+    , values = []
     , binops = []
     }
