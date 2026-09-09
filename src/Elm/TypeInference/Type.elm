@@ -1,8 +1,12 @@
 module Elm.TypeInference.Type exposing
-    ( Id
+    ( FromTypeAnnotationError(..)
+    , Id
     , MonoType(..)
+    , PackageName
+    , ResolverAmbiguity
     , SuperType(..)
     , Type(..)
+    , TypeResolver
     , TypeVar
     , TypeVarStyle(..)
     , closeOver
@@ -22,6 +26,7 @@ module Elm.TypeInference.Type exposing
     , normalize
     , number
     , number_
+    , parseVarName
     , recurse
     , toString
     , varToString
@@ -40,13 +45,37 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.VarName exposing (VarName)
-import List.ExtraExtra as List
-import Result.Extra as Result
+import List.ExtraExtra
+import Result.Extra
 import Transform
 
 
 type alias Id =
     Int
+
+
+{-| "" for the first-party project being inferred,
+"foo/bar" for dependencies from docs.json
+-}
+type alias PackageName =
+    String
+
+
+{-| Type/module collision
+-}
+type alias ResolverAmbiguity =
+    { moduleName : String
+    , possiblePackages : List PackageName
+    }
+
+
+type alias TypeResolver =
+    List String -> String -> Result ResolverAmbiguity ( PackageName, FullModuleName )
+
+
+type FromTypeAnnotationError
+    = ImpossibleAnnotation TypeAnnotation
+    | AmbiguousModuleName ResolverAmbiguity
 
 
 id : Id -> Type
@@ -120,6 +149,9 @@ type TypeVarStyle
 type SuperType
     = Normal
     | {- Int | Float -} Number
+    | {- Int | Float | Char | String | List comparable | tuples of comparables -} Comparable
+    | {- String | List a -} Appendable
+    | {- String | List comparable -} CompAppend
 
 
 type MonoType
@@ -143,7 +175,8 @@ type MonoType
         , fields : Dict VarName MonoType
         }
     | UserDefinedType
-        { moduleName : FullModuleName
+        { package : PackageName
+        , moduleName : FullModuleName
         , name : VarName
         , args : List MonoType
         }
@@ -171,10 +204,11 @@ isParametric (Forall _ monoType) =
         |> List.any isParametric_
 
 
-external : FullModuleName -> VarName -> MonoType
-external moduleName typeName =
+external : PackageName -> FullModuleName -> VarName -> MonoType
+external package moduleName typeName =
     UserDefinedType
-        { moduleName = moduleName
+        { package = package
+        , moduleName = moduleName
         , name = typeName
         , args = []
         }
@@ -255,7 +289,7 @@ recursiveChildren : (MonoType -> List MonoType) -> MonoType -> List MonoType
 recursiveChildren fn type_ =
     let
         recordBindings bindings =
-            List.fastConcatMap fn (Dict.values bindings)
+            List.ExtraExtra.fastConcatMap fn (Dict.values bindings)
     in
     case type_ of
         TypeVar _ ->
@@ -298,7 +332,7 @@ recursiveChildren fn type_ =
             fn r.type_ ++ recordBindings r.fields
 
         UserDefinedType { args } ->
-            List.fastConcatMap fn args
+            List.ExtraExtra.fastConcatMap fn args
 
         WebGLShader { attributes, uniforms, varyings } ->
             recordBindings attributes
@@ -470,6 +504,24 @@ monoTypeToString type_ =
 varToString : TypeVar -> String
 varToString ( style, super ) =
     -- TODO this has issues: collisions between named and generated
+    let
+        prefix =
+            case super of
+                Normal ->
+                    ""
+
+                Number ->
+                    "number"
+
+                Comparable ->
+                    "comparable"
+
+                Appendable ->
+                    "appendable"
+
+                CompAppend ->
+                    "compappend"
+    in
     case ( super, style ) of
         ( Normal, Generated theId ) ->
             "#" ++ String.fromInt theId
@@ -477,11 +529,38 @@ varToString ( style, super ) =
         ( Normal, Named name ) ->
             name
 
-        ( Number, Generated theId ) ->
-            "number" ++ String.fromInt theId
+        ( _, Generated theId ) ->
+            prefix ++ String.fromInt theId
 
-        ( Number, Named name ) ->
-            "number" ++ name
+        ( _, Named name ) ->
+            prefix ++ name
+
+
+{-| Parse typevar; honor Elm's typeclasses (`number`, `comparable`, `appendable`, `compappend`).
+Possibly followed by a disambiguating suffix (`number1`).
+-}
+parseVarName : String -> TypeVar
+parseVarName name =
+    let
+        prefixes : List ( String, SuperType )
+        prefixes =
+            [ ( "compappend", CompAppend )
+            , ( "comparable", Comparable )
+            , ( "appendable", Appendable )
+            , ( "number", Number )
+            ]
+    in
+    prefixes
+        |> List.filterMap
+            (\( prefix, super ) ->
+                if String.startsWith prefix name then
+                    Just ( Named (String.dropLeft (String.length prefix) name), super )
+
+                else
+                    Nothing
+            )
+        |> List.head
+        |> Maybe.withDefault ( Named name, Normal )
 
 
 getDebugId : Type -> Int
@@ -584,16 +663,16 @@ ordToName n =
     go n
 
 
-fromTypeAnnotation : TypeAnnotation -> Result TypeAnnotation MonoType
-fromTypeAnnotation typeAnnotation =
+fromTypeAnnotation : TypeResolver -> TypeAnnotation -> Result FromTypeAnnotationError MonoType
+fromTypeAnnotation resolver typeAnnotation =
     let
-        f : TypeAnnotation -> Result TypeAnnotation MonoType
+        f : TypeAnnotation -> Result FromTypeAnnotationError MonoType
         f annotation =
-            fromTypeAnnotation annotation
+            fromTypeAnnotation resolver annotation
 
         recordBindings :
             List (Node ( Node String, Node TypeAnnotation ))
-            -> Result TypeAnnotation (Dict VarName MonoType)
+            -> Result FromTypeAnnotationError (Dict VarName MonoType)
         recordBindings fields =
             fields
                 |> List.map
@@ -602,44 +681,71 @@ fromTypeAnnotation typeAnnotation =
                             ( fieldNameNode, annotationNode ) =
                                 Node.value fieldNode
 
-                            type_ : Result TypeAnnotation MonoType
+                            type_ : Result FromTypeAnnotationError MonoType
                             type_ =
                                 f (Node.value annotationNode)
                         in
                         type_
                             |> Result.map (\type__ -> ( Node.value fieldNameNode, type__ ))
                     )
-                |> Result.combine
+                |> Result.Extra.combine
                 |> Result.map Dict.fromList
     in
     case typeAnnotation of
         TypeAnnotation.GenericType name ->
-            Ok <| TypeVar ( Named name, Normal )
+            Ok <| TypeVar (parseVarName name)
 
         TypeAnnotation.Typed name annotations ->
             let
                 ( moduleName, typeName ) =
                     Node.value name
 
-                fullModuleName : FullModuleName
-                fullModuleName =
-                    FullModuleName.fromModuleName_ moduleName
-
-                args : Result TypeAnnotation (List MonoType)
+                args : Result FromTypeAnnotationError (List MonoType)
                 args =
                     annotations
                         |> List.map (Node.value >> f)
-                        |> Result.combine
+                        |> Result.Extra.combine
             in
-            args
-                |> Result.map
-                    (\args_ ->
-                        UserDefinedType
-                            { moduleName = fullModuleName
-                            , name = typeName
-                            , args = args_
-                            }
-                    )
+            case ( moduleName, typeName ) of
+                ( [], "Int" ) ->
+                    Ok Int
+
+                ( [], "Float" ) ->
+                    Ok Float
+
+                ( [], "Bool" ) ->
+                    Ok Bool
+
+                ( [], "Char" ) ->
+                    Ok Char
+
+                ( [], "String" ) ->
+                    Ok String
+
+                ( [], "List" ) ->
+                    case annotations of
+                        [ single ] ->
+                            f (Node.value single) |> Result.map List
+
+                        _ ->
+                            Err (ImpossibleAnnotation typeAnnotation)
+
+                _ ->
+                    Result.andThen
+                        (\args_ ->
+                            resolver moduleName typeName
+                                |> Result.mapError AmbiguousModuleName
+                                |> Result.map
+                                    (\( package, fullModuleName ) ->
+                                        UserDefinedType
+                                            { package = package
+                                            , moduleName = fullModuleName
+                                            , name = typeName
+                                            , args = args_
+                                            }
+                                    )
+                        )
+                        args
 
         TypeAnnotation.Unit ->
             Ok Unit
@@ -656,7 +762,7 @@ fromTypeAnnotation typeAnnotation =
                 (f (Node.value c))
 
         TypeAnnotation.Tupled _ ->
-            Err typeAnnotation
+            Err (ImpossibleAnnotation typeAnnotation)
 
         TypeAnnotation.Record fields ->
             recordBindings fields

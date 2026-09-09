@@ -5,7 +5,7 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
-import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.State as State exposing (PackageName, TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type exposing (Id, MonoType, Type)
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
@@ -29,7 +29,7 @@ type alias Member =
     }
 
 
-solveGroup : Dict ( FullModuleName, VarName ) TypeAlias -> List Member -> TIState ()
+solveGroup : Dict ( PackageName, FullModuleName, VarName ) TypeAlias -> List Member -> TIState ()
 solveGroup typeAliases members =
     State.do State.getLexicalEnv <| \outerEnv ->
     State.do

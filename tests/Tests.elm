@@ -1,9 +1,10 @@
 module Tests exposing (..)
 
 import Dict exposing (Dict)
+import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName
-import Elm.TypeInference.Error exposing (Error)
-import Elm.TypeInference.Helpers exposing (TestError(..), getDeclType, getExprType, inferMainModule)
+import Elm.Type
+import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type
@@ -15,8 +16,18 @@ import Elm.TypeInference.Type as Type
         )
 import Elm.TypeInference.Unify as Unify
 import Expect
-import String.ExtraExtra as String
+import String.ExtraExtra
 import Test exposing (Test)
+import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
+import Tests.Elm.TypeInference.Helpers
+    exposing
+        ( TestError(..)
+        , getDeclType
+        , getDeclTypeWithDeps
+        , getExprType
+        , getExprTypeWithDeps
+        , inferMainModule
+        )
 import TypeLookupTable
 
 
@@ -24,7 +35,7 @@ testExpr : ( String, Result Error Type -> Bool ) -> Test
 testExpr ( exprCode, predicate ) =
     let
         trimmedExprCode =
-            String.multilineInput exprCode
+            String.ExtraExtra.multilineInput exprCode
     in
     Test.test trimmedExprCode <|
         \() ->
@@ -73,6 +84,21 @@ isList innerCheck actual =
     case actual of
         Ok (Forall [] (List inner)) ->
             innerCheck (Ok (Forall [] inner))
+
+        _ ->
+            False
+
+
+isMaybe : (Result Error Type -> Bool) -> Result Error Type -> Bool
+isMaybe innerCheck actual =
+    case actual of
+        Ok (Forall [] (UserDefinedType { name, args })) ->
+            case ( name, args ) of
+                ( "Maybe", [ inner ] ) ->
+                    innerCheck (Ok (Forall [] inner))
+
+                _ ->
+                    False
 
         _ ->
             False
@@ -372,6 +398,361 @@ main = ()
         -- TODO number later used with a float -> coerced into a float
         , unifyAliasSuite
         , bindingGroupSuite
+        , dependenciesSuite
+        ]
+
+
+dependenciesSuite : Test
+dependenciesSuite =
+    let
+        testWithCore : ( String, Result Error Type -> Bool ) -> Test
+        testWithCore ( exprCode, predicate ) =
+            Test.test exprCode <|
+                \() ->
+                    case getExprTypeWithDeps [ CoreFixture.core ] exprCode of
+                        Err (CouldntInfer err) ->
+                            predicate (Err err)
+                                |> Expect.equal True
+                                |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
+
+                        Ok type_ ->
+                            predicate (Ok type_)
+                                |> Expect.equal True
+                                |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
+
+                        Err err ->
+                            Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+    in
+    Test.describe "3rd party dependency types (using an elm/core fixture)"
+        [ Test.describe "good expressions"
+            (List.map testWithCore
+                [ ( "if True then 1 else 2", isNumber )
+                , ( "let x = 1 in x + 1.0", is Float )
+                , ( "Just 1", isMaybe isNumber )
+                , ( "List.map (\\x -> x + 1) [ 1, 2, 3 ]", isList isNumber )
+                , ( "List.map (\\x -> x + 1.0) [ 1.0 ]", isList (is Float) )
+                , ( "1 == 2", is Bool )
+                , ( "1 :: [ 2 ]", isList isNumber ) -- (::) comes from the implicit `import List exposing (List, (::))`
+                ]
+            )
+        , Test.describe "bad expressions"
+            (List.map testWithCore
+                [ ( "if 1 then 1 else 2", fails ) -- condition must be Bool
+                , ( "True + 1", fails ) -- Bool isn't a number
+                ]
+            )
+        , Test.test "a module name exposed by one package and shipped internally by another stays two distinct types" <|
+            \() ->
+                let
+                    pkgA =
+                        { name = "authorA/pkg-a"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "ModuleA"
+                              , comment = ""
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "consume"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "Char.Extra.Classification" [])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    pkgB =
+                        { name = "authorB/pkg-b"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Char.Extra"
+                              , comment = ""
+                              , unions =
+                                    [ { name = "Classification"
+                                      , comment = ""
+                                      , args = []
+                                      , tags = [ ( "Alpha", [] ) ]
+                                      }
+                                    ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+import ModuleA
+import Char.Extra
+
+main = ModuleA.consume Char.Extra.Alpha
+"""
+                in
+                getDeclTypeWithDeps [ pkgA, pkgB ] modules [ "Main" ] "main"
+                    |> Result.map (always ())
+                    |> Expect.err
+        , Test.test "ambiguity between two same-named exposed modules across packages (miniBill/elm-ui-with-context's Element) is an error" <|
+            \() ->
+                let
+                    elmUi =
+                        { name = "mdgriffith/elm-ui"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    styleElements =
+                        { name = "mdgriffith/style-elements"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    elmUiWithContext =
+                        { name = "miniBill/elm-ui-with-context"
+                        , dependencies = [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                        , modules =
+                            [ { name = "Element.WithContext"
+                              , comment = ""
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "toElement"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "Element.Element" [ Elm.Type.Var "msg" ])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main = 1
+"""
+                in
+                case getDeclTypeWithDeps [ elmUi, styleElements, elmUiWithContext ] modules [ "Main" ] "main" of
+                    Err (CouldntInfer (AmbiguousModuleOwner { moduleName, possiblePackages })) ->
+                        Expect.all
+                            [ \_ -> moduleName |> Expect.equal "Element"
+                            , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                            ]
+                            ()
+
+                    other ->
+                        Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
+        , Test.test "ambiguity between two packages both defining Element.text is an error" <|
+            \() ->
+                let
+                    elmUi =
+                        { name = "mdgriffith/elm-ui"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "text"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "String.String" [])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    styleElements =
+                        { name = "mdgriffith/style-elements"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "text"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "String.String" [])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+import Element
+
+main = Element.text "hi"
+"""
+                in
+                case getDeclTypeWithDeps [ elmUi, styleElements ] modules [ "Main" ] "main" of
+                    Err (CouldntInfer (AmbiguousModuleOwner { moduleName, possiblePackages })) ->
+                        Expect.all
+                            [ \_ -> moduleName |> Expect.equal "Element"
+                            , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                            ]
+                            ()
+
+                    other ->
+                        Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
+        , Test.test "ambiguity between two packages both defining an Element type is an error" <|
+            \() ->
+                let
+                    elementUnion =
+                        { name = "Element", comment = "", args = [ "msg" ], tags = [] }
+
+                    elmUi =
+                        { name = "mdgriffith/elm-ui"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = [ elementUnion ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    styleElements =
+                        { name = "mdgriffith/style-elements"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = [ elementUnion ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+import Element
+
+thing : Element.Element msg -> Int
+thing _ = 1
+
+main = 1
+"""
+                in
+                case getDeclTypeWithDeps [ elmUi, styleElements ] modules [ "Main" ] "thing" of
+                    Err (CouldntInfer (AmbiguousModuleOwner { moduleName, possiblePackages })) ->
+                        Expect.all
+                            [ \_ -> moduleName |> Expect.equal "Element"
+                            , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                            ]
+                            ()
+
+                    other ->
+                        Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
+        , Test.test "`import Platform.Cmd as Cmd exposing (Cmd)` is implicit" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main : Cmd msg
+main = Cmd.none
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Platform.Cmd.Cmd #0")
+        , Test.test "custom operator" <|
+            \() ->
+                let
+                    pkgCustomOps =
+                        { name = "author/custom-ops"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "CustomOps"
+                              , comment = ""
+                              , unions = []
+                              , aliases = []
+                              , values = []
+                              , binops =
+                                    [ { name = "|="
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "Basics.Int" [])
+                                                (Elm.Type.Lambda
+                                                    (Elm.Type.Type "Basics.Int" [])
+                                                    (Elm.Type.Type "Basics.Int" [])
+                                                )
+                                      , associativity = Elm.Docs.Left
+                                      , precedence = 5
+                                      }
+                                    ]
+                              }
+                            ]
+                        }
+
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+import CustomOps exposing ((|=))
+
+main = 1 |= 2
+"""
+                in
+                getDeclTypeWithDeps [ pkgCustomOps ] modules [ "Main" ] "main"
+                    |> Result.map (Ok >> is Int)
+                    |> Expect.equal (Ok True)
         ]
 
 
@@ -521,7 +902,7 @@ var n =
     TypeVar ( Generated n, Normal )
 
 
-runUnify : Dict ( FullModuleName.FullModuleName, String ) Unify.TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+runUnify : Dict ( Type.PackageName, FullModuleName.FullModuleName, String ) Unify.TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
     Unify.unifyMany typeAliases eqs
         |> State.run (State.init Dict.empty)
@@ -541,11 +922,11 @@ unifyAliasSuite =
             }
 
         typeAliases =
-            Dict.singleton ( mainModule, "Pair" ) pairAlias
+            Dict.singleton ( "", mainModule, "Pair" ) pairAlias
 
         pairOf : MonoType -> MonoType
         pairOf t =
-            UserDefinedType { moduleName = mainModule, name = "Pair", args = [ t ] }
+            UserDefinedType { package = "", moduleName = mainModule, name = "Pair", args = [ t ] }
 
         run : List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
         run =

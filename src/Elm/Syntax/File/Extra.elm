@@ -1,6 +1,9 @@
 module Elm.Syntax.File.Extra exposing
     ( containsDeclaration
+    , containsTypeDeclaration
     , exposes
+    , exposesInExposing
+    , exposesType
     , moduleName
     , resolveOperatorFunction
     , unalias
@@ -8,15 +11,15 @@ module Elm.Syntax.File.Extra exposing
 
 import Elm.Syntax.Declaration exposing (Declaration(..))
 import Elm.Syntax.Exposing as Exposing exposing (Exposing(..))
-import Elm.Syntax.Expression.Extra as Expression
+import Elm.Syntax.Expression.Extra
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Module as Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
-import Elm.Syntax.Pattern.Extra as Pattern
+import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.VarName exposing (VarName)
-import List.Extra as List
+import List.Extra
 
 
 moduleName : File -> FullModuleName
@@ -34,7 +37,7 @@ containsDeclaration varName file =
             (\declNode ->
                 case Node.value declNode of
                     FunctionDeclaration fn ->
-                        Expression.functionName fn == varName
+                        Elm.Syntax.Expression.Extra.functionName fn == varName
 
                     AliasDeclaration typeAlias ->
                         Node.value typeAlias.name == varName
@@ -49,8 +52,54 @@ containsDeclaration varName file =
                         Node.value infix.operator == varName
 
                     Destructuring pattern _ ->
-                        List.member varName (Pattern.varNames (Node.value pattern))
+                        List.member varName (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern))
             )
+
+
+containsTypeDeclaration : VarName -> File -> Bool
+containsTypeDeclaration typeName file =
+    file.declarations
+        |> List.any
+            (\declNode ->
+                case Node.value declNode of
+                    AliasDeclaration typeAlias ->
+                        Node.value typeAlias.name == typeName
+
+                    CustomTypeDeclaration customType ->
+                        Node.value customType.name == typeName
+
+                    _ ->
+                        False
+            )
+
+
+exposesType : VarName -> File -> Bool
+exposesType typeName file =
+    let
+        exposing_ : Exposing
+        exposing_ =
+            file.moduleDefinition
+                |> Node.value
+                |> Module.exposingList
+    in
+    case exposing_ of
+        All _ ->
+            containsTypeDeclaration typeName file
+
+        Explicit exposedNodes ->
+            exposedNodes
+                |> List.any
+                    (\exposedNode ->
+                        case Node.value exposedNode of
+                            Exposing.TypeOrAliasExpose name ->
+                                name == typeName
+
+                            Exposing.TypeExpose exposedType ->
+                                exposedType.name == typeName
+
+                            _ ->
+                                False
+                    )
 
 
 resolveOperatorFunction : VarName -> File -> Maybe VarName
@@ -83,14 +132,38 @@ exposes varName file =
     in
     case exposing_ of
         Explicit _ ->
-            Exposing.exposesFunction varName exposing_
+            exposesInExposing varName exposing_
 
         All _ ->
-            {- Exposing.exposesFunction would always give us True
+            {- exposesInExposing would always give us True
                which would be a lie. We need to check against the
                declarations inside the File in this case.
             -}
             containsDeclaration varName file
+
+
+{-| Like `Exposing.exposesFunction`, but also recognizes operators.
+-}
+exposesInExposing : VarName -> Exposing -> Bool
+exposesInExposing varName exposing_ =
+    case exposing_ of
+        All _ ->
+            True
+
+        Explicit exposedNodes ->
+            exposedNodes
+                |> List.any
+                    (\exposedNode ->
+                        case Node.value exposedNode of
+                            Exposing.FunctionExpose fun ->
+                                fun == varName
+
+                            Exposing.InfixExpose op ->
+                                op == varName
+
+                            _ ->
+                                False
+                    )
 
 
 {-| Reverses the aliasing in import statements for a single module name.
@@ -110,7 +183,7 @@ Given `import Foo as F`:
 unalias : File -> String -> Maybe FullModuleName
 unalias file wantedAlias =
     file.imports
-        |> List.find
+        |> List.Extra.find
             (\importNode ->
                 let
                     maybeAlias : Maybe ModuleName

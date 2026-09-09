@@ -1,5 +1,6 @@
 module Elm.Syntax.FullModuleName exposing
     ( FullModuleName
+    , fromDotted
     , fromModuleName
     , fromModuleName_
     , toModuleName
@@ -29,6 +30,15 @@ fromModuleName_ moduleName =
     moduleName
         |> fromModuleName
         |> Maybe.withDefault (fromString "<BUG> The file didn't have a proper module name")
+
+
+{-| "Platform.Cmd" -> ("Platform", ["Cmd"])
+-}
+fromDotted : String -> FullModuleName
+fromDotted dotted =
+    dotted
+        |> String.split "."
+        |> fromModuleName_
 
 
 toModuleName : FullModuleName -> ModuleName

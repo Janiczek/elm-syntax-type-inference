@@ -29,9 +29,10 @@ import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
-import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.Dependencies exposing (Dependencies)
+import Elm.TypeInference.Error as Error exposing (Error(..))
 import Elm.TypeInference.SCC as SCC
-import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.State as State exposing (PackageName, TIState)
 import Elm.TypeInference.State.VarModuleLookup as StateLookup
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type
@@ -39,13 +40,14 @@ import Elm.TypeInference.Type as Type
         ( Id
         , MonoType(..)
         , Type
+        , TypeResolver
         )
 import Elm.TypeInference.Type.External as ExternalType
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
-import List.ExtraExtra as List
+import List.ExtraExtra
 import Regex exposing (Regex)
-import Result.Extra as Result
+import Result.Extra
 import Set exposing (Set)
 
 
@@ -53,8 +55,14 @@ type alias Ctx =
     { files : Dict FullModuleName File
     , thisFile : File
     , thisModuleName : FullModuleName
-    , typeAliases : Dict ( FullModuleName, VarName ) TypeAlias
+    , typeAliases : Dict ( PackageName, FullModuleName, VarName ) TypeAlias
+    , dependencies : Dependencies
     }
+
+
+typeResolver : Ctx -> TypeResolver
+typeResolver ctx =
+    StateLookup.typeResolverFor ctx.dependencies ctx.files ctx.thisFile
 
 
 type alias Inferred =
@@ -67,7 +75,7 @@ inferMany f items =
         |> State.map
             (\inferreds ->
                 ( List.map Tuple.first inferreds
-                , List.fastConcatMap Tuple.second inferreds
+                , List.ExtraExtra.fastConcatMap Tuple.second inferreds
                 )
             )
 
@@ -82,16 +90,23 @@ functionType argIds resultId =
             (Type.id_ resultId)
 
 
-{-| `infix left 6 (+) = add` aliases the `+` symbol to a function `add`.
-
-`globalEnv` holds `add`, not `+`.
-
+{-| Resolves a value or operator symbol to its type.
 -}
-resolveOperator : Ctx -> FullModuleName -> VarName -> ( FullModuleName, VarName )
-resolveOperator ctx moduleName operator =
-    StateLookup.resolveOperatorFunction ctx.files moduleName operator
-        |> Result.withDefault Nothing
-        |> Maybe.withDefault ( moduleName, operator )
+lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> TIState MonoType
+lookupVarOrOperator ctx maybeModuleName name =
+    State.do (StateLookup.findModuleOfVar ctx.dependencies ctx.files ctx.thisFile maybeModuleName name) <| \( package, moduleName ) ->
+    let
+        ( aliasedPackage, aliasedModuleName, aliasedName ) =
+            if package == "" then
+                StateLookup.resolveOperatorFunction ctx.files moduleName name
+                    |> Result.withDefault Nothing
+                    |> Maybe.map (\( m, n ) -> ( "", m, n ))
+                    |> Maybe.withDefault ( package, moduleName, name )
+
+            else
+                ( package, moduleName, name )
+    in
+    State.lookupGlobalEnv aliasedPackage aliasedModuleName aliasedName
 
 
 
@@ -134,8 +149,8 @@ inferFnImplementation ctx declId impl =
         )
 
 
-annotationScheme : Maybe (Node Signature) -> TIState (Maybe Type)
-annotationScheme maybeSigNode =
+annotationScheme : Ctx -> Maybe (Node Signature) -> TIState (Maybe Type)
+annotationScheme ctx maybeSigNode =
     case maybeSigNode of
         Nothing ->
             State.pure Nothing
@@ -144,23 +159,23 @@ annotationScheme maybeSigNode =
             Node.value sigNode
                 |> .typeAnnotation
                 |> Node.value
-                |> Type.fromTypeAnnotation
-                |> Result.mapError (State.error << ImpossibleType)
+                |> Type.fromTypeAnnotation (typeResolver ctx)
+                |> Result.mapError (State.error << Error.fromTypeAnnotationError)
                 |> Result.map (Type.closeOver >> Just >> State.pure)
-                |> Result.merge
+                |> Result.Extra.merge
 
 
 {-| `declId ≡ annotationType`, if the function is annotated.
 -}
-signatureEquations : Id -> Maybe (Node Signature) -> TIState (List TypeEquation)
-signatureEquations declId maybeSigNode =
+signatureEquations : Ctx -> Id -> Maybe (Node Signature) -> TIState (List TypeEquation)
+signatureEquations ctx declId maybeSigNode =
     maybeSigNode
         |> Maybe.map
             (Node.value
                 >> .typeAnnotation
                 >> Node.value
-                >> Type.fromTypeAnnotation
-                >> Result.mapError (State.error << ImpossibleType)
+                >> Type.fromTypeAnnotation (typeResolver ctx)
+                >> Result.mapError (State.error << Error.fromTypeAnnotationError)
                 >> Result.map
                     (\annotationType ->
                         State.pure
@@ -170,7 +185,7 @@ signatureEquations declId maybeSigNode =
                               )
                             ]
                     )
-                >> Result.merge
+                >> Result.Extra.merge
             )
         |> Maybe.withDefault (State.pure [])
 
@@ -181,7 +196,7 @@ topLevelMember : Ctx -> Node Declaration -> Expression.Function -> TIState Bindi
 topLevelMember ctx declNode fn =
     State.do (State.idForNode ctx.thisModuleName declNode) <| \declId ->
     State.do (aliasImplementation ctx declId fn.declaration) <| \impl ->
-    State.do (annotationScheme fn.signature) <| \maybeAnnotation ->
+    State.do (annotationScheme ctx fn.signature) <| \maybeAnnotation ->
     let
         varName : VarName
         varName =
@@ -193,7 +208,7 @@ topLevelMember ctx declNode fn =
         , install = State.addGlobalBinding ( "", ctx.thisModuleName, varName )
         , equations =
             State.map2 (++)
-                (signatureEquations declId fn.signature)
+                (signatureEquations ctx declId fn.signature)
                 (inferFnImplementation ctx declId impl)
         }
 
@@ -204,7 +219,7 @@ letFunctionMember : Ctx -> Node LetDeclaration -> Expression.Function -> TIState
 letFunctionMember ctx declNode fn =
     State.do (State.idForNode ctx.thisModuleName declNode) <| \declId ->
     State.do (aliasImplementation ctx declId fn.declaration) <| \impl ->
-    State.do (annotationScheme fn.signature) <| \maybeAnnotation ->
+    State.do (annotationScheme ctx fn.signature) <| \maybeAnnotation ->
     let
         varName : VarName
         varName =
@@ -216,7 +231,7 @@ letFunctionMember ctx declNode fn =
         , install = State.addBinding varName
         , equations =
             State.map2 (++)
-                (signatureEquations declId fn.signature)
+                (signatureEquations ctx declId fn.signature)
                 (inferFnImplementation ctx declId impl)
         }
 
@@ -265,17 +280,10 @@ inferExpr ctx exprNode =
                     ++ argEqs
 
         OperatorApplication operator _ e1 e2 ->
-            -- TODO operators from elm/core etc. - read from docs.json.
-            -- Until then `findModuleOfVar` will error.
-            State.do (StateLookup.findModuleOfVar ctx.files ctx.thisFile Nothing operator) <| \moduleName ->
             State.do State.getNextIdAndTick <| \resultId ->
             State.do (f e1) <| \( e1Id, e1Eqs ) ->
             State.do (f e2) <| \( e2Id, e2Eqs ) ->
-            let
-                ( operatorModuleName, operatorFunctionName ) =
-                    resolveOperator ctx moduleName operator
-            in
-            State.do (State.lookupGlobalEnv operatorModuleName operatorFunctionName) <| \operatorType ->
+            State.do (lookupVarOrOperator ctx Nothing operator) <| \operatorType ->
             finish <|
                 ( type_, Type.id_ resultId, "Op application = its result" )
                     :: ( operatorType, functionType [ e1Id, e2Id ] resultId, "Op application: is a fn" )
@@ -285,13 +293,14 @@ inferExpr ctx exprNode =
         FunctionOrValue moduleName varName ->
             case
                 StateLookup.moduleOfVar
+                    ctx.dependencies
                     ctx.files
                     ctx.thisFile
                     (FullModuleName.fromModuleName moduleName)
                     varName
             of
-                Ok (Just fullModuleName) ->
-                    State.do (State.lookupGlobalEnv fullModuleName varName) <| \varType ->
+                Ok (Just ( package, fullModuleName )) ->
+                    State.do (State.lookupGlobalEnv package fullModuleName varName) <| \varType ->
                     finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
 
                 Ok Nothing ->
@@ -314,13 +323,7 @@ inferExpr ctx exprNode =
                     ++ eqs3
 
         PrefixOperator operator ->
-            -- operator is a function of two arguments
-            State.do (StateLookup.findModuleOfVar ctx.files ctx.thisFile Nothing operator) <| \moduleName ->
-            let
-                ( operatorModuleName, operatorFunctionName ) =
-                    resolveOperator ctx moduleName operator
-            in
-            State.do (State.lookupGlobalEnv operatorModuleName operatorFunctionName) <| \operatorType ->
+            State.do (lookupVarOrOperator ctx Nothing operator) <| \operatorType ->
             finish [ ( type_, operatorType, "Prefix operator: is a fn" ) ]
 
         Operator _ ->
@@ -407,7 +410,7 @@ inferExpr ctx exprNode =
 
                 caseEqs : List TypeEquation
                 caseEqs =
-                    List.fastConcatMap Tuple.second caseInferreds
+                    List.ExtraExtra.fastConcatMap Tuple.second caseInferreds
 
                 scrutineeEquations : List TypeEquation
                 scrutineeEquations =
@@ -514,8 +517,15 @@ inferExpr ctx exprNode =
                     Node.value recordVarNode
             in
             State.do State.getNextIdAndTick <| \recordId ->
-            State.do (StateLookup.findModuleOfVar ctx.files ctx.thisFile Nothing recordVar) <| \moduleName ->
-            State.do (State.lookupGlobalEnv moduleName recordVar) <| \recordVarType ->
+            State.do (State.existsInEnv recordVar) <| \isLexical ->
+            State.do
+                (if isLexical then
+                    State.lookupEnv ctx.thisModuleName recordVar
+
+                 else
+                    lookupVarOrOperator ctx Nothing recordVar
+                )
+            <| \recordVarType ->
             State.do (inferRecordSetters ctx fieldSetters) <| \( fields, eqs ) ->
             finish <|
                 ( recordVarType, Type.id_ recordId, "Record update: base record var" )
@@ -568,7 +578,7 @@ inferRecordSetters ctx fieldSetters =
         |> State.map
             (\fieldsAndEqs ->
                 ( fieldsAndEqs |> List.map Tuple.first |> Dict.fromList
-                , fieldsAndEqs |> List.fastConcatMap Tuple.second
+                , fieldsAndEqs |> List.ExtraExtra.fastConcatMap Tuple.second
                 )
             )
 
@@ -812,22 +822,19 @@ inferPattern ctx patternNode =
         NamedPattern customType args ->
             State.do
                 (StateLookup.findModuleOfVar
+                    ctx.dependencies
                     ctx.files
                     ctx.thisFile
                     (FullModuleName.fromModuleName customType.moduleName)
                     customType.name
                 )
-            <| \fullModuleName ->
+            <| \( package, fullModuleName ) ->
+            State.do (State.lookupGlobalEnv package fullModuleName customType.name) <| \ctorType ->
+            State.do State.getNextIdAndTick <| \resultId ->
             State.do (inferMany p args) <| \( argIds, eqs ) ->
             finish <|
-                ( type_
-                , UserDefinedType
-                    { moduleName = fullModuleName
-                    , name = customType.name
-                    , args = List.map Type.id_ argIds
-                    }
-                , "NamedPattern: is user defined type"
-                )
+                ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
+                    :: ( type_, Type.id_ resultId, "NamedPattern: result" )
                     :: eqs
 
         AsPattern p1 varNameNode ->

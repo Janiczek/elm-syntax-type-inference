@@ -1,6 +1,6 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, PackageName, GlobalKey, init
-    , pure, error, fromTuple, fromMaybe, run
+    , pure, error, fromTuple, fromMaybe, fromResult, run
     , map, map2, map3, andMap, mapError
     , do, andThen, traverse, combine
     , getNextIdAndTick
@@ -21,7 +21,7 @@ module Elm.TypeInference.State exposing
 
 # Utilities
 
-@docs pure, error, fromTuple, fromMaybe, run
+@docs pure, error, fromTuple, fromMaybe, fromResult, run
 @docs map, map2, map3, andMap, mapError
 @docs do, andThen, traverse, combine
 
@@ -142,6 +142,16 @@ fromMaybe err maybe =
             error err
 
         Just value ->
+            pure value
+
+
+fromResult : Result Error a -> TIState a
+fromResult result =
+    case result of
+        Err err ->
+            error err
+
+        Ok value ->
             pure value
 
 
@@ -418,10 +428,10 @@ addGlobalBinding key type_ =
 {-| Look up a global name (top-level/constructor/port/dependency), substituting
 all typevars that we can.
 -}
-lookupGlobalEnv : FullModuleName -> VarName -> TIState MonoType
-lookupGlobalEnv moduleName var =
+lookupGlobalEnv : PackageName -> FullModuleName -> VarName -> TIState MonoType
+lookupGlobalEnv package moduleName var =
     do getGlobalEnv <| \env ->
-    case Dict.get ( "", moduleName, var ) env of
+    case Dict.get ( package, moduleName, var ) env of
         Nothing ->
             error <|
                 VarNotFound

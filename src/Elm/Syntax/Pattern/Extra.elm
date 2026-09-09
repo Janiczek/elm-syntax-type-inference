@@ -3,7 +3,7 @@ module Elm.Syntax.Pattern.Extra exposing (varNames)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.VarName exposing (VarName)
-import List.ExtraExtra as List
+import List.ExtraExtra
 
 
 varNames : Pattern -> List VarName
@@ -31,7 +31,7 @@ varNames pattern =
             []
 
         TuplePattern patterns ->
-            List.fastConcatMap (Node.value >> varNames) patterns
+            List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns
 
         RecordPattern fields ->
             List.map Node.value fields
@@ -40,13 +40,13 @@ varNames pattern =
             varNames (Node.value p1) ++ varNames (Node.value p2)
 
         ListPattern patterns ->
-            List.fastConcatMap (Node.value >> varNames) patterns
+            List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns
 
         VarPattern var ->
             [ var ]
 
         NamedPattern _ patterns ->
-            List.fastConcatMap (Node.value >> varNames) patterns
+            List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns
 
         AsPattern p1 name ->
             Node.value name :: varNames (Node.value p1)

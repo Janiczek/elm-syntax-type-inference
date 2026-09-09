@@ -1,6 +1,6 @@
 module String.ExtraExtra exposing (indent, multilineInput)
 
-import String.Extra as String
+import String.Extra
 
 
 indent : Int -> String -> String
@@ -21,7 +21,7 @@ indent n string =
 multilineInput : String -> String
 multilineInput string =
     string
-        |> String.unindent
+        |> String.Extra.unindent
         |> removeNewlinesAtEnds
 
 

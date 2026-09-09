@@ -11,28 +11,28 @@ TODO check declarations against their type annotations
 import Dict exposing (Dict)
 import Elm.Syntax.Declaration as Declaration exposing (Declaration)
 import Elm.Syntax.Expression as Expression
-import Elm.Syntax.Expression.Extra as ExpressionExtra
+import Elm.Syntax.Expression.Extra
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.Type as SyntaxType
-import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
-import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies, DependencyPackage)
+import Elm.TypeInference.Error as Error exposing (Error(..))
 import Elm.TypeInference.Infer as Infer
 import Elm.TypeInference.SCC as SCC
-import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.State as State exposing (PackageName, TIState)
 import Elm.TypeInference.State.VarModuleLookup as VarModuleLookup
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
-import Elm.TypeInference.Type as Type exposing (Id, MonoType(..))
+import Elm.TypeInference.Type as Type exposing (Id, MonoType(..), TypeResolver)
 import Elm.TypeInference.Unify exposing (TypeAlias)
-import List.ExtraExtra as List
-import Maybe.Extra as Maybe
+import List.ExtraExtra
+import Maybe.Extra
 import RangeLike exposing (RangeLike)
-import Result.Extra as Result
+import Result.Extra
 import Set exposing (Set)
 import TypeLookupTable exposing (TypeLookupTable)
 
@@ -46,16 +46,27 @@ import TypeLookupTable exposing (TypeLookupTable)
 
 {-| TODO docs
 -}
-infer : Dict ModuleName File -> Result Error (Dict ModuleName TypeLookupTable)
-infer files =
+infer :
+    { dependencies : List DependencyPackage
+    , files : Dict ModuleName File
+    }
+    -> Result Error (Dict ModuleName TypeLookupTable)
+infer { dependencies, files } =
+    let
+        deps : Dependencies
+        deps =
+            Dependencies.fromList dependencies
+    in
     files
         |> parseModuleNameKeys
         |> State.fromMaybe MissingModuleName
         |> State.andThen
             (\files_ ->
+                State.do (Dependencies.register deps) <| \depAliases ->
                 files_
-                    |> gatherTypeAliases
-                    |> State.andThen (infer_ files_)
+                    |> gatherTypeAliases deps
+                    |> State.map (Dict.union depAliases)
+                    |> State.andThen (infer_ deps files_)
             )
         |> State.run (State.init Dict.empty)
         |> Tuple.first
@@ -65,7 +76,7 @@ parseModuleNameKeys : Dict ModuleName a -> Maybe (Dict FullModuleName a)
 parseModuleNameKeys dict =
     dict
         |> Dict.toList
-        |> Maybe.combineMap
+        |> Maybe.Extra.combineMap
             (\( moduleName, value ) ->
                 FullModuleName.fromModuleName moduleName
                     |> Maybe.map (\fullModuleName -> ( fullModuleName, value ))
@@ -74,24 +85,25 @@ parseModuleNameKeys dict =
 
 
 infer_ :
-    Dict FullModuleName File
-    -> Dict ( FullModuleName, VarName ) TypeAlias
+    Dependencies
+    -> Dict FullModuleName File
+    -> Dict ( PackageName, FullModuleName, VarName ) TypeAlias
     -> TIState (Dict ModuleName TypeLookupTable)
-infer_ files typeAliases =
-    State.do (registerConstructorsAndPorts files) <| \() ->
+infer_ deps files typeAliases =
+    State.do (registerConstructorsAndPorts deps files) <| \() ->
     let
         topLevelFunctions : List ( ( FullModuleName, VarName ), ( File, Node Declaration, Expression.Function ) )
         topLevelFunctions =
             files
                 |> Dict.toList
-                |> List.fastConcatMap
+                |> List.ExtraExtra.fastConcatMap
                     (\( moduleName, file ) ->
                         file.declarations
                             |> List.filterMap
                                 (\declNode ->
                                     case Node.value declNode of
                                         Declaration.FunctionDeclaration fn ->
-                                            Just ( ( moduleName, ExpressionExtra.functionName fn ), ( file, declNode, fn ) )
+                                            Just ( ( moduleName, Elm.Syntax.Expression.Extra.functionName fn ), ( file, declNode, fn ) )
 
                                         _ ->
                                             Nothing
@@ -115,12 +127,12 @@ infer_ files typeAliases =
                     []
 
                 Just ( file, _, fn ) ->
-                    ExpressionExtra.referencedNames (Node.value (Node.value fn.declaration).expression)
+                    Elm.Syntax.Expression.Extra.referencedNames (Node.value (Node.value fn.declaration).expression)
                         -- Resolve operator aliases to the underlying functions
                         |> List.filterMap
                             (\( maybeModuleName, varName ) ->
-                                case VarModuleLookup.moduleOfVar files file (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
-                                    Ok (Just fullModuleName) ->
+                                case VarModuleLookup.moduleOfVar deps files file (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
+                                    Ok (Just ( "", fullModuleName )) ->
                                         let
                                             resolvedKey : ( FullModuleName, VarName )
                                             resolvedKey =
@@ -154,6 +166,7 @@ infer_ files typeAliases =
                                 , thisFile = file
                                 , thisModuleName = moduleName
                                 , typeAliases = typeAliases
+                                , dependencies = deps
                                 }
                                 declNode
                                 fn
@@ -193,13 +206,19 @@ toTypeLookupTable substitutionMap nodeIds fullModuleName =
 
 
 gatherTypeAliases :
-    Dict FullModuleName File
-    -> TIState (Dict ( FullModuleName, VarName ) TypeAlias)
-gatherTypeAliases files =
+    Dependencies
+    -> Dict FullModuleName File
+    -> TIState (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
+gatherTypeAliases deps files =
     files
         |> Dict.toList
         |> List.map
             (\( moduleName, file ) ->
+                let
+                    resolver : TypeResolver
+                    resolver =
+                        VarModuleLookup.typeResolverFor deps files file
+                in
                 file.declarations
                     |> List.map
                         (\declarationNode ->
@@ -210,16 +229,16 @@ gatherTypeAliases files =
                                         type_ =
                                             typeAlias.typeAnnotation
                                                 |> Node.value
-                                                |> Type.fromTypeAnnotation
-                                                |> Result.mapError (State.error << ImpossibleType)
+                                                |> Type.fromTypeAnnotation resolver
+                                                |> Result.mapError (State.error << Error.fromTypeAnnotationError)
                                                 |> Result.map State.pure
-                                                |> Result.merge
+                                                |> Result.Extra.merge
                                     in
                                     type_
                                         |> State.map
                                             (\type__ ->
                                                 Just
-                                                    ( ( moduleName, Node.value typeAlias.name )
+                                                    ( ( "", moduleName, Node.value typeAlias.name )
                                                     , { args = List.map Node.value typeAlias.generics
                                                       , type_ = type__
                                                       }
@@ -230,27 +249,32 @@ gatherTypeAliases files =
                                     State.pure Nothing
                         )
                     |> State.combine
-                    |> State.map Maybe.values
+                    |> State.map Maybe.Extra.values
             )
         |> State.combine
-        |> State.map (List.fastConcat >> Dict.fromList)
+        |> State.map (List.ExtraExtra.fastConcat >> Dict.fromList)
 
 
-registerConstructorsAndPorts : Dict FullModuleName File -> TIState ()
-registerConstructorsAndPorts files =
+registerConstructorsAndPorts : Dependencies -> Dict FullModuleName File -> TIState ()
+registerConstructorsAndPorts deps files =
     files
         |> Dict.toList
         |> State.traverse
             (\( moduleName, file ) ->
+                let
+                    resolver : TypeResolver
+                    resolver =
+                        VarModuleLookup.typeResolverFor deps files file
+                in
                 file.declarations
                     |> State.traverse
                         (\declNode ->
                             case Node.value declNode of
                                 Declaration.CustomTypeDeclaration customType ->
-                                    registerCustomType moduleName customType
+                                    registerCustomType resolver moduleName customType
 
                                 Declaration.PortDeclaration sig ->
-                                    registerPort moduleName sig
+                                    registerPort resolver moduleName sig
 
                                 _ ->
                                     State.pure ()
@@ -260,8 +284,8 @@ registerConstructorsAndPorts files =
         |> State.map (always ())
 
 
-registerCustomType : FullModuleName -> SyntaxType.Type -> TIState ()
-registerCustomType moduleName customType =
+registerCustomType : TypeResolver -> FullModuleName -> SyntaxType.Type -> TIState ()
+registerCustomType resolver moduleName customType =
     let
         typeName : String
         typeName =
@@ -270,7 +294,8 @@ registerCustomType moduleName customType =
         resultType : MonoType
         resultType =
             UserDefinedType
-                { moduleName = moduleName
+                { package = ""
+                , moduleName = moduleName
                 , name = typeName
                 , args =
                     customType.generics
@@ -288,14 +313,14 @@ registerCustomType moduleName customType =
                     ctorName =
                         Node.value ctor.name
 
-                    argTypes : Result TypeAnnotation (List MonoType)
+                    argTypes : Result Type.FromTypeAnnotationError (List MonoType)
                     argTypes =
                         ctor.arguments
-                            |> List.map (Node.value >> Type.fromTypeAnnotation)
-                            |> Result.combine
+                            |> List.map (Node.value >> Type.fromTypeAnnotation resolver)
+                            |> Result.Extra.combine
                 in
                 argTypes
-                    |> Result.mapError (State.error << ImpossibleType)
+                    |> Result.mapError (State.error << Error.fromTypeAnnotationError)
                     |> Result.map
                         (\args ->
                             let
@@ -305,21 +330,21 @@ registerCustomType moduleName customType =
                             in
                             State.addGlobalBinding ( "", moduleName, ctorName ) (Type.closeOver ctorType)
                         )
-                    |> Result.merge
+                    |> Result.Extra.merge
             )
         |> State.map (always ())
 
 
-registerPort : FullModuleName -> Signature -> TIState ()
-registerPort moduleName sig =
+registerPort : TypeResolver -> FullModuleName -> Signature -> TIState ()
+registerPort resolver moduleName sig =
     sig.typeAnnotation
         |> Node.value
-        |> Type.fromTypeAnnotation
-        |> Result.mapError (State.error << ImpossibleType)
+        |> Type.fromTypeAnnotation resolver
+        |> Result.mapError (State.error << Error.fromTypeAnnotationError)
         |> Result.map
             (\t ->
                 State.addGlobalBinding
                     ( "", moduleName, Node.value sig.name )
                     (Type.closeOver t)
             )
-        |> Result.merge
+        |> Result.Extra.merge

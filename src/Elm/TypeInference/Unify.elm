@@ -10,6 +10,7 @@ import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (Substituti
 import Elm.TypeInference.Type as Type
     exposing
         ( MonoType(..)
+        , PackageName
         , SuperType(..)
         , TypeVar
         , TypeVarStyle(..)
@@ -23,7 +24,11 @@ type alias TypeAlias =
     }
 
 
-unifyMany : Dict ( FullModuleName, VarName ) TypeAlias -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
+type alias TypeAliases =
+    Dict ( PackageName, FullModuleName, VarName ) TypeAlias
+
+
+unifyMany : TypeAliases -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
 unifyMany typeAliases eqs =
     case eqs of
         [] ->
@@ -49,11 +54,11 @@ unifyMany typeAliases eqs =
 {-| Expand alias (substitute its args) recursively.
 Elm aliases can't form infinite cycles.
 -}
-expandAlias : Dict ( FullModuleName, VarName ) TypeAlias -> MonoType -> MonoType
+expandAlias : TypeAliases -> MonoType -> MonoType
 expandAlias typeAliases type_ =
     case type_ of
         UserDefinedType ut ->
-            case Dict.get ( ut.moduleName, ut.name ) typeAliases of
+            case Dict.get ( ut.package, ut.moduleName, ut.name ) typeAliases of
                 Nothing ->
                     type_
 
@@ -72,7 +77,7 @@ expandAlias typeAliases type_ =
             type_
 
 
-unifyMono : Dict ( FullModuleName, VarName ) TypeAlias -> MonoType -> MonoType -> TIState SubstitutionMap
+unifyMono : TypeAliases -> MonoType -> MonoType -> TIState SubstitutionMap
 unifyMono typeAliases rawT1 rawT2 =
     let
         t1 : MonoType
@@ -264,7 +269,8 @@ unifyMono typeAliases rawT1 rawT2 =
 
         ( UserDefinedType ut1, UserDefinedType ut2 ) ->
             if
-                (ut1.moduleName /= ut2.moduleName)
+                (ut1.package /= ut2.package)
+                    || (ut1.moduleName /= ut2.moduleName)
                     || (ut1.name /= ut2.name)
                     || (List.length ut1.args /= List.length ut2.args)
             then
@@ -301,31 +307,199 @@ bind typeVar type_ =
         let
             ( _, super ) =
                 typeVar
-
-            goAhead =
-                State.pure <| SubstitutionMap.singleton typeVar type_
         in
-        case super of
-            Normal ->
-                goAhead
-
-            Number ->
-                case type_ of
-                    Int ->
-                        goAhead
-
-                    Float ->
-                        goAhead
-
-                    TypeVar (( _, Normal ) as otherVar) ->
-                        -- go the other way, from less specific to more specific
-                        State.pure <| SubstitutionMap.singleton otherVar (TypeVar typeVar)
-
-                    TypeVar _ ->
-                        goAhead
-
-                    _ ->
+        case type_ of
+            TypeVar (( _, otherSuper ) as otherVar) ->
+                case meet super otherSuper of
+                    Nothing ->
                         State.error <| SuperTypeMismatch super type_
+
+                    Just m ->
+                        if m == otherSuper then
+                            -- otherVar is at least as constrained as typeVar
+                            -- point typeVar at otherVar
+                            State.pure <| SubstitutionMap.singleton typeVar (TypeVar otherVar)
+
+                        else if m == super then
+                            -- typeVar is at least as constrained as otherVar
+                            -- point otherVar at typeVar
+                            State.pure <| SubstitutionMap.singleton otherVar (TypeVar typeVar)
+
+                        else
+                            -- eg. Comparable and Appendable
+                            -- introduce fresh var with combined constraint
+                            -- point both at it
+                            State.do State.getNextIdAndTick <| \freshId ->
+                            let
+                                fresh =
+                                    Type.freshVar m freshId
+                            in
+                            State.pure <| SubstitutionMap.fromList [ ( typeVar, fresh ), ( otherVar, fresh ) ]
+
+            _ ->
+                if accepts super type_ then
+                    State.pure <| SubstitutionMap.singleton typeVar type_
+
+                else
+                    State.error <| SuperTypeMismatch super type_
+
+
+{-| The most specific supertype that satisfies both constraints, if any.
+-}
+meet : SuperType -> SuperType -> Maybe SuperType
+meet a b =
+    if a == b then
+        Just a
+
+    else
+        case ( a, b ) of
+            ( Normal, other ) ->
+                Just other
+
+            ( other, Normal ) ->
+                Just other
+
+            ( Number, Comparable ) ->
+                Just Number
+
+            ( Comparable, Number ) ->
+                Just Number
+
+            ( Comparable, Appendable ) ->
+                Just CompAppend
+
+            ( Appendable, Comparable ) ->
+                Just CompAppend
+
+            ( Comparable, CompAppend ) ->
+                Just CompAppend
+
+            ( CompAppend, Comparable ) ->
+                Just CompAppend
+
+            ( Appendable, CompAppend ) ->
+                Just CompAppend
+
+            ( CompAppend, Appendable ) ->
+                Just CompAppend
+
+            ( Number, CompAppend ) ->
+                Nothing
+
+            ( CompAppend, Number ) ->
+                Nothing
+
+            ( Number, Appendable ) ->
+                Nothing
+
+            ( Appendable, Number ) ->
+                Nothing
+
+            -- TODO the following ones feel weird. Why not return Just here?
+            ( Number, Number ) ->
+                Nothing
+
+            ( Comparable, Comparable ) ->
+                Nothing
+
+            ( Appendable, Appendable ) ->
+                Nothing
+
+            ( CompAppend, CompAppend ) ->
+                Nothing
+
+
+accepts : SuperType -> MonoType -> Bool
+accepts super type_ =
+    case super of
+        Normal ->
+            True
+
+        Number ->
+            case type_ of
+                Int ->
+                    True
+
+                Float ->
+                    True
+
+                _ ->
+                    False
+
+        Comparable ->
+            isComparable type_
+
+        Appendable ->
+            isAppendable type_
+
+        CompAppend ->
+            isComparable type_ && isAppendable type_
+
+
+isComparable : MonoType -> Bool
+isComparable type_ =
+    case type_ of
+        Int ->
+            True
+
+        Float ->
+            True
+
+        Char ->
+            True
+
+        String ->
+            True
+
+        List inner ->
+            isComparable inner
+
+        Tuple a b ->
+            isComparable a && isComparable b
+
+        Tuple3 a b c ->
+            isComparable a && isComparable b && isComparable c
+
+        TypeVar _ ->
+            True
+
+        Function _ ->
+            False
+
+        Bool ->
+            False
+
+        Unit ->
+            False
+
+        Record _ ->
+            False
+
+        ExtensibleRecord _ ->
+            False
+
+        UserDefinedType _ ->
+            False
+
+        WebGLShader _ ->
+            False
+
+
+isAppendable : MonoType -> Bool
+isAppendable type_ =
+    case type_ of
+        String ->
+            True
+
+        List _ ->
+            True
+
+        TypeVar _ ->
+            True
+
+        -- TODO expand, don't use wildcard
+        _ ->
+            False
 
 
 occursCheck : TypeVar -> MonoType -> Bool
