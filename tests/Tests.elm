@@ -765,7 +765,7 @@ helper x = x
                 in
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
-                    |> Expect.equal (Ok "number0")
+                    |> Expect.equal (Ok "number#0")
 
         {- , Test.todo """
            mutual recursion between two top-level declarations
@@ -817,7 +817,7 @@ main = Box 1
                 in
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
-                    |> Expect.equal (Ok "Main.Box number0")
+                    |> Expect.equal (Ok "Main.Box number#0")
         , Test.test "a custom operator declaration is type-checked (infix usage)" <|
             \() ->
                 let

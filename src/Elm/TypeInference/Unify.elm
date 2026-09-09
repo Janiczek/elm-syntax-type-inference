@@ -498,8 +498,40 @@ isAppendable type_ =
         TypeVar _ ->
             True
 
-        -- TODO expand, don't use wildcard
-        _ ->
+        Int ->
+            False
+
+        Float ->
+            False
+
+        Char ->
+            False
+
+        Tuple _ _ ->
+            False
+
+        Tuple3 _ _ _ ->
+            False
+
+        Function _ ->
+            False
+
+        Bool ->
+            False
+
+        Unit ->
+            False
+
+        Record _ ->
+            False
+
+        ExtensibleRecord _ ->
+            False
+
+        UserDefinedType _ ->
+            False
+
+        WebGLShader _ ->
             False
 
 

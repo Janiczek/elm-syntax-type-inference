@@ -7,6 +7,7 @@ import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Type exposing (FromTypeAnnotationError(..), MonoType, SuperType, TypeVar)
+import Elm.Type
 
 
 type Error
@@ -14,6 +15,7 @@ type Error
       ImpossibleExpr (Node Expression)
     | ImpossiblePattern (Node Pattern)
     | ImpossibleType TypeAnnotation
+    | ImpossibleDocsType Elm.Type.Type
     | MissingModuleName
       -- Var qualification errors
     | VarNotFound { usedIn : FullModuleName, varName : VarName }

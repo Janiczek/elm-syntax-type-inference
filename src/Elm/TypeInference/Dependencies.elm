@@ -134,9 +134,7 @@ fromDocsType resolver type_ =
             Result.map3 Tuple3 (fromDocsType resolver a) (fromDocsType resolver b) (fromDocsType resolver c)
 
         Elm.Type.Tuple _ ->
-            -- Impossible
-            -- TODO return an error instead
-            Ok Unit
+            Err (ImpossibleDocsType type_)
 
         Elm.Type.Type "Basics.Int" [] ->
             Ok Int

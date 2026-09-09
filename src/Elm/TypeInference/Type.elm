@@ -502,7 +502,6 @@ monoTypeToString type_ =
 
 varToString : TypeVar -> String
 varToString ( style, super ) =
-    -- TODO this has issues: collisions between named and generated
     let
         prefix =
             case super of
@@ -529,7 +528,7 @@ varToString ( style, super ) =
             name
 
         ( _, Generated theId ) ->
-            prefix ++ String.fromInt theId
+            prefix ++ "#" ++ String.fromInt theId
 
         ( _, Named name ) ->
             prefix ++ name
