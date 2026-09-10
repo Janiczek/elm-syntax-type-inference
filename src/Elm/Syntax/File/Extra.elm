@@ -43,7 +43,8 @@ containsDeclaration varName file =
                         Node.value typeAlias.name == varName
 
                     CustomTypeDeclaration customType ->
-                        Node.value customType.name == varName
+                        (Node.value customType.name == varName)
+                            || List.any (\ctor -> Node.value (Node.value ctor).name == varName) customType.constructors
 
                     PortDeclaration signature ->
                         Node.value signature.name == varName

@@ -7,6 +7,7 @@ module Elm.TypeInference.ModuleLookup exposing
 
 import Dict exposing (Dict)
 import Elm.Docs
+import Elm.Syntax.Exposing
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
@@ -339,6 +340,55 @@ moduleDefinesType mod typeName =
         || List.any (\a -> a.name == typeName) mod.aliases
 
 
+{-| Does this import's own `exposing` clause name this type?
+-}
+importExposesType : Import -> VarName -> Bool
+importExposesType import_ typeName =
+    import_.exposingList
+        |> Maybe.map
+            (Node.value
+                >> (\exposing_ ->
+                        case exposing_ of
+                            Elm.Syntax.Exposing.All _ ->
+                                True
+
+                            Elm.Syntax.Exposing.Explicit exposedNodes ->
+                                exposedNodes
+                                    |> List.any
+                                        (\exposedNode ->
+                                            case Node.value exposedNode of
+                                                Elm.Syntax.Exposing.TypeOrAliasExpose name ->
+                                                    name == typeName
+
+                                                Elm.Syntax.Exposing.TypeExpose exposedType ->
+                                                    exposedType.name == typeName
+
+                                                _ ->
+                                                    False
+                                        )
+                   )
+            )
+        |> Maybe.withDefault False
+
+
+dependencyModuleDefinesType : Dependencies -> FullModuleName -> VarName -> Maybe ( PackageName, FullModuleName )
+dependencyModuleDefinesType deps moduleName typeName =
+    let
+        moduleNameStr : String
+        moduleNameStr =
+            FullModuleName.toString moduleName
+    in
+    Dict.toList deps
+        |> List.filterMap
+            (\( packageName, pkg ) ->
+                pkg.modules
+                    |> List.filter (\m -> m.name == moduleNameStr && moduleDefinesType m typeName)
+                    |> List.head
+                    |> Maybe.map (\_ -> ( packageName, moduleName ))
+            )
+        |> List.head
+
+
 implicitTypeModule : ModuleName -> VarName -> Maybe ( PackageName, FullModuleName )
 implicitTypeModule qualifier typeName =
     if not (List.isEmpty qualifier) then
@@ -379,15 +429,20 @@ typeResolverFor deps files thisFile qualifier typeName =
                                     importName =
                                         FullModuleName.fromModuleName_ (Node.value import_.moduleName)
                                 in
-                                Dict.get importName files
-                                    |> Maybe.andThen
-                                        (\file ->
-                                            if Elm.Syntax.File.Extra.exposesType typeName file then
-                                                Just ( "", importName )
+                                case Dict.get importName files of
+                                    Just file ->
+                                        if Elm.Syntax.File.Extra.exposesType typeName file then
+                                            Just ( "", importName )
 
-                                            else
-                                                Nothing
-                                        )
+                                        else
+                                            Nothing
+
+                                    Nothing ->
+                                        if importExposesType import_ typeName then
+                                            dependencyModuleDefinesType deps importName typeName
+
+                                        else
+                                            Nothing
                             )
                         |> List.head
 

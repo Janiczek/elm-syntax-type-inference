@@ -527,15 +527,17 @@ inferExpr ctx exprNode =
                 )
             <| \recordVarType ->
             State.do (inferRecordSetters ctx fieldSetters) <| \( fields, eqs ) ->
+            let
+                asExtensibleRecord : MonoType
+                asExtensibleRecord =
+                    ExtensibleRecord
+                        { type_ = Type.id_ recordId
+                        , fields = fields
+                        }
+            in
             finish <|
-                ( recordVarType, Type.id_ recordId, "Record update: base record var" )
-                    :: ( type_
-                       , ExtensibleRecord
-                            { type_ = Type.id_ recordId
-                            , fields = fields
-                            }
-                       , "Record update: is record with at least that field"
-                       )
+                ( recordVarType, asExtensibleRecord, "Record update: base record has at least that field" )
+                    :: ( type_, asExtensibleRecord, "Record update: result has the same shape as the base record" )
                     :: eqs
 
         GLSLExpression code ->

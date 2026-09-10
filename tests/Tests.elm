@@ -996,3 +996,59 @@ unifyAliasSuite =
                     |> Result.map (always ())
                     |> Expect.err
         ]
+
+
+importedTypeReExposedFromDependencySuite : Test
+importedTypeReExposedFromDependencySuite =
+    let
+        setModule : Elm.Docs.Module
+        setModule =
+            { name = "Set"
+            , comment = ""
+            , unions = [ { name = "Set", comment = "", args = [ "a" ], tags = [] } ]
+            , aliases = []
+            , values =
+                [ { name = "fromList"
+                  , comment = ""
+                  , tipe =
+                        Elm.Type.Lambda
+                            (Elm.Type.Type "List.List" [ Elm.Type.Var "comparable" ])
+                            (Elm.Type.Type "Set.Set" [ Elm.Type.Var "comparable" ])
+                  }
+                ]
+            , binops = []
+            }
+
+        core =
+            { name = "elm/core"
+            , dependencies = []
+            , modules = [ setModule ]
+            }
+
+        modules =
+            Dict.singleton [ "Main" ] <|
+                String.ExtraExtra.multilineInput """
+                module Main exposing (allowedNames)
+
+                import Set exposing (Set)
+
+                allowedNames : Set String
+                allowedNames =
+                    Set.fromList []
+                """
+    in
+    Test.test "import Set exposing (Set) then using Set, gets inferred correctly" <|
+        \() ->
+            getDeclTypeWithDeps [ core ] modules [ "Main" ] "allowedNames"
+                |> Expect.equal
+                    (Ok
+                        (Forall []
+                            (UserDefinedType
+                                { package = "elm/core"
+                                , moduleName = FullModuleName.fromModuleName_ [ "Set" ]
+                                , name = "Set"
+                                , args = [ String ]
+                                }
+                            )
+                        )
+                    )
