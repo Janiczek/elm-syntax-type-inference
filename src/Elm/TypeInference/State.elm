@@ -2,7 +2,7 @@ module Elm.TypeInference.State exposing
     ( TIState, State, PackageName, GlobalKey, init
     , pure, error, fromTuple, fromMaybe, fromResult, run
     , map, map2, map3, andMap, mapError
-    , do, andThen, traverse, combine
+    , do, andThen, foldl, traverse, combine
     , getNextIdAndTick
     , getNodeIds, idForNode, aliasNodeId
     , getSubst, composeSubst
@@ -23,7 +23,7 @@ module Elm.TypeInference.State exposing
 
 @docs pure, error, fromTuple, fromMaybe, fromResult, run
 @docs map, map2, map3, andMap, mapError
-@docs do, andThen, traverse, combine
+@docs do, andThen, foldl, traverse, combine
 
 
 # Next ID
@@ -57,7 +57,6 @@ module Elm.TypeInference.State exposing
 
 -}
 
-import AssocList
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
@@ -231,6 +230,32 @@ andThen userFn stateFn =
 do : TIState a -> (a -> TIState b) -> TIState b
 do m fn =
     andThen fn m
+
+
+{-| Tail-recursive left fold.
+
+Needed because a naive list recursion with continuations would blow up the stack
+on realistic code. This will provide constant stack instead.
+
+-}
+foldl : (a -> b -> TIState b) -> b -> List a -> TIState b
+foldl fn init_ list =
+    \state -> foldlHelp fn init_ list state
+
+
+foldlHelp : (a -> b -> TIState b) -> b -> List a -> State -> ( Result Error b, State )
+foldlHelp fn acc list state =
+    case list of
+        [] ->
+            ( Ok acc, state )
+
+        x :: rest ->
+            case fn x acc state of
+                ( Err err, newState ) ->
+                    ( Err err, newState )
+
+                ( Ok newAcc, newState ) ->
+                    foldlHelp fn newAcc rest newState
 
 
 traverse : (a -> TIState b) -> List a -> TIState (List b)
@@ -459,7 +484,7 @@ instantiate (Forall boundVars monoType) =
                 )
                 boundVars
                 varIds
-                |> AssocList.fromList
+                |> SubstitutionMap.fromList
     in
     SubstitutionMap.substituteMono subst monoType
         |> pure

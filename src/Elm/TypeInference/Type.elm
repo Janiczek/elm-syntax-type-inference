@@ -49,9 +49,7 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.VarName exposing (VarName)
-import List.ExtraExtra
 import Result.Extra
-import Transform
 
 
 type alias Id =
@@ -181,19 +179,65 @@ type MonoType
 
 isParametric : Type -> Bool
 isParametric (Forall _ monoType) =
-    let
-        isParametric_ : MonoType -> Bool
-        isParametric_ t =
-            case t of
-                TypeVar _ ->
-                    True
+    isParametricMono monoType
 
-                _ ->
-                    False
+
+isParametricMono : MonoType -> Bool
+isParametricMono type_ =
+    let
+        inFields : Dict VarName MonoType -> Bool
+        inFields fields =
+            List.any isParametricMono (Dict.values fields)
     in
-    monoType
-        |> Transform.children recursiveChildren
-        |> List.any isParametric_
+    case type_ of
+        TypeVar _ ->
+            True
+
+        Function { from, to } ->
+            isParametricMono from || isParametricMono to
+
+        Int ->
+            False
+
+        Float ->
+            False
+
+        Char ->
+            False
+
+        String ->
+            False
+
+        Bool ->
+            False
+
+        List listItemType ->
+            isParametricMono listItemType
+
+        Unit ->
+            False
+
+        Tuple t1 t2 ->
+            isParametricMono t1 || isParametricMono t2
+
+        Tuple3 t1 t2 t3 ->
+            isParametricMono t1
+                || isParametricMono t2
+                || isParametricMono t3
+
+        Record fields ->
+            inFields fields
+
+        ExtensibleRecord r ->
+            isParametricMono r.type_ || inFields r.fields
+
+        UserDefinedType r ->
+            List.any isParametricMono r.args
+
+        WebGLShader r ->
+            inFields r.attributes
+                || inFields r.uniforms
+                || inFields r.varyings
 
 
 external : PackageName -> FullModuleName -> VarName -> MonoType
@@ -343,9 +387,11 @@ collapsePrimitive package moduleName name args =
 
 
 
--- TRANSFORM LIB HELPERS
+-- RECURSION HELPERS
 
 
+{-| Apply `f` to the direct children of a type, keeping the type's shape.
+-}
 recurse : (MonoType -> MonoType) -> MonoType -> MonoType
 recurse f type_ =
     case type_ of
@@ -406,63 +452,6 @@ recurse f type_ =
                 }
 
 
-{-| Find all the children of this expression (and their children, etc...)
--}
-recursiveChildren : (MonoType -> List MonoType) -> MonoType -> List MonoType
-recursiveChildren fn type_ =
-    let
-        recordBindings bindings =
-            List.ExtraExtra.fastConcatMap fn (Dict.values bindings)
-    in
-    case type_ of
-        TypeVar _ ->
-            []
-
-        Function { from, to } ->
-            fn from ++ fn to
-
-        Int ->
-            []
-
-        Float ->
-            []
-
-        Char ->
-            []
-
-        String ->
-            []
-
-        Bool ->
-            []
-
-        List listItemType ->
-            fn listItemType
-
-        Unit ->
-            []
-
-        Tuple t1 t2 ->
-            fn t1 ++ fn t2
-
-        Tuple3 t1 t2 t3 ->
-            fn t1 ++ fn t2 ++ fn t3
-
-        Record fields ->
-            recordBindings fields
-
-        ExtensibleRecord r ->
-            fn r.type_ ++ recordBindings r.fields
-
-        UserDefinedType { args } ->
-            List.ExtraExtra.fastConcatMap fn args
-
-        WebGLShader { attributes, uniforms, varyings } ->
-            recordBindings attributes
-                ++ recordBindings uniforms
-                ++ recordBindings varyings
-
-
 freeVars : Type -> Set TypeVar
 freeVars (Forall boundIds monoType) =
     Set.diff
@@ -472,20 +461,77 @@ freeVars (Forall boundIds monoType) =
 
 freeVarsMono : MonoType -> Set TypeVar
 freeVarsMono type_ =
-    let
-        freeVarsMono_ : MonoType -> Maybe TypeVar
-        freeVarsMono_ t =
-            case t of
-                TypeVar typeVar ->
-                    Just typeVar
+    freeVarsMonoHelp type_ Set.empty
 
-                _ ->
-                    Nothing
+
+{-| Note: this walks the type backwards to insert into Set in a specific order
+(the order of first appearance, to play nice with `normalize` - #0, #1, a, b,
+...)
+-}
+freeVarsMonoHelp : MonoType -> Set TypeVar -> Set TypeVar
+freeVarsMonoHelp type_ acc =
+    let
+        inFields : Dict VarName MonoType -> Set TypeVar -> Set TypeVar
+        inFields fields acc_ =
+            Dict.foldr (\_ fieldType -> freeVarsMonoHelp fieldType) acc_ fields
     in
-    type_
-        |> Transform.children recursiveChildren
-        |> List.filterMap freeVarsMono_
-        |> Set.fromList
+    case type_ of
+        TypeVar typeVar ->
+            Set.insert typeVar acc
+
+        Function { from, to } ->
+            acc
+                |> freeVarsMonoHelp to
+                |> freeVarsMonoHelp from
+
+        Int ->
+            acc
+
+        Float ->
+            acc
+
+        Char ->
+            acc
+
+        String ->
+            acc
+
+        Bool ->
+            acc
+
+        List listItemType ->
+            freeVarsMonoHelp listItemType acc
+
+        Unit ->
+            acc
+
+        Tuple t1 t2 ->
+            acc
+                |> freeVarsMonoHelp t2
+                |> freeVarsMonoHelp t1
+
+        Tuple3 t1 t2 t3 ->
+            acc
+                |> freeVarsMonoHelp t3
+                |> freeVarsMonoHelp t2
+                |> freeVarsMonoHelp t1
+
+        Record fields ->
+            inFields fields acc
+
+        ExtensibleRecord r ->
+            acc
+                |> inFields r.fields
+                |> freeVarsMonoHelp r.type_
+
+        UserDefinedType r ->
+            List.foldr freeVarsMonoHelp acc r.args
+
+        WebGLShader r ->
+            acc
+                |> inFields r.varyings
+                |> inFields r.uniforms
+                |> inFields r.attributes
 
 
 freeVarsTypeEnv : Dict VarName Type -> Set TypeVar
@@ -760,17 +806,12 @@ mapVars fn (Forall boundVars monoType) =
 
 mapVarsMono : (TypeVar -> TypeVar) -> MonoType -> MonoType
 mapVarsMono fn type_ =
-    Transform.transformOnce
-        recurse
-        (\t ->
-            case t of
-                TypeVar var ->
-                    TypeVar (fn var)
+    case type_ of
+        TypeVar var ->
+            TypeVar (fn var)
 
-                _ ->
-                    t
-        )
-        type_
+        _ ->
+            recurse (mapVarsMono fn) type_
 
 
 ordToName : Int -> String

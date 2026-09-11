@@ -1,7 +1,5 @@
 module Elm.TypeInference.Unify exposing (TypeAlias, unifyMany)
 
-import AssocList
-import AssocSet
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.TypeInference.Error exposing (Error(..))
@@ -28,27 +26,22 @@ type alias TypeAliases =
     Dict ( PackageName, FullModuleName, VarName ) TypeAlias
 
 
+{-| Solve the equations left to right, each under the substitution the ones
+before it produced.
+-}
 unifyMany : TypeAliases -> List ( MonoType, MonoType ) -> TIState SubstitutionMap
 unifyMany typeAliases eqs =
-    case eqs of
-        [] ->
-            State.pure AssocList.empty
-
-        ( t1, t2 ) :: eqs_ ->
-            State.do (unifyMono typeAliases t1 t2) <| \su1 ->
-            State.do
-                (unifyMany
-                    typeAliases
-                    (List.map
-                        (Tuple.mapBoth
-                            (SubstitutionMap.substituteMono su1)
-                            (SubstitutionMap.substituteMono su1)
-                        )
-                        eqs_
-                    )
-                )
-            <| \su2 ->
-            State.pure (SubstitutionMap.compose su2 su1)
+    State.foldl
+        (\( t1, t2 ) acc ->
+            unifyMono
+                typeAliases
+                (SubstitutionMap.substituteMono acc t1)
+                (SubstitutionMap.substituteMono acc t2)
+                -- `compose` is left-biased: the newer substitution wins.
+                |> State.map (\su -> SubstitutionMap.compose su acc)
+        )
+        SubstitutionMap.empty
+        eqs
 
 
 {-| Expand alias (substitute its args) recursively.
@@ -69,7 +62,7 @@ expandAlias typeAliases type_ =
                             List.map2 (\argName actualArg -> ( ( Named argName, Normal ), actualArg ))
                                 alias_.args
                                 ut.args
-                                |> AssocList.fromList
+                                |> SubstitutionMap.fromList
                     in
                     expandAlias typeAliases (SubstitutionMap.substituteMono subst alias_.type_)
 
@@ -143,7 +136,7 @@ unifyMono typeAliases rawT1 rawT2 =
 
         noSubstitutionNeeded : TIState SubstitutionMap
         noSubstitutionNeeded =
-            State.pure AssocList.empty
+            State.pure SubstitutionMap.empty
 
         typeMismatch : TIState SubstitutionMap
         typeMismatch =
@@ -610,6 +603,61 @@ isAppendable type_ =
             False
 
 
+{-| Does `typeVar` occur anywhere in `type_`?
+-}
 occursCheck : TypeVar -> MonoType -> Bool
 occursCheck typeVar type_ =
-    AssocSet.member typeVar <| Type.freeVarsMono type_
+    let
+        inFields : Dict VarName MonoType -> Bool
+        inFields fields =
+            List.any (occursCheck typeVar) (Dict.values fields)
+    in
+    case type_ of
+        TypeVar var ->
+            var == typeVar
+
+        Function { from, to } ->
+            occursCheck typeVar from || occursCheck typeVar to
+
+        Int ->
+            False
+
+        Float ->
+            False
+
+        Char ->
+            False
+
+        String ->
+            False
+
+        Bool ->
+            False
+
+        List listItemType ->
+            occursCheck typeVar listItemType
+
+        Unit ->
+            False
+
+        Tuple t1 t2 ->
+            occursCheck typeVar t1 || occursCheck typeVar t2
+
+        Tuple3 t1 t2 t3 ->
+            occursCheck typeVar t1
+                || occursCheck typeVar t2
+                || occursCheck typeVar t3
+
+        Record fields ->
+            inFields fields
+
+        ExtensibleRecord r ->
+            occursCheck typeVar r.type_ || inFields r.fields
+
+        UserDefinedType r ->
+            List.any (occursCheck typeVar) r.args
+
+        WebGLShader r ->
+            inFields r.attributes
+                || inFields r.uniforms
+                || inFields r.varyings

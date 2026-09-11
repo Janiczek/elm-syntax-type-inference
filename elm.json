@@ -11,7 +11,6 @@
     ],
     "elm-version": "0.19.1 <= v < 0.20.0",
     "dependencies": {
-        "Janiczek/transform": "1.1.0 <= v < 2.0.0",
         "elm/core": "1.0.0 <= v < 2.0.0",
         "elm/project-metadata-utils": "1.0.1 <= v < 2.0.0",
         "elm/regex": "1.0.0 <= v < 2.0.0",
