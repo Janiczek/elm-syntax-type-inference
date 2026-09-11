@@ -110,20 +110,33 @@ unqualifiedVarInThisModule :
     -> Result Error (Maybe ( PackageName, FullModuleName ))
 unqualifiedVarInThisModule thisFile maybeModuleName varName =
     Ok <|
-        if maybeModuleName == Nothing && Elm.Syntax.File.Extra.containsDeclaration varName thisFile then
+        if maybeModuleName == Nothing && Elm.Syntax.File.Extra.containsValueDeclaration varName thisFile then
             Just ( "", Elm.Syntax.File.Extra.moduleName thisFile )
 
         else
             Nothing
 
 
-{-| Does this import's own `exposing` clause name this value/operator?
+{-| Could this import bring this value/operator into unqualified scope?
+
+A pre-filter for speed optimization (`True` doesn't mean "does expose").
+
 -}
-importExposesValue : Import -> VarName -> Bool
-importExposesValue import_ varName =
-    import_.exposingList
-        |> Maybe.map (Node.value >> Elm.Syntax.File.Extra.exposesInExposing varName)
-        |> Maybe.withDefault False
+importCouldExposeValue : Import -> VarName -> Bool
+importCouldExposeValue import_ varName =
+    case import_.exposingList of
+        Nothing ->
+            -- `import Foo` brings nothing into unqualified scope
+            False
+
+        Just exposingList ->
+            case Elm.Syntax.File.Extra.exposesInExposing varName (Node.value exposingList) of
+                Just answer ->
+                    answer
+
+                Nothing ->
+                    -- (..) was used
+                    True
 
 
 unqualifiedVarInImportedModule :
@@ -151,7 +164,7 @@ unqualifiedVarInImportedModule deps files thisFile maybeModuleName varName =
                 in
                 case Dict.get importName files of
                     Just file ->
-                        Ok (Elm.Syntax.File.Extra.exposes varName file)
+                        Ok (Elm.Syntax.File.Extra.exposesValue varName file)
 
                     Nothing ->
                         dependencyModuleDefines deps (FullModuleName.toString importName) varName
@@ -161,7 +174,7 @@ unqualifiedVarInImportedModule deps files thisFile maybeModuleName varName =
             acceptableImports =
                 thisFile.imports
                     |> List.map Node.value
-                    |> List.filter (\import_ -> importExposesValue import_ varName)
+                    |> List.filter (\import_ -> importCouldExposeValue import_ varName)
                     |> Result.ExtraExtra.combineFilter importDefinesValue
         in
         acceptableImports
@@ -221,7 +234,7 @@ qualifiedVarInImportedModule deps files maybeModuleName varName =
             case Dict.get moduleName files of
                 Just file ->
                     Ok <|
-                        if Elm.Syntax.File.Extra.containsDeclaration varName file then
+                        if Elm.Syntax.File.Extra.containsValueDeclaration varName file then
                             Just ( "", moduleName )
 
                         else

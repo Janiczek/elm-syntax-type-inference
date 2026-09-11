@@ -20,6 +20,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.Type as SyntaxType
+import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies, DependencyPackage)
@@ -235,16 +236,46 @@ gatherTypeAliases deps files =
                                                 |> Result.mapError (State.error << Error.fromTypeAnnotationError)
                                                 |> Result.map State.pure
                                                 |> Result.Extra.merge
+
+                                        -- A record type alias also gets a constructor function
+                                        -- (eg. `type alias Foo = { a : Int }` lets you write `Foo 1`).
+                                        registerConstructor : MonoType -> TIState ()
+                                        registerConstructor aliasMono =
+                                            case Node.value typeAlias.typeAnnotation of
+                                                TypeAnnotation.Record fields ->
+                                                    fields
+                                                        |> State.traverse
+                                                            (\fieldNode ->
+                                                                Tuple.second (Node.value fieldNode)
+                                                                    |> Node.value
+                                                                    |> Type.fromTypeAnnotation resolver
+                                                                    |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                                                                    |> Result.map State.pure
+                                                                    |> Result.Extra.merge
+                                                            )
+                                                        |> State.map
+                                                            (\fieldTypes ->
+                                                                fieldTypes
+                                                                    |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
+                                                            )
+                                                        |> State.andThen
+                                                            (\ctorType ->
+                                                                State.addGlobalBinding
+                                                                    ( "", moduleName, Node.value typeAlias.name )
+                                                                    (Type.closeOver ctorType)
+                                                            )
+
+                                                _ ->
+                                                    State.pure ()
                                     in
-                                    type_
-                                        |> State.map
-                                            (\type__ ->
-                                                Just
-                                                    ( ( "", moduleName, Node.value typeAlias.name )
-                                                    , { args = List.map Node.value typeAlias.generics
-                                                      , type_ = type__
-                                                      }
-                                                    )
+                                    State.do type_ <| \type__ ->
+                                    State.do (registerConstructor type__) <| \() ->
+                                    State.pure <|
+                                        Just
+                                            ( ( "", moduleName, Node.value typeAlias.name )
+                                            , { args = List.map Node.value typeAlias.generics
+                                              , type_ = type__
+                                              }
                                             )
 
                                 _ ->

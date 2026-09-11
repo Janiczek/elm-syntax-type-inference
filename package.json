@@ -7,9 +7,14 @@
   "license": "MIT",
   "scripts": {
     "test": "npm run test:unit && npm run test:e2e",
-    "test:unit": "elm-test-rs",
+    "test:unit": "elm-test",
     "test:e2e": "./e2e/run.mjs",
     "review": "elm-review",
-    "review:fix": "elm-review --fix"
+    "review:fix": "elm-review --fix",
+    "postinstall": "elm-tooling install"
+  },
+  "dependencies": {
+    "elm-test": "^0.19.2-1",
+    "elm-tooling": "^1.20.0"
   }
 }
