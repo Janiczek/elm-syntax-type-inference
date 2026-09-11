@@ -6,7 +6,8 @@
   "author": "Martin Janiczek <martin@janiczek.cz>",
   "license": "MIT",
   "scripts": {
-    "test": "elm-test-rs",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "elm-test-rs",
     "test:e2e": "./e2e/run.mjs",
     "review": "elm-review",
     "review:fix": "elm-review --fix"

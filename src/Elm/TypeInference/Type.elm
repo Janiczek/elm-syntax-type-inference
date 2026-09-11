@@ -10,6 +10,7 @@ module Elm.TypeInference.Type exposing
     , TypeVar
     , TypeVarStyle(..)
     , closeOver
+    , collapseExtensible
     , collapsePrimitive
     , external
     , freeVars
@@ -208,6 +209,105 @@ external package moduleName typeName =
 mono : MonoType -> Type
 mono =
     Forall []
+
+
+{-| Extensible record on top of a closed record is a closed record:
+`{ r | a : Float }` with `r = { b : Char }` is `{ a : Float, b : Char }`
+
+Bias towards the outer fields.
+
+-}
+collapseExtensible : MonoType -> MonoType
+collapseExtensible type_ =
+    case type_ of
+        ExtensibleRecord r ->
+            case r.type_ of
+                Record baseFields ->
+                    Record (Dict.union r.fields baseFields)
+
+                ExtensibleRecord _ ->
+                    type_
+
+                TypeVar _ ->
+                    type_
+
+                Function _ ->
+                    type_
+
+                Int ->
+                    type_
+
+                Float ->
+                    type_
+
+                Char ->
+                    type_
+
+                String ->
+                    type_
+
+                Bool ->
+                    type_
+
+                List _ ->
+                    type_
+
+                Unit ->
+                    type_
+
+                Tuple _ _ ->
+                    type_
+
+                Tuple3 _ _ _ ->
+                    type_
+
+                UserDefinedType _ ->
+                    type_
+
+                WebGLShader _ ->
+                    type_
+
+        TypeVar _ ->
+            type_
+
+        Function _ ->
+            type_
+
+        Int ->
+            type_
+
+        Float ->
+            type_
+
+        Char ->
+            type_
+
+        String ->
+            type_
+
+        Bool ->
+            type_
+
+        List _ ->
+            type_
+
+        Unit ->
+            type_
+
+        Tuple _ _ ->
+            type_
+
+        Tuple3 _ _ _ ->
+            type_
+
+        Record _ ->
+            type_
+
+        UserDefinedType _ ->
+            type_
+
+        WebGLShader _ ->
+            type_
 
 
 {-| Converts `elm/core` `UserDefinedType` into a `MonoType` primitive

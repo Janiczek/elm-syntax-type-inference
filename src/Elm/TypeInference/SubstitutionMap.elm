@@ -66,13 +66,14 @@ substituteMono substitutions monoType =
     let
         substituteMono_ : MonoType -> MonoType
         substituteMono_ type_ =
-            case type_ of
-                TypeVar var ->
-                    AssocList.get var substitutions
-                        |> Maybe.withDefault type_
+            Type.collapseExtensible <|
+                case type_ of
+                    TypeVar var ->
+                        AssocList.get var substitutions
+                            |> Maybe.withDefault type_
 
-                _ ->
-                    type_
+                    _ ->
+                        type_
     in
     Transform.transformOnce
         Type.recurse

@@ -14,6 +14,7 @@ import Elm.TypeInference.Type as Type
         , Type(..)
         , TypeVarStyle(..)
         )
+import Elm.TypeInference.Type.External as ExternalType
 import Elm.TypeInference.Unify as Unify
 import Expect
 import String.ExtraExtra
@@ -226,6 +227,35 @@ isExtensibleRecordWithFields fieldChecks actual =
             False
 
 
+type alias ShaderFields =
+    { attributes : List ( String, MonoType )
+    , uniforms : List ( String, MonoType )
+    , varyings : List ( String, MonoType )
+    }
+
+
+emptyShader : ShaderFields
+emptyShader =
+    { attributes = []
+    , uniforms = []
+    , varyings = []
+    }
+
+
+isShader : ShaderFields -> Result Error Type -> Bool
+isShader expected actual =
+    actual
+        == Ok
+            (Forall []
+                (WebGLShader
+                    { attributes = Dict.fromList expected.attributes
+                    , uniforms = Dict.fromList expected.uniforms
+                    , varyings = Dict.fromList expected.varyings
+                    }
+                )
+            )
+
+
 suite : Test
 suite =
     let
@@ -286,21 +316,42 @@ suite =
               ( "let f x = x in let g y = f y in (g 1, g ())", isTuple isNumber (is Unit) )
             , -- Self-recursion doesn't block generalization
               ( "let loop x = loop x in (loop 1, loop ())", isTuple isVar isVar )
+            , -- Annotations are trusted, not checked. We assume `elm make` passes.
+              -- This allows having eg. `Float` instead of `number` literals.
+              ( """
+                let
+                    x : Float
+                    x = 1
+                in
+                x
+                """
+              , is Float
+              )
+            , -- Record update on a closed record stays closed (doesn't become extensible)
+              ( """
+                let
+                    record = { a = 1, b = 'x' }
+                in
+                { record | a = 2.5 }
+                """
+              , isRecord [ ( "a", is Float ), ( "b", is Char ) ]
+              )
+            , ( """
+                let
+                    setA r = { r | a = 1.0 }
+                in
+                setA { a = 2, b = 'x' }
+                """
+              , isRecord [ ( "a", is Float ), ( "b", is Char ) ]
+              )
+            , ( "\\record -> { record | a = 1.0 }"
+              , isFunction
+                    (isExtensibleRecordWithFields [ ( "a", is Float ) ])
+                    (isExtensibleRecordWithFields [ ( "a", is Float ) ])
+              )
 
-            --, ( """
-            --    let
-            --        x : Float
-            --        x = 1
-            --    in
-            --    x
-            --    """, is Float )
-            -- TODO check type annotations are checked in let
-            -- TODO check type annotations are checked in top-level declarations
             -- Operator String is desugared away by Elm.Processing.process before we
             -- see it (Infer.elm maps it to impossibleExpr), so it's untestable here.
-            -- TODO RecordUpdateExpression (LocatedNode String) (List (LocatedNode (RecordSetter meta)))
-            -- , ( "{ record | a = 123 }", isRecord [ ( "a", isNumber ) ] ) -- TODO needs `record` in scope
-            -- TODO GLSLExpression String
             ]
 
         badExprs : List ( String, Result Error Type -> Bool )
@@ -314,6 +365,24 @@ suite =
             , ( "case 1 of\n    1 -> 'a'\n    _ -> 2", fails ) -- branch bodies disagree
             , ( "\\r -> ( [ r.a, 1.0 ], [ r.a, 'x' ] )", fails ) -- `r.a` forced to both Float and Char via row unification
             , ( "let a = (\\x -> x) 1 in x", fails ) -- inner scope must not leak
+            , -- updating a field the record doesn't have
+              ( """
+                let
+                    record = { a = 1 }
+                in
+                { record | b = 2 }
+                """
+              , fails
+              )
+            , -- updating a field with a different type
+              ( """
+                let
+                    record = { a = 'x' }
+                in
+                { record | a = 1.0 }
+                """
+              , fails
+              )
             , ( "(\\y -> (\\x -> x) y) x", fails )
             , ( "\\f -> (f 1, f ())", fails ) -- Lambdas don't generalize, only let-polymorphism does
             , ( "\\f -> let g = f in (g 1, g ())", fails )
@@ -385,12 +454,64 @@ main = ()
                     )
                     goodExprs
             ]
-
-        -- TODO number later used with an int -> coerced into an int
-        -- TODO number later used with a float -> coerced into a float
         , unifyAliasSuite
         , bindingGroupSuite
         , dependenciesSuite
+        , glslSuite
+        ]
+
+
+glslSuite : Test
+glslSuite =
+    let
+        attr : List ( String, MonoType ) -> ShaderFields
+        attr attributes =
+            { emptyShader | attributes = attributes }
+    in
+    Test.describe "GLSL shaders"
+        [ Test.describe "storage qualifiers"
+            (List.map testExpr
+                [ ( "[glsl|attribute vec3 a_position;|]"
+                  , isShader { emptyShader | attributes = [ ( "a_position", ExternalType.vec3 ) ] }
+                  )
+                , ( "[glsl|uniform mat4 u_view;|]"
+                  , isShader { emptyShader | uniforms = [ ( "u_view", ExternalType.mat4 ) ] }
+                  )
+                , ( "[glsl|varying vec2 v_texcoord;|]"
+                  , isShader { emptyShader | varyings = [ ( "v_texcoord", ExternalType.vec2 ) ] }
+                  )
+                ]
+            )
+        , Test.describe "variable types"
+            (List.map testExpr
+                [ ( "[glsl|attribute vec2 x;|]", isShader (attr [ ( "x", ExternalType.vec2 ) ]) )
+                , ( "[glsl|attribute vec3 x;|]", isShader (attr [ ( "x", ExternalType.vec3 ) ]) )
+                , ( "[glsl|attribute vec4 x;|]", isShader (attr [ ( "x", ExternalType.vec4 ) ]) )
+                , ( "[glsl|attribute mat4 x;|]", isShader (attr [ ( "x", ExternalType.mat4 ) ]) )
+                , ( "[glsl|attribute sampler2d x;|]", isShader (attr [ ( "x", ExternalType.texture ) ]) )
+                , ( "[glsl|attribute int x;|]", isShader (attr [ ( "x", Int ) ]) )
+                , ( "[glsl|attribute float x;|]", isShader (attr [ ( "x", Float ) ]) )
+                , -- we drop types we don't know:
+                  ( "[glsl|attribute mat3 x;|]", isShader emptyShader )
+                ]
+            )
+        , Test.describe "unification"
+            (List.map testExpr
+                [ ( "(\\x -> x) [glsl|attribute vec3 x;|]"
+                  , isShader (attr [ ( "x", ExternalType.vec3 ) ])
+                  )
+                , -- Two shaders with the same declarations unify.
+                  ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec3 x;|] ]"
+                  , isList (isShader (attr [ ( "x", ExternalType.vec3 ) ]))
+                  )
+                , -- Shader records are closed
+                  ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec3 y;|] ]", fails )
+                , ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec2 x;|] ]", fails )
+                , ( "[ [glsl|attribute vec3 x;|], [glsl|uniform vec3 x;|] ]", fails )
+                , ( "[ [glsl|attribute vec3 x;|], 1 ]", fails )
+                , ( "[glsl|attribute vec3 x;|] 1", fails )
+                ]
+            )
         ]
 
 
