@@ -29,6 +29,7 @@ module Elm.TypeInference.Type exposing
     , number_
     , parseVarName
     , recurse
+    , superTypeToString
     , toString
     , varToString
     )
@@ -522,25 +523,40 @@ monoTypeToString type_ =
                     ]
 
 
+{-| The name of the Elm typeclass a type variable is constrained by.
+
+`Normal` (an unconstrained variable) has no such name; we say "any type" since
+that's what it accepts.
+
+-}
+superTypeToString : SuperType -> String
+superTypeToString super =
+    case super of
+        Normal ->
+            "any type"
+
+        Number ->
+            "number"
+
+        Comparable ->
+            "comparable"
+
+        Appendable ->
+            "appendable"
+
+        CompAppend ->
+            "compappend"
+
+
 varToString : TypeVar -> String
 varToString ( style, super ) =
     let
         prefix =
-            case super of
-                Normal ->
-                    ""
+            if super == Normal then
+                ""
 
-                Number ->
-                    "number"
-
-                Comparable ->
-                    "comparable"
-
-                Appendable ->
-                    "appendable"
-
-                CompAppend ->
-                    "compappend"
+            else
+                superTypeToString super
     in
     case ( super, style ) of
         ( Normal, Generated theId ) ->

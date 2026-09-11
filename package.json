@@ -6,8 +6,9 @@
   "author": "Martin Janiczek <martin@janiczek.cz>",
   "license": "MIT",
   "scripts": {
-    "test": "elm-test-rs --compiler ~/.elm/elm-tooling/elm/0.19.1/elm",
-    "review": "elm-review --compiler ~/.elm/elm-tooling/elm/0.19.1/elm",
-    "review:fix": "elm-review --compiler ~/.elm/elm-tooling/elm/0.19.1/elm --fix"
+    "test": "elm-test-rs",
+    "test:e2e": "./e2e/run.mjs",
+    "review": "elm-review",
+    "review:fix": "elm-review --fix"
   }
 }

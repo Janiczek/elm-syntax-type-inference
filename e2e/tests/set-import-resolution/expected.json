@@ -1,0 +1,4 @@
+{
+  "expect": "pass",
+  "note": "SSCCE for `import Set exposing (Set)` not registering correctly."
+}
