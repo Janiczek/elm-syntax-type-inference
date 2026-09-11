@@ -1323,3 +1323,175 @@ infiniteLoopRegression =
             getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "update"
                 |> Result.map (Type.normalize >> Type.toString)
                 |> Expect.equal (Ok "List Main.Window -> List Main.Window")
+
+
+recordConstructorFunctionRegression : Test
+recordConstructorFunctionRegression =
+    Test.test "a record type alias's own module can call it as a constructor function" <|
+        \() ->
+            let
+                modules =
+                    Dict.singleton [ "Main" ] <|
+                        String.ExtraExtra.multilineInput """
+                            module Main exposing (main)
+
+                            type alias Foo =
+                                { a : Int
+                                , b : String
+                                }
+
+                            main : Foo
+                            main =
+                                Foo 1 "x"
+                            """
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "{a : Int, b : String}")
+
+
+unionConstructorReexposeRegression : Test
+unionConstructorReexposeRegression =
+    Test.test "a union constructor re-exported via `exposing (Foo(..))` resolves unqualified in an importing module" <|
+        \() ->
+            let
+                modules =
+                    Dict.fromList
+                        [ ( [ "A" ]
+                          , String.ExtraExtra.multilineInput """
+                                module A exposing (Foo(..))
+
+                                type Foo
+                                    = Foo Int
+                                """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+                                module Main exposing (main)
+
+                                import A exposing (Foo(..))
+
+                                main : Foo
+                                main =
+                                    Foo 1
+                                """
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "A.Foo")
+
+
+recordConstructorReexposeRegression : Test
+recordConstructorReexposeRegression =
+    Test.test "a record type alias's implicit constructor re-exported via `exposing (Bar)` resolves unqualified in an importing module" <|
+        \() ->
+            let
+                modules =
+                    Dict.fromList
+                        [ ( [ "A" ]
+                          , String.ExtraExtra.multilineInput """
+                                module A exposing (Bar)
+
+                                type alias Bar =
+                                    { x : Int }
+                                """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+                                module Main exposing (main)
+
+                                import A exposing (Bar)
+
+                                main : Bar
+                                main =
+                                    Bar 1
+                                """
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "{x : Int}")
+
+
+unexposedUnionConstructorIsntFound : Test
+unexposedUnionConstructorIsntFound =
+    Test.test "union type exposed without `(..)` does not let an importing module use its constructor unqualified" <|
+        \() ->
+            let
+                modules =
+                    Dict.fromList
+                        [ ( [ "A" ]
+                          , String.ExtraExtra.multilineInput """
+                                module A exposing (Foo)
+
+                                type Foo
+                                    = Foo Int
+                                """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+                                module Main exposing (main)
+
+                                import A exposing (Foo)
+
+                                main =
+                                    Foo 1
+                                """
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal
+                    (Err
+                        (CouldntInfer
+                            (VarNotFound
+                                { usedIn = FullModuleName.fromModuleName_ [ "Main" ]
+                                , varName = "Foo"
+                                }
+                            )
+                        )
+                    )
+
+
+importWithSpecificExposes : Test
+importWithSpecificExposes =
+    Test.test "a lambda parameter isn't confused with an unrelated value from a dependency imported only for its type" <|
+        \() ->
+            let
+                decoderModule : Elm.Docs.Module
+                decoderModule =
+                    { name = "Json.Decode"
+                    , comment = ""
+                    , unions = [ { name = "Decoder", comment = "", args = [ "a" ], tags = [] } ]
+                    , aliases = []
+                    , values =
+                        [ { name = "value"
+                          , comment = ""
+                          , tipe = Elm.Type.Type "Json.Decode.Decoder" [ Elm.Type.Type "Basics.Int" [] ]
+                          }
+                        ]
+                    , binops = []
+                    }
+
+                pkg =
+                    { name = "elm/json", dependencies = [], modules = [ decoderModule ] }
+
+                modules =
+                    Dict.singleton [ "Main" ] <|
+                        String.ExtraExtra.multilineInput """
+                            module Main exposing (attributeToString)
+
+                            import Json.Decode exposing (Decoder)
+
+                            attributeToString : ( String, String ) -> String
+                            attributeToString ( name, value ) =
+                                value
+                            """
+            in
+            getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "( String, String ) -> String")
