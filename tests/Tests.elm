@@ -488,11 +488,128 @@ glslSuite =
                 , ( "[glsl|attribute vec3 x;|]", isShader (attr [ ( "x", ExternalType.vec3 ) ]) )
                 , ( "[glsl|attribute vec4 x;|]", isShader (attr [ ( "x", ExternalType.vec4 ) ]) )
                 , ( "[glsl|attribute mat4 x;|]", isShader (attr [ ( "x", ExternalType.mat4 ) ]) )
-                , ( "[glsl|attribute sampler2d x;|]", isShader (attr [ ( "x", ExternalType.texture ) ]) )
+                , ( "[glsl|attribute sampler2D x;|]", isShader (attr [ ( "x", ExternalType.texture ) ]) )
                 , ( "[glsl|attribute int x;|]", isShader (attr [ ( "x", Int ) ]) )
                 , ( "[glsl|attribute float x;|]", isShader (attr [ ( "x", Float ) ]) )
                 , -- we drop types we don't know:
                   ( "[glsl|attribute mat3 x;|]", isShader emptyShader )
+                ]
+            )
+        , Test.describe "whitespace and layout"
+            (List.map testExpr
+                [ -- do we do multiline?
+                  ( """
+                    [glsl|
+                    attribute vec3 a_position;
+                    uniform mat4 u_view;
+                    varying vec2 v_texcoord;
+                    |]
+                    """
+                  , isShader
+                        { attributes = [ ( "a_position", ExternalType.vec3 ) ]
+                        , uniforms = [ ( "u_view", ExternalType.mat4 ) ]
+                        , varyings = [ ( "v_texcoord", ExternalType.vec2 ) ]
+                        }
+                  )
+                , ( """
+                    [glsl|
+                        attribute vec3 x;
+                    |]
+                    """
+                  , isShader (attr [ ( "x", ExternalType.vec3 ) ])
+                  )
+                , ( """
+                    [glsl|
+                    attribute
+                      vec4 a_position
+                         ;
+                    |]
+                    """
+                  , isShader (attr [ ( "a_position", ExternalType.vec4 ) ])
+                  )
+                , ( """
+                    [glsl|
+                    attribute vec3 x;
+                    void main () {
+                      gl_Position = vec4(x, 1.0);
+                    }
+                    |]
+                    """
+                  , isShader (attr [ ( "x", ExternalType.vec3 ) ])
+                  )
+                ]
+            )
+        , Test.describe "comments"
+            (List.map testExpr
+                [ ( "[glsl|uniform /* hello */ mat4 u_x;|]"
+                  , isShader { emptyShader | uniforms = [ ( "u_x", ExternalType.mat4 ) ] }
+                  )
+                , ( """
+                    [glsl|
+                    // a comment; with a semicolon
+                    attribute vec3 x;
+                    |]
+                    """
+                  , isShader (attr [ ( "x", ExternalType.vec3 ) ])
+                  )
+                , ( """
+                    [glsl|
+                    /* multi
+                       line; comment */
+                    attribute vec3 x;
+                    |]
+                    """
+                  , isShader (attr [ ( "x", ExternalType.vec3 ) ])
+                  )
+                , -- decl in comment doesn't count
+                  ( """
+                    [glsl|
+                    // attribute vec3 x;
+                    |]
+                    """
+                  , isShader emptyShader
+                  )
+                ]
+            )
+        , Test.describe "multiple declarators"
+            (List.map testExpr
+                [ ( "[glsl|uniform mat4 u_x, u_y, u_z;|]"
+                  , isShader
+                        { emptyShader
+                            | uniforms =
+                                [ ( "u_x", ExternalType.mat4 )
+                                , ( "u_y", ExternalType.mat4 )
+                                , ( "u_z", ExternalType.mat4 )
+                                ]
+                        }
+                  )
+                , ( "[glsl|uniform /* hello */ mat4 u_x, u_y, u_z;|]"
+                  , isShader
+                        { emptyShader
+                            | uniforms =
+                                [ ( "u_x", ExternalType.mat4 )
+                                , ( "u_y", ExternalType.mat4 )
+                                , ( "u_z", ExternalType.mat4 )
+                                ]
+                        }
+                  )
+                ]
+            )
+        , Test.describe "precision qualifiers"
+            (List.map testExpr
+                [ ( "[glsl|uniform lowp float x;|]"
+                  , isShader { emptyShader | uniforms = [ ( "x", Float ) ] }
+                  )
+                , ( "[glsl|attribute mediump vec3 x;|]", isShader (attr [ ( "x", ExternalType.vec3 ) ]) )
+                , ( "[glsl|uniform highp sampler2D x;|]"
+                  , isShader { emptyShader | uniforms = [ ( "x", ExternalType.texture ) ] }
+                  )
+                ]
+            )
+        , Test.describe "unknown types are dropped"
+            (List.map testExpr
+                [ ( "[glsl|uniform vec3 u_lights[4];|]", isShader emptyShader ) -- array
+                , ( "[glsl|attribute sampler2d x;|]", isShader emptyShader ) -- lowercase spelling
                 ]
             )
         , Test.describe "unification"

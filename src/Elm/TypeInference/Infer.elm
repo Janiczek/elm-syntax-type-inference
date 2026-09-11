@@ -854,24 +854,18 @@ inferPattern ctx patternNode =
 -- GLSL
 
 
-{-| TODO This currently only correctly detects "simple" declarations:
+{-| Extracts the `uniform` / `attribute` / `varying` declarations of a shader.
 
-       uniform mat4 u_worldViewProjection;
-       uniform vec3 u_lightWorldPos;
-       attribute vec4 a_position;
-       attribute vec2 a_texcoord;
-       varying vec4 v_position;
-       varying vec2 v_texcoord;
-
-and so on. Anything more advanced will probably not be picked up correctly:
+Approximation, not a full GLSL parser.
 
        uniform /* hello */ mat4 u_x, u_y, u_z;
        attribute
          vec4 a_position
             ;
+       uniform lowp float u_alpha;
 
-It would be great to write a more precise parser that allows arbitrary
-whitespace and comments in between the uniform/varying/attribute declarations.
+TODO preprocessor directives (`#ifdef`, `#define`d types)
+TODO `struct` declarations
 
 Prior art:
 \* <https://github.com/noteed/language-glsl/blob/master/Language/GLSL/Parser.hs>
@@ -891,36 +885,93 @@ glslDeclarations :
         }
 glslDeclarations code =
     code
-        |> Regex.find glslDeclarationRegex
+        |> Regex.replace glslCommentRegex (\_ -> " ")
+        |> String.split ";"
         |> List.foldl
-            (\{ submatches } acc ->
-                case submatches of
-                    [ Just storageQualifier, Just varType, Just varName ] ->
-                        parseGlslVarType varType
-                            |> Maybe.map
-                                (\varType_ ->
-                                    case storageQualifier of
-                                        "attribute" ->
-                                            { acc | attributes = Dict.insert varName varType_ acc.attributes }
-
-                                        "varying" ->
-                                            { acc | varyings = Dict.insert varName varType_ acc.varyings }
-
-                                        "uniform" ->
-                                            { acc | uniforms = Dict.insert varName varType_ acc.uniforms }
-
-                                        _ ->
-                                            acc
-                                )
-                            |> Maybe.withDefault acc
-
-                    _ ->
-                        acc
-            )
+            (\chunk acc -> List.foldl insertGlslDeclaration acc (glslDeclaration chunk))
             { uniforms = Dict.empty
             , attributes = Dict.empty
             , varyings = Dict.empty
             }
+
+
+insertGlslDeclaration :
+    ( String, VarName, MonoType )
+    ->
+        { uniforms : Dict VarName MonoType
+        , attributes : Dict VarName MonoType
+        , varyings : Dict VarName MonoType
+        }
+    ->
+        { uniforms : Dict VarName MonoType
+        , attributes : Dict VarName MonoType
+        , varyings : Dict VarName MonoType
+        }
+insertGlslDeclaration ( storageQualifier, varName, varType ) acc =
+    case storageQualifier of
+        "attribute" ->
+            { acc | attributes = Dict.insert varName varType acc.attributes }
+
+        "varying" ->
+            { acc | varyings = Dict.insert varName varType acc.varyings }
+
+        "uniform" ->
+            { acc | uniforms = Dict.insert varName varType acc.uniforms }
+
+        _ ->
+            acc
+
+
+{-|
+
+     "uniform mediump mat4 u_x, u_y"
+     -->
+     [ ( "uniform", "u_x", ExternalType.mat4 )
+     , ( "uniform", "u_y", ExternalType.mat4 )
+     ]
+
+-}
+glslDeclaration : String -> List ( String, VarName, MonoType )
+glslDeclaration chunk =
+    case Regex.findAtMost 1 glslDeclarationRegex chunk of
+        [ { submatches } ] ->
+            case submatches of
+                [ Just storageQualifier, _, Just varType, Just declarators ] ->
+                    case parseGlslVarType varType of
+                        Nothing ->
+                            []
+
+                        Just varType_ ->
+                            declarators
+                                |> String.split ","
+                                |> List.filterMap
+                                    (glslDeclaratorName
+                                        >> Maybe.map (\varName -> ( storageQualifier, varName, varType_ ))
+                                    )
+
+                _ ->
+                    []
+
+        _ ->
+            []
+
+
+glslDeclaratorName : String -> Maybe VarName
+glslDeclaratorName declarator =
+    let
+        name : String
+        name =
+            declarator
+                |> String.split "="
+                |> List.head
+                |> Maybe.withDefault ""
+                |> String.trim
+    in
+    if Regex.contains glslVarNameRegex name then
+        Just name
+
+    else
+        Nothing
 
 
 parseGlslVarType : String -> Maybe MonoType
@@ -938,7 +989,7 @@ parseGlslVarType type_ =
         "mat4" ->
             Just ExternalType.mat4
 
-        "sampler2d" ->
+        "sampler2D" ->
             Just ExternalType.texture
 
         "int" ->
@@ -953,5 +1004,17 @@ parseGlslVarType type_ =
 
 glslDeclarationRegex : Regex
 glslDeclarationRegex =
-    Regex.fromString "^(uniform|attribute|varying)\\s+([^\\s]+)\\s+([^;]+);$"
+    Regex.fromString "^\\s*(uniform|attribute|varying)\\s+(highp\\s+|mediump\\s+|lowp\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s+([\\s\\S]+)"
+        |> Maybe.withDefault Regex.never
+
+
+glslVarNameRegex : Regex
+glslVarNameRegex =
+    Regex.fromString "^[A-Za-z_][A-Za-z0-9_]*$"
+        |> Maybe.withDefault Regex.never
+
+
+glslCommentRegex : Regex
+glslCommentRegex =
+    Regex.fromString "//[^\\n]*|/\\*[\\s\\S]*?\\*/"
         |> Maybe.withDefault Regex.never
