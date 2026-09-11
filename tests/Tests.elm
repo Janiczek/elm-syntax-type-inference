@@ -1052,3 +1052,36 @@ importedTypeReExposedFromDependencySuite =
                             )
                         )
                     )
+
+
+infiniteLoopRegression : Test
+infiniteLoopRegression =
+    let
+        modules =
+            Dict.singleton [ "Main" ] <|
+                String.ExtraExtra.multilineInput """
+                module Main exposing (update)
+
+                type alias Window =
+                    { pid : Int
+                    , position : Int
+                    }
+
+                update : List Window -> List Window
+                update windows =
+                    let
+                        updatePosition window =
+                            if window.pid == 1 then
+                                { window | position = window.position + 1 }
+
+                            else
+                                window
+                    in
+                    List.map updatePosition windows
+                """
+    in
+    Test.test "infinite loop for extensible records - regression test" <|
+        \() ->
+            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "update"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "List Main.Window -> List Main.Window")

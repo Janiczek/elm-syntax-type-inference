@@ -77,6 +77,59 @@ expandAlias typeAliases type_ =
             type_
 
 
+{-| Collapse a consecutive chain of `ExtensibleRecord`s. Bias towards outer fields.
+-}
+flattenExtensible :
+    { type_ : MonoType, fields : Dict VarName MonoType }
+    -> { type_ : MonoType, fields : Dict VarName MonoType }
+flattenExtensible er =
+    case er.type_ of
+        ExtensibleRecord inner ->
+            flattenExtensible { type_ = inner.type_, fields = Dict.union er.fields inner.fields }
+
+        TypeVar _ ->
+            er
+
+        Function _ ->
+            er
+
+        Int ->
+            er
+
+        Float ->
+            er
+
+        Char ->
+            er
+
+        String ->
+            er
+
+        Bool ->
+            er
+
+        List _ ->
+            er
+
+        Unit ->
+            er
+
+        Tuple _ _ ->
+            er
+
+        Tuple3 _ _ _ ->
+            er
+
+        Record _ ->
+            er
+
+        UserDefinedType _ ->
+            er
+
+        WebGLShader _ ->
+            er
+
+
 unifyMono : TypeAliases -> MonoType -> MonoType -> TIState SubstitutionMap
 unifyMono typeAliases rawT1 rawT2 =
     let
@@ -112,7 +165,12 @@ unifyMono typeAliases rawT1 rawT2 =
             Dict VarName MonoType
             -> { type_ : MonoType, fields : Dict VarName MonoType }
             -> TIState SubstitutionMap
-        recordVsExtensible recordFields er =
+        recordVsExtensible recordFields rawEr =
+            let
+                er : { type_ : MonoType, fields : Dict VarName MonoType }
+                er =
+                    flattenExtensible rawEr
+            in
             if not (List.all (\k -> Dict.member k recordFields) (Dict.keys er.fields)) then
                 typeMismatch
 
@@ -220,7 +278,7 @@ unifyMono typeAliases rawT1 rawT2 =
         ( Record _, _ ) ->
             typeMismatch
 
-        ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
+        ( ExtensibleRecord rawR1, ExtensibleRecord rawR2 ) ->
             {- Fields that only one side mentions must be added to the other
                side's required fields.
                Both sides' extensible record typevars (the r in { r | ... })
@@ -234,6 +292,16 @@ unifyMono typeAliases rawT1 rawT2 =
                - sum : { commonVar | x : Float, y : Float } -> Float
             -}
             let
+                -- We flatten to be able to correctly find overlaps.
+                -- (There was a bug with an infinite loop in the past.)
+                r1 : { type_ : MonoType, fields : Dict VarName MonoType }
+                r1 =
+                    flattenExtensible rawR1
+
+                r2 : { type_ : MonoType, fields : Dict VarName MonoType }
+                r2 =
+                    flattenExtensible rawR2
+
                 onlyIn1 : Dict VarName MonoType
                 onlyIn1 =
                     Dict.filter (\k _ -> not (Dict.member k r2.fields)) r1.fields
@@ -248,18 +316,25 @@ unifyMono typeAliases rawT1 rawT2 =
                         (Dict.values (Dict.filter (\k _ -> Dict.member k r2.fields) r1.fields))
                         (Dict.values (Dict.filter (\k _ -> Dict.member k r1.fields) r2.fields))
             in
-            State.do State.getNextIdAndTick <| \tailId ->
-            let
-                tail : MonoType
-                tail =
-                    Type.id_ tailId
-            in
-            unifyMany
-                typeAliases
-                (( r1.type_, ExtensibleRecord { type_ = tail, fields = onlyIn2 } )
-                    :: ( r2.type_, ExtensibleRecord { type_ = tail, fields = onlyIn1 } )
-                    :: sharedEqs
-                )
+            if Dict.isEmpty onlyIn1 && Dict.isEmpty onlyIn2 then
+                {- Same field set on both sides -> the `r` in `{r | ...}`
+                   must be the same for both sides.
+                -}
+                unifyMany typeAliases (( r1.type_, r2.type_ ) :: sharedEqs)
+
+            else
+                State.do State.getNextIdAndTick <| \tailId ->
+                let
+                    tail : MonoType
+                    tail =
+                        Type.id_ tailId
+                in
+                unifyMany
+                    typeAliases
+                    (( r1.type_, ExtensibleRecord { type_ = tail, fields = onlyIn2 } )
+                        :: ( r2.type_, ExtensibleRecord { type_ = tail, fields = onlyIn1 } )
+                        :: sharedEqs
+                    )
 
         ( ExtensibleRecord er, Record r ) ->
             recordVsExtensible r er
