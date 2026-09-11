@@ -412,11 +412,21 @@ implicitTypeModule qualifier typeName =
             |> Maybe.map (Tuple.pair ImplicitImports.package)
 
 
-typeResolverFor : Dependencies -> Dict FullModuleName File -> File -> TypeResolver
-typeResolverFor deps files thisFile qualifier typeName =
+{-| A qualifier like `Parser.` can mean two different modules at once:
+
+    import Elm.Parser as Parser
+    import Parser
+
+Elm accepts this as long as each individual name is unambiguous, so we can't
+just unalias `Parser` and be done - we have to try the modules the qualifier
+could stand for and pick the one that actually declares the type.
+
+-}
+qualifierCandidates : File -> ModuleName -> List ModuleName
+qualifierCandidates thisFile qualifier =
     let
-        unaliasedQualifier : ModuleName
-        unaliasedQualifier =
+        unaliased : ModuleName
+        unaliased =
             case qualifier of
                 [ single ] ->
                     Elm.Syntax.File.Extra.unalias thisFile single
@@ -427,8 +437,29 @@ typeResolverFor deps files thisFile qualifier typeName =
                 _ ->
                     qualifier
 
-        firstParty : Maybe ( PackageName, FullModuleName )
-        firstParty =
+        isImportedUnaliased : Bool
+        isImportedUnaliased =
+            thisFile.imports
+                |> List.any (\import_ -> Node.value (Node.value import_).moduleName == qualifier)
+    in
+    if unaliased == qualifier || not isImportedUnaliased then
+        [ unaliased ]
+
+    else
+        -- The alias wins if it declares the type, the literal module name is
+        -- the fallback.
+        [ unaliased, qualifier ]
+
+
+typeResolverFor : Dependencies -> Dict FullModuleName File -> File -> TypeResolver
+typeResolverFor deps files thisFile qualifier typeName =
+    let
+        candidates : List ModuleName
+        candidates =
+            qualifierCandidates thisFile qualifier
+
+        firstParty : ModuleName -> Maybe ( PackageName, FullModuleName )
+        firstParty unaliasedQualifier =
             if List.isEmpty unaliasedQualifier then
                 if Elm.Syntax.File.Extra.containsTypeDeclaration typeName thisFile then
                     Just ( "", Elm.Syntax.File.Extra.moduleName thisFile )
@@ -474,8 +505,8 @@ typeResolverFor deps files thisFile qualifier typeName =
                                 Nothing
                         )
 
-        dependency : Result Type.ResolverAmbiguity (Maybe ( PackageName, FullModuleName ))
-        dependency =
+        dependency : ModuleName -> Result Type.ResolverAmbiguity (Maybe ( PackageName, FullModuleName ))
+        dependency unaliasedQualifier =
             if List.isEmpty unaliasedQualifier then
                 Ok Nothing
 
@@ -507,11 +538,21 @@ typeResolverFor deps files thisFile qualifier typeName =
                             { moduleName = dottedQualifier
                             , possiblePackages = matches |> List.map Tuple.first
                             }
+
+        defaultQualifier : ModuleName
+        defaultQualifier =
+            candidates
+                |> List.head
+                |> Maybe.withDefault qualifier
     in
-    Result.ExtraExtra.firstJustLazy
-        [ \() -> Ok firstParty
-        , \() -> dependency
-        ]
+    candidates
+        |> List.concatMap
+            (\candidate ->
+                [ \() -> Ok (firstParty candidate)
+                , \() -> dependency candidate
+                ]
+            )
+        |> Result.ExtraExtra.firstJustLazy
         |> Result.map
             (\resolved ->
                 case resolved of
@@ -519,15 +560,15 @@ typeResolverFor deps files thisFile qualifier typeName =
                         Just found
 
                     Nothing ->
-                        implicitTypeModule unaliasedQualifier typeName
+                        implicitTypeModule defaultQualifier typeName
             )
         |> Result.map
             (Maybe.withDefault
                 ( ""
-                , if List.isEmpty unaliasedQualifier then
+                , if List.isEmpty defaultQualifier then
                     Elm.Syntax.File.Extra.moduleName thisFile
 
                   else
-                    FullModuleName.fromModuleName_ unaliasedQualifier
+                    FullModuleName.fromModuleName_ defaultQualifier
                 )
             )

@@ -40,6 +40,7 @@ basics =
     , aliases = []
     , values =
         [ { name = "identity", comment = "", tipe = Lambda (Var "a") (Var "a") }
+        , { name = "e", comment = "", tipe = Type "Basics.Float" [] }
         ]
     , binops =
         [ { name = "+"

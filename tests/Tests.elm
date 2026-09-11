@@ -1167,6 +1167,315 @@ main = 1 + 2
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
+        , Test.test "a let destructuring can use a let function defined above it" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    let
+        pair = ( 1, 'a' )
+        ( n, c ) = pair
+    in
+    c
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a let destructuring can use a let function defined below it" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    let
+        ( n, c ) = pair
+        pair = ( 1, 'a' )
+    in
+    c
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a let function can use a name bound by a let destructuring below it" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    let
+        useIt = c
+        ( n, c ) = ( 1, 'a' )
+    in
+    useIt
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a let record destructuring can use a let function defined above it" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    let
+        record : { a : Char, b : Int }
+        record = { a = 'x', b = 1 }
+
+        { a, b } = record
+    in
+    a
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a chain of let destructurings resolves in dependency order" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    let
+        ( c, d ) = ( b, 'y' )
+        ( a, b ) = start
+        start = ( 'x', 'z' )
+    in
+    c
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a case-pattern variable shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+type Box a = Box a
+
+main =
+    case Box 'x' of
+        Box identity ->
+            identity
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a let binding shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    let
+        identity = 'x'
+    in
+    identity
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a lambda argument shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    (\\identity -> identity) 'x'
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a function argument shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+useIt identity = identity
+
+main = useIt 'x'
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a local binding shadowing an implicitly imported name keeps the annotated type of its declaration" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+type MyResult e a = MyOk a | MyErr e
+
+main : MyResult Char Int
+main =
+    let
+        change = MyErr 'x'
+    in
+    case change of
+        MyOk c -> MyOk c
+        MyErr e -> MyErr e
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Main.MyResult Char Int")
+        , Test.test "a qualifier shared by an alias and a real module resolves a type to whichever declares it" <|
+            \() ->
+                let
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Parser" ]
+                              , """
+module Parser exposing (Problem(..))
+
+type Problem = Oops
+"""
+                              )
+                            , ( [ "Elm", "Parser" ]
+                              , """
+module Elm.Parser exposing (parse)
+
+parse x = x
+"""
+                              )
+                            , ( [ "Main" ]
+                              , """
+module Main exposing (main)
+
+import Elm.Parser as Parser
+import Parser
+
+describe : Parser.Problem -> Char
+describe problem = 'x'
+
+main = describe Parser.Oops
+"""
+                              )
+                            ]
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Char")
+        , Test.test "a qualifier shared by an alias and a real module prefers the aliased module when it declares the type" <|
+            \() ->
+                let
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Parser" ]
+                              , """
+module Parser exposing (Problem(..))
+
+type Problem = TheWrongOne
+"""
+                              )
+                            , ( [ "Elm", "Parser" ]
+                              , """
+module Elm.Parser exposing (Problem(..))
+
+type Problem = TheRightOne
+"""
+                              )
+                            , ( [ "Main" ]
+                              , """
+module Main exposing (main)
+
+import Elm.Parser as Parser
+import Parser
+
+main : Parser.Problem
+main = Parser.TheRightOne
+"""
+                              )
+                            ]
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Elm.Parser.Problem")
+        , Test.test "an aliased qualifier still resolves when no module of the alias's own name is imported" <|
+            \() ->
+                let
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Elm", "Parser" ]
+                              , """
+module Elm.Parser exposing (Problem(..))
+
+type Problem = Oops
+"""
+                              )
+                            , ( [ "Main" ]
+                              , """
+module Main exposing (main)
+
+import Elm.Parser as Parser
+
+main : Parser.Problem
+main = Parser.Oops
+"""
+                              )
+                            ]
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "Elm.Parser.Problem")
+        , Test.test "an `as` destructuring binds both the alias and the inner names" <|
+            \() ->
+                let
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+main =
+    let
+        useAlias = whole
+        ({ a } as whole) = record
+        record : { a : Char }
+        record = { a = 'x' }
+    in
+    ( useAlias, a )
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (Type.normalize >> Type.toString)
+                    |> Expect.equal (Ok "( {a : Char}, Char )")
         ]
 
 

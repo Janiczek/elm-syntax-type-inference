@@ -26,6 +26,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Pattern exposing (Pattern(..))
+import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
@@ -291,24 +292,38 @@ inferExpr ctx exprNode =
                     ++ e2Eqs
 
         FunctionOrValue moduleName varName ->
-            case
-                ModuleLookup.moduleOfVar
-                    ctx.dependencies
-                    ctx.files
-                    ctx.thisFile
-                    (FullModuleName.fromModuleName moduleName)
-                    varName
-            of
-                Ok (Just ( package, fullModuleName )) ->
-                    State.do (State.lookupGlobalEnv package fullModuleName varName) <| \varType ->
-                    finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
+            -- Lexically bound name wins over imported one
+            State.do
+                (if List.isEmpty moduleName then
+                    State.existsInEnv varName
 
-                Ok Nothing ->
-                    State.do (State.lookupEnv ctx.thisModuleName varName) <| \varType ->
-                    finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
+                 else
+                    State.pure False
+                )
+            <| \isLexical ->
+            if isLexical then
+                State.do (State.lookupEnv ctx.thisModuleName varName) <| \varType ->
+                finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
 
-                Err err ->
-                    State.error err
+            else
+                case
+                    ModuleLookup.moduleOfVar
+                        ctx.dependencies
+                        ctx.files
+                        ctx.thisFile
+                        (FullModuleName.fromModuleName moduleName)
+                        varName
+                of
+                    Ok (Just ( package, fullModuleName )) ->
+                        State.do (State.lookupGlobalEnv package fullModuleName varName) <| \varType ->
+                        finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
+
+                    Ok Nothing ->
+                        State.do (State.lookupEnv ctx.thisModuleName varName) <| \varType ->
+                        finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
+
+                    Err err ->
+                        State.error err
 
         IfBlock e1 e2 e3 ->
             State.do (f e1) <| \( id1, eqs1 ) ->
@@ -590,65 +605,67 @@ inferRecordSetters ctx fieldSetters =
 
 
 {-| Solve decls in `let..in` in dependency order.
+`let` functions and `let` destructurings are available at the same time.
 -}
 solveLetDeclarations : Ctx -> List (Node LetDeclaration) -> TIState ()
 solveLetDeclarations ctx declarations =
     let
-        functions : List ( Node LetDeclaration, VarName, Expression.Function )
-        functions =
-            declarations
-                |> List.filterMap
-                    (\declNode ->
-                        case Node.value declNode of
-                            LetFunction fn ->
-                                Just ( declNode, functionName fn, fn )
+        indexed : List ( Int, Node LetDeclaration )
+        indexed =
+            List.indexedMap Tuple.pair declarations
 
-                            LetDestructuring _ _ ->
-                                Nothing
+        byIndex : Dict Int (Node LetDeclaration)
+        byIndex =
+            Dict.fromList indexed
+
+        boundNames : Node LetDeclaration -> List VarName
+        boundNames declNode =
+            case Node.value declNode of
+                LetFunction fn ->
+                    [ functionName fn ]
+
+                LetDestructuring patternNode _ ->
+                    Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
+
+        -- name -> index of the declaration binding it
+        indexOfName : Dict VarName Int
+        indexOfName =
+            indexed
+                |> List.concatMap
+                    (\( index, declNode ) ->
+                        boundNames declNode |> List.map (\name -> ( name, index ))
                     )
-
-        names : Set VarName
-        names =
-            functions |> List.map (\( _, name, _ ) -> name) |> Set.fromList
-
-        byName : Dict VarName ( Node LetDeclaration, Expression.Function )
-        byName =
-            functions
-                |> List.map (\( declNode, name, fn ) -> ( name, ( declNode, fn ) ))
                 |> Dict.fromList
 
-        edges : VarName -> List VarName
-        edges name =
-            case Dict.get name byName of
+        bodyOf : Node LetDeclaration -> Expression
+        bodyOf declNode =
+            case Node.value declNode of
+                LetFunction fn ->
+                    Node.value (Node.value fn.declaration).expression
+
+                LetDestructuring _ exprNode ->
+                    Node.value exprNode
+
+        edges : Int -> List Int
+        edges index =
+            case Dict.get index byIndex of
                 Nothing ->
                     []
 
-                Just ( _, fn ) ->
-                    referencedNames (Node.value (Node.value fn.declaration).expression)
+                Just declNode ->
+                    referencedNames (bodyOf declNode)
                         |> List.filterMap
                             (\( maybeModuleName, refName ) ->
-                                if maybeModuleName == Nothing && Set.member refName names then
-                                    Just refName
+                                if maybeModuleName == Nothing then
+                                    Dict.get refName indexOfName
 
                                 else
                                     Nothing
                             )
 
-        sccs : List (List VarName)
+        sccs : List (List Int)
         sccs =
-            SCC.stronglyConnectedComponents (Set.toList names) edges
-
-        solveFunctionGroups : TIState ()
-        solveFunctionGroups =
-            sccs
-                |> State.traverse
-                    (\groupNames ->
-                        groupNames
-                            |> List.filterMap (\name -> Dict.get name byName)
-                            |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
-                            |> State.andThen (BindingGroup.solveGroup ctx.typeAliases)
-                    )
-                |> State.map (always ())
+            SCC.stronglyConnectedComponents (List.map Tuple.first indexed) edges
 
         inferDestructuring : Node LetDeclaration -> Node Pattern -> Node Expression -> TIState ()
         inferDestructuring declNode patternNode exprNode =
@@ -677,22 +694,55 @@ solveLetDeclarations ctx declarations =
             State.do (Unify.unifyMany ctx.typeAliases preSubstitutedEqs) <| \groupSubst ->
             State.composeSubst groupSubst
 
-        solveDestructurings : TIState ()
-        solveDestructurings =
-            declarations
-                |> State.traverse
-                    (\declNode ->
-                        case Node.value declNode of
-                            LetDestructuring patternNode exprNode ->
-                                inferDestructuring declNode patternNode exprNode
+        solveGroup : List Int -> TIState ()
+        solveGroup groupIndices =
+            let
+                groupDecls : List (Node LetDeclaration)
+                groupDecls =
+                    groupIndices |> List.filterMap (\index -> Dict.get index byIndex)
 
-                            LetFunction _ ->
-                                State.pure ()
+                functions : List ( Node LetDeclaration, Expression.Function )
+                functions =
+                    groupDecls
+                        |> List.filterMap
+                            (\declNode ->
+                                case Node.value declNode of
+                                    LetFunction fn ->
+                                        Just ( declNode, fn )
+
+                                    LetDestructuring _ _ ->
+                                        Nothing
+                            )
+
+                destructurings : List ( Node LetDeclaration, Node Pattern, Node Expression )
+                destructurings =
+                    groupDecls
+                        |> List.filterMap
+                            (\declNode ->
+                                case Node.value declNode of
+                                    LetDestructuring patternNode exprNode ->
+                                        Just ( declNode, patternNode, exprNode )
+
+                                    LetFunction _ ->
+                                        Nothing
+                            )
+            in
+            State.do
+                (functions
+                    |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
+                    |> State.andThen (BindingGroup.solveGroup ctx.typeAliases)
+                )
+            <| \() ->
+            destructurings
+                |> State.traverse
+                    (\( declNode, patternNode, exprNode ) ->
+                        inferDestructuring declNode patternNode exprNode
                     )
                 |> State.map (always ())
     in
-    State.do solveDestructurings <| \() ->
-    solveFunctionGroups
+    sccs
+        |> State.traverse solveGroup
+        |> State.map (always ())
 
 
 
