@@ -153,6 +153,7 @@ function discoverTests(filters) {
 }
 
 async function runTest(name) {
+  process.stdout.write(name);
   const testDir = path.join(TESTS_DIR, name);
   const projectDir = path.join(testDir, "project");
   const expected = readJson(path.join(testDir, "expected.json"));
@@ -176,7 +177,7 @@ async function runTest(name) {
 function printReport({ name, expected, result, passed }) {
   const actual = result.ok ? "pass" : "fail";
   const suffix = passed ? "" : `  (expected: ${expected.expect}, actual: ${actual})`;
-  console.log(`${passed ? "✓ PASS" : "✗ FAIL"}  ${name}${suffix}`);
+  console.log(` ${passed ? "✓ PASS" : "✗ FAIL"}${suffix}`);
 
   if (!result.ok && result.error) {
     console.log(`    error: ${result.error}`);

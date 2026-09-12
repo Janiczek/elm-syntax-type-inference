@@ -1,4 +1,4 @@
-module Tests exposing (..)
+module Tests exposing (suite)
 
 import Dict exposing (Dict)
 import Elm.Docs
@@ -450,10 +450,19 @@ main = ()
                     goodExprs
             ]
         , unifyAliasSuite
+        , substitutionMapCompressionSuite
         , bindingGroupSuite
         , dependenciesSuite
         , glslSuite
         , largeInputsSuite
+        , importedTypeInferredProperly
+        , infiniteLoopRegression
+        , aliasParamNameCollisionRegression
+        , recordConstructorFunctionRegression
+        , unionConstructorReexposeRegression
+        , recordConstructorReexposeRegression
+        , unexposedUnionConstructorIsntFound
+        , importWithSpecificExposes
         ]
 
 
@@ -475,6 +484,30 @@ main =
                     |> inferMainModule
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
+
+        , Test.test "a large list of large records doesn't blow the stack" <| \() ->
+            let
+                record : String
+                record =
+                    "{ "
+                        ++ (List.range 1 17
+                                |> List.map (\i -> "field" ++ String.fromInt i ++ " = " ++ String.fromInt i)
+                                |> String.join ", "
+                           )
+                        ++ " }"
+            in
+            ("""module Main exposing (main)
+
+main =
+    [ """
+                ++ String.join "\n    , " (List.repeat 500 record)
+                ++ """
+    ]
+"""
+            )
+                |> inferMainModule
+                |> Result.map (always ())
+                |> Expect.equal (Ok ())
         ]
 
 
@@ -1477,7 +1510,7 @@ var n =
 
 runUnify : Dict ( Type.PackageName, FullModuleName.FullModuleName, String ) Unify.TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
-    Unify.unifyMany typeAliases eqs
+    Unify.unifyMany { typeAliases = typeAliases, checks = True } SubstitutionMap.empty eqs
         |> State.run (State.init Dict.empty)
         |> Tuple.first
 
@@ -1508,7 +1541,7 @@ unifyAliasSuite =
     Test.describe "Unify: type alias expansion"
         [ Test.test "a Pair Float unifies with (Float, Float)" <| \() ->
         run [ ( pairOf Float, Tuple (var 0) (var 1) ) ]
-            |> Result.map (\subst -> SubstitutionMap.substituteMono subst (Tuple (var 0) (var 1)))
+            |> Result.map (\subst -> SubstitutionMap.substituteMonoPure subst (Tuple (var 0) (var 1)))
             |> Expect.equal (Ok (Tuple Float Float))
         , Test.test "two different uses of the same alias don't leak into each other" <| \() ->
         run
@@ -1517,8 +1550,8 @@ unifyAliasSuite =
             ]
             |> Result.map
                 (\subst ->
-                    ( SubstitutionMap.substituteMono subst (var 0)
-                    , SubstitutionMap.substituteMono subst (var 2)
+                    ( SubstitutionMap.substituteMonoPure subst (var 0)
+                    , SubstitutionMap.substituteMonoPure subst (var 2)
                     )
                 )
             |> Expect.equal (Ok ( Float, Char ))
@@ -1529,8 +1562,43 @@ unifyAliasSuite =
         ]
 
 
-importedTypeReExposedFromDependencySuite : Test
-importedTypeReExposedFromDependencySuite =
+{-| `optimizations-plan.md` Step 1: path compression must not jump *over* a
+quantified var. `SubstitutionMap.substitute` removes the scheme's bound ids
+from the map's domain before substituting the body, precisely so a chain
+resolution stops there instead of continuing on to whatever the bound var
+would otherwise point at outside the map. This assumes a quantified var is
+never itself in the substitution's domain (see `optimizations-plan.md` Step 1
+"One invariant to verify, not assume") -- this test pins that behavior down.
+-}
+substitutionMapCompressionSuite : Test
+substitutionMapCompressionSuite =
+    let
+        a : Type.TypeVar
+        a =
+            ( Type.Generated 0, Type.Normal )
+
+        b : Type.TypeVar
+        b =
+            ( Type.Generated 1, Type.Normal )
+
+        -- a -> b -> Int, a chain that would otherwise compress straight to Int.
+        subst : SubstitutionMap.SubstitutionMap
+        subst =
+            SubstitutionMap.fromList
+                [ ( a, TypeVar b ), ( b, Int ) ]
+    in
+    Test.describe "SubstitutionMap: path compression stops at quantified vars"
+        [ Test.test "substituting outside any scheme resolves the whole chain" <| \() ->
+        SubstitutionMap.substituteMonoPure subst (TypeVar a)
+            |> Expect.equal Int
+        , Test.test "substituting a scheme quantified over `b` stops the chain at `b`" <| \() ->
+        SubstitutionMap.substitute subst (Type.Forall [ b ] (TypeVar a))
+            |> Expect.equal (Type.Forall [ b ] (TypeVar b))
+        ]
+
+
+importedTypeInferredProperly : Test
+importedTypeInferredProperly =
     let
         setModule : Elm.Docs.Module
         setModule =
@@ -1614,6 +1682,28 @@ infiniteLoopRegression =
     getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "update"
         |> Result.map (Type.normalize >> Type.toString)
         |> Expect.equal (Ok "List Main.Window -> List Main.Window")
+
+
+aliasParamNameCollisionRegression : Test
+aliasParamNameCollisionRegression =
+    let
+        modules =
+            Dict.singleton [ "Main" ] <|
+                String.ExtraExtra.multilineInput """
+                module Main exposing (apply)
+
+                type alias Wrap acc =
+                    acc -> acc
+
+                apply : Wrap acc -> acc -> acc
+                apply f x =
+                    f x
+                """
+    in
+    Test.test "type alias whose own generic param name collides with the caller's generic name (regression test)" <| \() ->
+    getDeclType modules [ "Main" ] "apply"
+        |> Result.map (Type.normalize >> Type.toString)
+        |> Expect.equal (Ok "(Main.Wrap #0) -> #0 -> #0")
 
 
 recordConstructorFunctionRegression : Test

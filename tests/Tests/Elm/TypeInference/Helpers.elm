@@ -47,7 +47,7 @@ inferMainModule moduleCode =
         |> Result.mapError (List.map Debug.toString >> CouldntParse)
         |> Result.andThen
             (\file ->
-                Elm.TypeInference.infer { dependencies = [], files = Dict.singleton mainModule file }
+                Elm.TypeInference.inferAndCheck { dependencies = [], files = Dict.singleton mainModule file }
                     |> Result.mapError CouldntInfer
                     |> Result.andThen
                         (\lookupTables ->
@@ -77,7 +77,7 @@ main =
         |> Result.mapError (List.map Debug.toString >> CouldntParse)
         |> Result.andThen
             (\file ->
-                Elm.TypeInference.infer { dependencies = dependencies, files = Dict.singleton mainModule file }
+                Elm.TypeInference.inferAndCheck { dependencies = dependencies, files = Dict.singleton mainModule file }
                     |> Result.mapError CouldntInfer
                     |> Result.andThen
                         (\lookupTables ->
@@ -120,7 +120,7 @@ inferModulesWithDeps dependencies modules =
             (Ok Dict.empty)
         |> Result.andThen
             (\files ->
-                Elm.TypeInference.infer { dependencies = dependencies, files = files }
+                Elm.TypeInference.inferAndCheck { dependencies = dependencies, files = files }
                     |> Result.mapError CouldntInfer
                     |> Result.map
                         (\lookupTables ->
