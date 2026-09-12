@@ -1,0 +1,2497 @@
+module List.Extra exposing
+    ( last, init, getAt, cons, uncons, unconsLast, push, appendTo, prependTo, maximumBy, maximumWith, minimumBy, minimumWith, andMap, andThen, reverseMap, takeWhile, dropWhile, unique, uniqueBy, allDifferent, allDifferentBy, insertAt, setIf, setAt, remove, updateIf, updateAt, updateIfIndex, removeAt, removeIfIndex, removeWhen, swapAt, stableSortWith, nonEmpty
+    , intercalate, transpose, subsequences, permutations, interweave, cartesianProduct, uniquePairs
+    , foldl1, foldr1, indexedFoldl, indexedFoldr, Step(..), stoppableFoldl
+    , scanl, scanl1, scanr, scanr1, mapAccuml, mapAccumr, unfoldr, iterate, initialize, cycle, reverseRange
+    , splitAt, splitWhen, takeRight, dropRight, takeWhileRight, dropWhileRight, span, break, stripPrefix, group, groupWhile, inits, tails, conditional, select, selectSplit, gatherEquals, gatherEqualsBy, gatherWith, subsequencesNonEmpty, frequencies
+    , isPrefixOf, isSuffixOf, isInfixOf, isSubsequenceOf, isPermutationOf
+    , notMember, find, elemIndex, elemIndices, findIndex, findIndices, findMap, count
+    , zip, zip3
+    , lift2, lift3, lift4
+    , groupsOf, groupsOfWithStep, groupsOfVarying, greedyGroupsOf, greedyGroupsOfWithStep
+    , joinOn
+    )
+
+{-| Convenience functions for working with List
+
+
+# Basics
+
+@docs last, init, getAt, cons, uncons, unconsLast, push, appendTo, prependTo, maximumBy, maximumWith, minimumBy, minimumWith, andMap, andThen, reverseMap, takeWhile, dropWhile, unique, uniqueBy, allDifferent, allDifferentBy, insertAt, setIf, setAt, remove, updateIf, updateAt, updateIfIndex, removeAt, removeIfIndex, removeWhen, swapAt, stableSortWith, nonEmpty
+
+
+# List transformations
+
+@docs intercalate, transpose, subsequences, permutations, interweave, cartesianProduct, uniquePairs
+
+
+# Folds
+
+@docs foldl1, foldr1, indexedFoldl, indexedFoldr, Step, stoppableFoldl
+
+
+# Building lists
+
+@docs scanl, scanl1, scanr, scanr1, mapAccuml, mapAccumr, unfoldr, iterate, initialize, cycle, reverseRange
+
+
+# Sublists
+
+@docs splitAt, splitWhen, takeRight, dropRight, takeWhileRight, dropWhileRight, span, break, stripPrefix, group, groupWhile, inits, tails, conditional, select, selectSplit, gatherEquals, gatherEqualsBy, gatherWith, subsequencesNonEmpty, frequencies
+
+
+# Predicates
+
+@docs isPrefixOf, isSuffixOf, isInfixOf, isSubsequenceOf, isPermutationOf
+
+
+# Searching
+
+@docs notMember, find, elemIndex, elemIndices, findIndex, findIndices, findMap, count
+
+
+# Zipping
+
+@docs zip, zip3
+
+
+# Lift functions onto multiple lists of arguments
+
+@docs lift2, lift3, lift4
+
+
+# Split to groups of given size
+
+@docs groupsOf, groupsOfWithStep, groupsOfVarying, greedyGroupsOf, greedyGroupsOfWithStep
+
+
+# Joins
+
+@docs joinOn
+
+-}
+
+
+{-| Extract the last element of a list.
+
+    last [ 1, 2, 3 ]
+    --> Just 3
+
+    last []
+    --> Nothing
+
+-}
+last : List a -> Maybe a
+last list =
+    case list of
+        [] ->
+            Nothing
+
+        [ x ] ->
+            Just x
+
+        _ :: rest ->
+            last rest
+
+
+{-| Return all elements of the list except the last one.
+
+    init [ 1, 2, 3 ]
+    --> Just [ 1, 2 ]
+
+    init []
+    --> Nothing
+
+-}
+init : List a -> Maybe (List a)
+init list =
+    case list of
+        [] ->
+            Nothing
+
+        nonEmptyList ->
+            nonEmptyList
+                |> List.reverse
+                |> List.tail
+                |> Maybe.map List.reverse
+
+
+{-| Returns `Just` the element at the given index in the list,
+or `Nothing` if the index is out of range.
+-}
+getAt : Int -> List a -> Maybe a
+getAt idx list =
+    if idx < 0 then
+        Nothing
+
+    else
+        List.head <| List.drop idx list
+
+
+{-| Returns a list of repeated applications of `f`. If `f` returns `Nothing`
+the iteration will stop. If it returns `Just y` then `y` will be added to the
+list and the iteration will continue with `f y`.
+
+    collatz : Int -> Maybe Int
+    collatz n =
+        if n == 1 then
+            Nothing
+        else
+            Just <|
+                if modBy 2 n == 0 then
+                    n // 2
+                else
+                    3 * n + 1
+
+    iterate collatz 13
+    --> [13,40,20,10,5,16,8,4,2,1]
+
+-}
+iterate : (a -> Maybe a) -> a -> List a
+iterate f x =
+    iterateHelp f x [] |> List.reverse
+
+
+iterateHelp : (a -> Maybe a) -> a -> List a -> List a
+iterateHelp f x acc =
+    case f x of
+        Just x_ ->
+            iterateHelp f x_ (x :: acc)
+
+        Nothing ->
+            x :: acc
+
+
+{-| Initialize a list of some length with some function.
+
+`initialize n f` creates a list of length `n` with the element at index `i` initialized to the result of `f i`.
+
+-}
+initialize : Int -> (Int -> a) -> List a
+initialize n f =
+    let
+        step i acc =
+            if i < 0 then
+                acc
+
+            else
+                step (i - 1) (f i :: acc)
+    in
+    step (n - 1) []
+
+
+{-| Creates a list of the given length whose elements are obtained by cycling
+through the elements of the given list. If the given list is empty, the
+resulting list will be empty.
+
+    cycle 6 [ 4, 7, 8 ]
+    --> [ 4, 7, 8, 4, 7, 8 ]
+
+    cycle 4 [ 'a', 'b', 'c' ]
+    --> [ 'a', 'b', 'c', 'a' ]
+
+    cycle 9001 []
+    --> []
+
+    cycle 2 [ 1, 2, 3, 4, 5 ]
+    --> [ 1, 2 ]
+
+-}
+cycle : Int -> List a -> List a
+cycle len list =
+    let
+        cycleLength =
+            List.length list
+    in
+    if cycleLength == 0 || cycleLength == len then
+        list
+
+    else if cycleLength < len then
+        List.reverse
+            (reverseAppend
+                (List.take (remainderBy cycleLength len) list)
+                (cycleHelp [] (len // cycleLength) list)
+            )
+
+    else
+        List.take len list
+
+
+cycleHelp : List a -> Int -> List a -> List a
+cycleHelp acc n list =
+    if n > 0 then
+        cycleHelp (reverseAppend list acc) (n - 1) list
+
+    else
+        acc
+
+
+{-| Create a list of numbers, every element decreasing by one.
+You give the highest and lowest number that should be in the list.
+More efficient than calling `List.reverse (List.range lo hi)`
+
+    reverseRange 6 3 == [ 6, 5, 4, 3 ]
+
+    reverseRange 3 3 == [ 3 ]
+
+    reverseRange 3 6 == []
+
+-}
+reverseRange : Int -> Int -> List Int
+reverseRange =
+    let
+        helper : List Int -> Int -> Int -> List Int
+        helper list high low =
+            if high >= low then
+                helper (low :: list) high (low + 1)
+
+            else
+                list
+    in
+    helper []
+
+
+{-| Adds the first element of the tuple to the head of the list.
+
+    cons (1, [2, 3])
+    --> [1, 2, 3]
+
+Useful for dealing with non-empty lists such as produced by `group` and `groupWhile`.
+
+-}
+cons : ( a, List a ) -> List a
+cons ( x, xs ) =
+    x :: xs
+
+
+{-| Decompose a list into its head and tail. If the list is empty, return `Nothing`. Otherwise, return `Just (x, xs)`, where `x` is head and `xs` is tail.
+
+    uncons [1,2,3]
+    --> Just (1, [2,3])
+
+    uncons []
+    --> Nothing
+
+-}
+uncons : List a -> Maybe ( a, List a )
+uncons list =
+    case list of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            Just ( first, rest )
+
+
+{-| Decompose a list into its body and last element. If the list is empty, return `Nothing`. Otherwise, return `Just (x, xs)`, where `x` is the last element and `xs` is the body.
+
+    unconsLast [1,2,3]
+    --> Just (3, [1,2])
+
+    unconsLast []
+    --> Nothing
+
+-}
+unconsLast : List a -> Maybe ( a, List a )
+unconsLast list =
+    case List.reverse list of
+        [] ->
+            Nothing
+
+        last_ :: rest ->
+            ( last_, List.reverse rest )
+                |> Just
+
+
+{-| Adds an element to the end of a list. Not terribly efficient, but comes up a lot in UI programming:
+
+    someItems
+        |> List.map viewItem
+        |> List.Extra.push addNewItemButton
+        |> Html.ul []
+
+-}
+push : a -> List a -> List a
+push x list =
+    list ++ [ x ]
+
+
+{-| Append with arguments optimised for pipelines.
+
+    [ 4, 5, 6 ]
+        |> List.Extra.appendTo [ 1, 2, 3 ]
+        --> [ 4, 5, 6, 1, 2, 3 ]
+
+Useful for pipelined code, where the argument order of `List.append` doesn't quite work.
+
+-}
+appendTo : List a -> List a -> List a
+appendTo a b =
+    List.append b a
+
+
+{-| Prepends a list.
+
+    [ 4, 5, 6 ]
+        |> List.Extra.prependTo [ 1, 2, 3 ]
+        --> [ 1, 2, 3, 4, 5, 6 ]
+
+-}
+prependTo : List a -> List a -> List a
+prependTo =
+    List.append
+
+
+{-| Find the first maximum element in a list using a comparable transformation
+-}
+maximumBy : (a -> comparable) -> List a -> Maybe a
+maximumBy f list =
+    let
+        maxBy : a -> ( a, comparable ) -> ( a, comparable )
+        maxBy x (( _, fy ) as max) =
+            let
+                fx : comparable
+                fx =
+                    f x
+            in
+            if fx > fy then
+                ( x, fx )
+
+            else
+                max
+    in
+    case list of
+        [ l_ ] ->
+            Just l_
+
+        l_ :: ls_ ->
+            Just <| Tuple.first <| List.foldl maxBy ( l_, f l_ ) ls_
+
+        _ ->
+            Nothing
+
+
+{-| Find the first maximum element in a list using a comparison function
+
+    maximumWith compare []
+    --> Nothing
+
+    maximumWith
+      (\x y -> compare x.val y.val)
+      [{id=1, val=1}, {id=2, val=2}, {id=3,val=2}]
+    --> Just { id = 2, val = 2 }
+
+-}
+maximumWith : (a -> a -> Order) -> List a -> Maybe a
+maximumWith comparator list =
+    foldl1
+        (\x y ->
+            case comparator x y of
+                GT ->
+                    x
+
+                _ ->
+                    y
+        )
+        list
+
+
+{-| Find the first minimum element in a list using a comparable transformation
+-}
+minimumBy : (a -> comparable) -> List a -> Maybe a
+minimumBy f list =
+    let
+        minBy : a -> ( a, comparable ) -> ( a, comparable )
+        minBy x (( _, fy ) as min) =
+            let
+                fx : comparable
+                fx =
+                    f x
+            in
+            if fx < fy then
+                ( x, fx )
+
+            else
+                min
+    in
+    case list of
+        [ l_ ] ->
+            Just l_
+
+        l_ :: ls_ ->
+            Just <| Tuple.first <| List.foldl minBy ( l_, f l_ ) ls_
+
+        _ ->
+            Nothing
+
+
+{-| Find the first minimum element in a list using a comparison function
+
+    minimumWith compare []
+    --> Nothing
+    minimumWith
+      (\x y -> compare x.val y.val)
+      [{id=1, val=2}, {id=2, val=1}, {id=3,val=1}]
+    --> Just { id = 2, val = 1 }
+
+-}
+minimumWith : (a -> a -> Order) -> List a -> Maybe a
+minimumWith comparator list =
+    foldl1
+        (\x y ->
+            case comparator x y of
+                LT ->
+                    x
+
+                _ ->
+                    y
+        )
+        list
+
+
+{-| Take elements in order as long as the predicate evaluates to `True`
+-}
+takeWhile : (a -> Bool) -> List a -> List a
+takeWhile predicate =
+    let
+        takeWhileMemo memo list =
+            case list of
+                [] ->
+                    List.reverse memo
+
+                x :: xs ->
+                    if predicate x then
+                        takeWhileMemo (x :: memo) xs
+
+                    else
+                        List.reverse memo
+    in
+    takeWhileMemo []
+
+
+{-| Drop elements in order as long as the predicate evaluates to `True`
+-}
+dropWhile : (a -> Bool) -> List a -> List a
+dropWhile predicate list =
+    case list of
+        [] ->
+            []
+
+        x :: xs ->
+            if predicate x then
+                dropWhile predicate xs
+
+            else
+                list
+
+
+{-| Remove duplicate values, keeping the first instance of each element which appears more than once.
+
+    unique [ 0, 1, 1, 0, 1 ]
+    --> [ 0, 1 ]
+
+-}
+unique : List a -> List a
+unique list =
+    uniqueHelp identity [] list []
+
+
+{-| Drop duplicates where what is considered to be a duplicate is the result of first applying the supplied function to the elements of the list.
+-}
+uniqueBy : (a -> b) -> List a -> List a
+uniqueBy f list =
+    uniqueHelp f [] list []
+
+
+uniqueHelp : (a -> b) -> List b -> List a -> List a -> List a
+uniqueHelp f existing remaining accumulator =
+    case remaining of
+        [] ->
+            List.reverse accumulator
+
+        first :: rest ->
+            let
+                computedFirst =
+                    f first
+            in
+            if List.member computedFirst existing then
+                uniqueHelp f existing rest accumulator
+
+            else
+                uniqueHelp f (computedFirst :: existing) rest (first :: accumulator)
+
+
+{-| Indicate if list has duplicate values.
+
+    allDifferent [ 0, 1, 1, 0, 1 ]
+    --> False
+
+    allDifferent [ 0, 1, 2]
+    --> True
+
+-}
+allDifferent : List a -> Bool
+allDifferent list =
+    allDifferentBy identity list
+
+
+{-| Indicate if list has duplicate values when supplied function are applied on each values.
+-}
+allDifferentBy : (a -> b) -> List a -> Bool
+allDifferentBy f list =
+    List.length list == List.length (uniqueBy f list)
+
+
+{-| Map functions taking multiple arguments over multiple lists. Each list should be of the same length.
+
+    toIntFunctions : List (Float -> Int)
+    toIntFunctions =
+        [ round
+        , floor
+        , ceiling
+        , truncate
+        ]
+
+    toIntFunctions
+        |> andMap [ -1.5, -1.5, -1.5, -1.5 ]
+        --> [ -1, -2, -1, -1 ]
+
+
+    math : List (Int -> Int)
+    math =
+        [ (+) 1
+        , (*) 2
+        , (*) 3 >> (+) 1
+        ]
+
+    math
+        |> andMap [ 1, 2, 3 ]
+        --> [ 2, 4, 10 ]
+
+-}
+andMap : List a -> List (a -> b) -> List b
+andMap list fl =
+    List.map2 (<|) fl list
+
+
+{-| Equivalent to `concatMap`. For example, suppose you want to have a cartesian product of [1,2] and [3,4]:
+
+    [ 1, 2 ]
+        |> andThen
+            (\x ->
+                [ 3, 4 ]
+                    |> andThen (\y -> [ ( x, y ) ])
+            )
+        --> [ ( 1, 3 ), ( 1, 4 ), ( 2, 3 ), ( 2, 4 ) ]
+
+Now suppose we want to have a cartesian product between the first list and the second list and its doubles:
+
+    [ 1, 2 ]
+        |> andThen
+            (\x ->
+                [ 3, 4 ]
+                    |> andThen
+                        (\y ->
+                            [ y, y * 2 ]
+                                |> andThen (\z -> [ ( x, z ) ])
+                        )
+            )
+        --> [ ( 1, 3 ), ( 1, 6 ), ( 1, 4 ), ( 1, 8 ), ( 2, 3 ), ( 2, 6 ), ( 2, 4 ), ( 2, 8 )]
+
+Advanced functional programmers will recognize this as the implementation of bind operator (>>=) for lists from the `Monad` typeclass.
+
+-}
+andThen : (a -> List b) -> List a -> List b
+andThen =
+    List.concatMap
+
+
+{-| `reverseMap f xs` gives the same result as `List.reverse (List.map f xs)`,
+but is tail-recursive and slightly more efficient.
+
+    reverseMap sqrt [ 1, 4, 9 ]
+    --> [ 3, 2, 1 ]
+
+-}
+reverseMap : (a -> b) -> List a -> List b
+reverseMap f list =
+    List.foldl (\x acc -> f x :: acc) [] list
+
+
+{-| Negation of `member`.
+
+    notMember 1 [ 1, 2, 3 ]
+    --> False
+
+    notMember 4 [ 1, 2, 3 ]
+    --> True
+
+-}
+notMember : a -> List a -> Bool
+notMember x list =
+    not (List.member x list)
+
+
+{-| Find the first element that satisfies a predicate and return
+Just that element. If none match, return Nothing.
+
+    find (\num -> num > 5) [ 2, 4, 6, 8 ]
+    --> Just 6
+
+-}
+find : (a -> Bool) -> List a -> Maybe a
+find predicate list =
+    case list of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            if predicate first then
+                Just first
+
+            else
+                find predicate rest
+
+
+{-| Return the index of the first occurrence of the element. Otherwise, return `Nothing`. Indexing starts from 0.
+
+    elemIndex 1 [ 1, 2, 3 ]
+    --> Just 0
+
+    elemIndex 4 [ 1, 2, 3 ]
+    --> Nothing
+
+    elemIndex 1 [ 1, 2, 1 ]
+    --> Just 0
+
+-}
+elemIndex : a -> List a -> Maybe Int
+elemIndex x =
+    findIndex ((==) x)
+
+
+{-| Return all indices of occurrences of the element. If element is not found, return empty list. Indexing starts from 0.
+
+    elemIndices 1 [ 1, 2, 3 ]
+    --> [ 0 ]
+
+    elemIndices 4 [ 1, 2, 3 ]
+    --> []
+
+    elemIndices 1 [ 1, 2, 1 ]
+    --> [ 0, 2 ]
+
+-}
+elemIndices : a -> List a -> List Int
+elemIndices x =
+    findIndices ((==) x)
+
+
+{-| Take a predicate and a list, return the index of the first element that satisfies the predicate. Otherwise, return `Nothing`. Indexing starts from 0.
+
+    isEven : Int -> Bool
+    isEven i =
+        modBy 2 i == 0
+
+    findIndex isEven [ 1, 2, 3 ]
+    --> Just 1
+
+    findIndex isEven [ 1, 3, 5 ]
+    --> Nothing
+
+    findIndex isEven [ 1, 2, 4 ]
+    --> Just 1
+
+-}
+findIndex : (a -> Bool) -> List a -> Maybe Int
+findIndex =
+    findIndexHelp 0
+
+
+findIndexHelp : Int -> (a -> Bool) -> List a -> Maybe Int
+findIndexHelp index predicate list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: xs ->
+            if predicate x then
+                Just index
+
+            else
+                findIndexHelp (index + 1) predicate xs
+
+
+{-| Take a predicate and a list, return indices of all elements satisfying the predicate. Otherwise, return empty list. Indexing starts from 0.
+
+    isEven : Int -> Bool
+    isEven i =
+        modBy 2 i == 0
+
+    findIndices isEven [ 1, 2, 3 ]
+    --> [ 1 ]
+
+    findIndices isEven [ 1, 3, 5 ]
+    --> []
+
+    findIndices isEven [ 1, 2, 4 ]
+    --> [ 1, 2 ]
+
+-}
+findIndices : (a -> Bool) -> List a -> List Int
+findIndices predicate =
+    let
+        consIndexIf index x acc =
+            if predicate x then
+                index :: acc
+
+            else
+                acc
+    in
+    indexedFoldr consIndexIf []
+
+
+{-| Apply a function that may succeed to values in the list and return the result of the first successful match. If none match, then return Nothing.
+
+    mapOverFive : Int -> Maybe Int
+    mapOverFive num =
+        if num > 5 then
+            Just (num * 2)
+        else
+            Nothing
+
+    findMap mapOverFive [2, 4, 6, 8]
+    --> Just 12
+
+This is particularly useful in cases where you have a complex type in a list, and you need to pick out the the first one
+
+    type alias HouseModel =
+        {}
+
+    type Property
+        = Rental
+        | House HouseModel
+        | Commercial
+
+    toHouse : Property -> Maybe HouseModel
+    toHouse property =
+        case property of
+            House house ->
+                Just house
+
+            _ ->
+                Nothing
+
+    viewFirstHomeOfInterest : Viewer -> List Property -> Html msg
+    viewFirstHomeOfInterest viewer propertiesQuery =
+        propertiesQuery
+            |> findMap toHouse
+            |> Maybe.map homeView
+            |> Maybe.withDefault noHomeView
+
+-}
+findMap : (a -> Maybe b) -> List a -> Maybe b
+findMap f list =
+    case list of
+        [] ->
+            Nothing
+
+        a :: tail ->
+            case f a of
+                Just b ->
+                    Just b
+
+                Nothing ->
+                    findMap f tail
+
+
+{-| Returns the number of elements in a list that satisfy a given predicate.
+Equivalent to `List.length (List.filter pred list)` but more efficient.
+
+    count
+        (modBy 2 >> (==) 1) [ 1, 2, 3, 4, 5, 6, 7 ]
+    --> 4
+
+    count
+        ((==) "yeah")
+        [ "She", "loves", "you", "yeah", "yeah", "yeah" ]
+    --> 3
+
+-}
+count : (a -> Bool) -> List a -> Int
+count predicate =
+    List.foldl
+        (\x acc ->
+            if predicate x then
+                acc + 1
+
+            else
+                acc
+        )
+        0
+
+
+{-| Insert an element at a given index.
+If the index is out of bounds, nothing is changed.
+
+    [ 'a', 'c' ] |> insertAt 1 'b'
+    --> [ 'a', 'b', 'c' ]
+
+    [ 'a', 'c' ] |> insertAt -1 'b'
+    --> [ 'a', 'c' ]
+
+    [ 'a', 'c' ] |>  insertAt 100 'b'
+    --> [ 'a', 'c' ]
+
+-}
+insertAt : Int -> a -> List a -> List a
+insertAt index value list =
+    if index <= -1 then
+        list
+
+    else
+        insertAtHelp value list index list []
+
+
+insertAtHelp : a -> List a -> Int -> List a -> List a -> List a
+insertAtHelp value list i rest acc =
+    if i == 0 then
+        List.foldl (::) (value :: rest) acc
+
+    else
+        case rest of
+            [] ->
+                -- index > length list
+                list
+
+            head :: newRest ->
+                insertAtHelp value list (i - 1) newRest (head :: acc)
+
+
+{-| Replace all values that satisfy a predicate with a replacement value.
+-}
+setIf : (a -> Bool) -> a -> List a -> List a
+setIf predicate replacement list =
+    updateIf predicate (always replacement) list
+
+
+{-| Replace all values that satisfy a predicate by calling an update function.
+-}
+updateIf : (a -> Bool) -> (a -> a) -> List a -> List a
+updateIf predicate update list =
+    List.map
+        (\item ->
+            if predicate item then
+                update item
+
+            else
+                item
+        )
+        list
+
+
+{-| Replace a value at a specific index by calling an update function. Return the original list if the index is out of range.
+
+    updateAt 0 ((+) 1) [ 1, 2, 3 ]
+    --> [ 2, 2, 3 ]
+
+See also `updateIfIndex`.
+
+-}
+updateAt : Int -> (a -> a) -> List a -> List a
+updateAt index fn list =
+    if index < 0 then
+        list
+
+    else
+        let
+            tail : List a
+            tail =
+                List.drop index list
+        in
+        case tail of
+            x :: xs ->
+                List.take index list ++ fn x :: xs
+
+            [] ->
+                list
+
+
+{-| Replace a value at an index that satisfies a predicate, by calling an update function.
+
+    updateIfIndex ((==) 2) ((+) 1) [ 1, 2, 3 ]
+    --> [ 1, 2, 4 ]
+
+See also `updateAt`.
+
+-}
+updateIfIndex : (Int -> Bool) -> (a -> a) -> List a -> List a
+updateIfIndex predicate update list =
+    List.indexedMap
+        (\i x ->
+            if predicate i then
+                update x
+
+            else
+                x
+        )
+        list
+
+
+{-| Remove the first occurrence of a value from a list.
+-}
+remove : a -> List a -> List a
+remove x list =
+    removeHelp list x list []
+
+
+removeHelp : List a -> a -> List a -> List a -> List a
+removeHelp list x xs previousElements =
+    case xs of
+        [] ->
+            list
+
+        y :: ys ->
+            if x == y then
+                reverseAppend previousElements ys
+
+            else
+                removeHelp list x ys (y :: previousElements)
+
+
+{-| Set a value in a list by index. Return the original list if the index is out of range.
+
+    setAt 0 42 [ 1, 2, 3 ]
+    --> [ 42, 2, 3 ]
+
+-}
+setAt : Int -> a -> List a -> List a
+setAt index value =
+    updateAt index (always value)
+
+
+{-| Similar to List.sortWith, this sorts values with a custom comparison function.
+Unlike List.sortWith, this sort is guaranteed to be a stable sort.
+Note that List.sortWith is faster and is preferred if sort stability is not required.
+-}
+stableSortWith : (a -> a -> Basics.Order) -> List a -> List a
+stableSortWith pred list =
+    let
+        listWithIndex =
+            List.indexedMap (\i a -> ( a, i )) list
+
+        predWithIndex ( a1, i1 ) ( a2, i2 ) =
+            let
+                result =
+                    pred a1 a2
+            in
+            case result of
+                Basics.EQ ->
+                    Basics.compare i1 i2
+
+                _ ->
+                    result
+    in
+    List.sortWith predWithIndex listWithIndex |> List.map Tuple.first
+
+
+{-| Convert a list to a Nothing when empty.
+
+    nonEmpty []
+    --> Nothing
+
+    nonEmpty [1, 2, 3]
+    --> Just [1, 2, 3]
+
+Useful to guard against empty lists, when you want to keep working with the List type and not switch to a custom NonEmptyList type. For example:
+
+    type Item
+        = Item
+
+    type Parcel
+        = Parcel (List Item)
+
+    items : List Item
+    items =
+        [ Item, Item ]
+
+    nonEmptyParcel : Maybe Parcel
+    nonEmptyParcel =
+        items
+            |> List.nonEmpty
+            |> Maybe.map Parcel
+
+-}
+nonEmpty : List a -> Maybe (List a)
+nonEmpty list =
+    if List.isEmpty list then
+        Nothing
+
+    else
+        Just list
+
+
+{-| Swap two values in a list by index. Return the original list if the index is out of range.
+If the same index is supplied twice the operation has no effect.
+
+    swapAt 1 2 [ 1, 2, 3 ]
+    --> [ 1, 3, 2 ]
+
+-}
+swapAt : Int -> Int -> List a -> List a
+swapAt index1 index2 list =
+    if index1 == index2 || index1 < 0 then
+        list
+
+    else if index1 > index2 then
+        swapAt index2 index1 list
+
+    else
+        let
+            ( part1, tail1 ) =
+                splitAt index1 list
+
+            ( head2, tail2 ) =
+                splitAt (index2 - index1) tail1
+        in
+        case ( uncons head2, uncons tail2 ) of
+            ( Just ( value1, part2 ), Just ( value2, part3 ) ) ->
+                List.concat [ part1, value2 :: part2, value1 :: part3 ]
+
+            _ ->
+                list
+
+
+{-| Remove the element at an index from a list. Return the original list if the index is out of range.
+
+    removeAt 0 [ 1, 2, 3 ]
+    --> [ 2, 3 ]
+
+See also `removeIfIndex`.
+
+-}
+removeAt : Int -> List a -> List a
+removeAt index list =
+    if index < 0 then
+        list
+
+    else
+        case List.drop index list of
+            [] ->
+                list
+
+            _ :: rest ->
+                List.take index list ++ rest
+
+
+{-| Remove an element at an index that satisfies a predicate.
+
+    removeIfIndex ((==) 2) [ 1, 2, 3 ]
+    --> [ 1, 2 ]
+
+See also `removeAt`.
+
+-}
+removeIfIndex : (Int -> Bool) -> List a -> List a
+removeIfIndex predicate =
+    indexedFoldr
+        (\index item acc ->
+            if predicate index then
+                acc
+
+            else
+                item :: acc
+        )
+        []
+
+
+{-| Take a predicate and a list, and return a list that contains elements which fails to satisfy the predicate.
+This is equivalent to `List.filter (not << predicate) list`.
+
+    isEven : Int -> Bool
+    isEven i =
+        modBy 2 i == 0
+
+    removeWhen isEven [ 1, 2, 3, 4 ]
+    --> [ 1, 3 ]
+
+-}
+removeWhen : (a -> Bool) -> List a -> List a
+removeWhen pred list =
+    List.filter (\x -> not (pred x)) list
+
+
+{-| Take a list and a list of lists, insert that list between every list in the list of lists, concatenate the result. `intercalate xs xss` is equivalent to `concat (intersperse xs xss)`.
+
+    intercalate [ 0, 0 ] [ [ 1, 2 ], [ 3, 4 ], [ 5, 6 ] ]
+    --> [ 1, 2, 0, 0, 3, 4, 0, 0, 5, 6 ]
+
+-}
+intercalate : List a -> List (List a) -> List a
+intercalate small big =
+    List.concat (List.intersperse small big)
+
+
+{-| Transpose rows and columns of the list of lists.
+
+    transpose [ [ 1, 2, 3 ], [ 4, 5, 6 ] ]
+    --> [ [ 1, 4 ], [ 2, 5 ], [ 3, 6 ] ]
+
+    transpose [ [ 10, 11 ], [ 20, 40 ], [ 30, 31, 32, 400 ] ]
+    --> [ [ 10, 20, 30 ], [ 11, 40, 31 ] ]
+
+-}
+transpose : List (List a) -> List (List a)
+transpose listOfLists =
+    List.foldr (List.map2 (::)) (List.repeat (rowsLength listOfLists) []) listOfLists
+
+
+rowsLength : List (List a) -> Int
+rowsLength listOfLists =
+    case listOfLists of
+        [] ->
+            0
+
+        x :: _ ->
+            List.length x
+
+
+{-| Return the list of all subsequences of a list.
+
+    subsequences [ 1, 2, 3 ]
+    --> [ [], [ 1 ], [ 2 ], [ 1, 2 ], [ 3 ], [ 1, 3 ], [ 2, 3 ], [ 1, 2, 3 ] ]
+
+-}
+subsequences : List a -> List (List a)
+subsequences list =
+    [] :: subsequencesHelp list
+
+
+{-| Return the list of all subsequences of the argument, except for the empty list.
+
+    subsequencesNonEmpty [ 1, 2, 3 ]
+        == [ [ 1 ], [ 2 ], [ 1, 2 ], [ 3 ], [ 1, 3 ], [ 2, 3 ], [ 1, 2, 3 ] ]
+
+-}
+subsequencesHelp : List a -> List (List a)
+subsequencesHelp list =
+    case list of
+        [] ->
+            []
+
+        first :: rest ->
+            let
+                f ys r =
+                    ys :: (first :: ys) :: r
+            in
+            [ first ] :: List.foldr f [] (subsequencesHelp rest)
+
+
+{-| Return the list of all subsequences of the argument, except for the empty list.
+
+    subsequencesNonEmpty [ 1, 2, 3 ]
+        == [ [ 1 ], [ 2 ], [ 1, 2 ], [ 3 ], [ 1, 3 ], [ 2, 3 ], [ 1, 2, 3 ] ]
+
+-}
+subsequencesNonEmpty : List a -> List ( a, List a )
+subsequencesNonEmpty list =
+    case list of
+        [] ->
+            []
+
+        first :: rest ->
+            let
+                f : ( a, List a ) -> List ( a, List a ) -> List ( a, List a )
+                f ( yf, ys ) r =
+                    ( yf, ys ) :: ( first, yf :: ys ) :: r
+            in
+            ( first, [] ) :: List.foldr f [] (subsequencesNonEmpty rest)
+
+
+{-| Return the list of of all permutations of a list. The result is in lexicographic order.
+
+    permutations [ 1, 2, 3 ]
+    --> [ [ 1, 2, 3 ], [ 1, 3, 2 ], [ 2, 1, 3 ], [ 2, 3, 1 ], [ 3, 1, 2 ], [ 3, 2, 1 ] ]
+
+-}
+permutations : List a -> List (List a)
+permutations list =
+    case list of
+        [] ->
+            [ [] ]
+
+        xs ->
+            let
+                f ( y, ys ) =
+                    List.map ((::) y) (permutations ys)
+            in
+            List.concatMap f (select xs)
+
+
+{-| Return a list that contains elements from the two provided, in alternate order.
+If one list runs out of items, append the items from the remaining list.
+
+    interweave [ 1, 3 ] [ 2, 4 ]
+    --> [ 1, 2, 3, 4 ]
+
+    interweave [ 1, 3, 5, 7 ] [ 2, 4 ]
+    --> [ 1, 2, 3, 4, 5, 7 ]
+
+    interweave [ 4, 9, 16 ] [ 2, 3, 5, 7 ]
+    --> [ 4, 2, 9, 3, 16, 5, 7 ]
+
+-}
+interweave : List a -> List a -> List a
+interweave =
+    interweaveHelp []
+
+
+interweaveHelp : List a -> List a -> List a -> List a
+interweaveHelp acc list1 list2 =
+    case ( list1, list2 ) of
+        ( x :: xs, y :: ys ) ->
+            interweaveHelp (y :: x :: acc) xs ys
+
+        ( [], _ ) ->
+            reverseAppend acc list2
+
+        ( _, [] ) ->
+            reverseAppend acc list1
+
+
+{-| Return the cartesian product of a list of lists.
+If one list is empty, the result is an empty list.
+If the list of lists is empty, the result is an empty singleton.
+
+    cartesianProduct [ [ 1, 2 ], [ 3, 4, 5 ], [ 6 ] ]
+    --> [ [ 1, 3, 6 ], [ 1, 4, 6 ], [ 1, 5, 6 ], [ 2, 3, 6 ], [ 2, 4, 6 ], [ 2, 5, 6 ] ]
+
+    cartesianProduct [ [ 1, 2 ] ]
+    --> [ [ 1 ], [ 2 ] ]
+
+    cartesianProduct [ [ 1, 2 ], [], [ 6 ] ]
+    --> []
+
+    cartesianProduct [ [] ]
+    --> []
+
+    cartesianProduct []
+    --> [ [] ]
+
+-}
+cartesianProduct : List (List a) -> List (List a)
+cartesianProduct listOfLists =
+    case listOfLists of
+        [] ->
+            [ [] ]
+
+        xs :: xss ->
+            lift2 (::) xs (cartesianProduct xss)
+
+
+{-| Return all ways to pair the elements of the list.
+(Essentially, enumerate the possible "handshakes.")
+
+The order of the pair elements doesn't matter, so if `(1,2)` is a returned pair,
+we don't return `(2,1)`.
+
+In more mathematical terms these are 2-combinations without repetition.
+
+    uniquePairs [ 1, 2, 3, 4 ]
+    --> [ ( 1, 2 ), ( 1, 3 ), ( 1, 4 ), ( 2, 3 ), ( 2, 4 ), ( 3, 4 ) ]
+
+In this example, everybody shakes hands with three other people.
+
+-}
+uniquePairs : List a -> List ( a, a )
+uniquePairs list =
+    let
+        go : List a -> List ( a, a ) -> List ( a, a )
+        go queue acc =
+            case queue of
+                [] ->
+                    List.reverse acc
+
+                h :: t ->
+                    go t (List.foldl (\o a -> ( h, o ) :: a) acc t)
+    in
+    go list []
+
+
+reverseAppend : List a -> List a -> List a
+reverseAppend list1 list2 =
+    List.foldl (::) list2 list1
+
+
+{-| Variant of `foldl` that has no starting value argument and treats the head of the list as its starting value. If the list is empty, return `Nothing`.
+
+    foldl1 (-) [ 1, 2, 3, 4 ]
+    --> Just 2
+
+    foldl1 (++) [ "a", "b", "c" ]
+    --> Just "cba"
+
+    foldl1 min []
+    --> Nothing
+
+**Note:** This function changed in a major way between version 7.0.0 and 8.0.0 of this package. The function `foldl1` took in 7.0.0 was `b -> a -> b` consistent with the Haskell implementation of `foldl`, but now its `a -> b -> b`, consistent with `List.foldl`. This function behaves differently in a breaking way, even though its type signature is the same.
+
+-}
+foldl1 : (a -> a -> a) -> List a -> Maybe a
+foldl1 func list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: xs ->
+            Just (List.foldl func x xs)
+
+
+{-| Variant of `foldr` that has no starting value argument and treats the last element of the list as its starting value. If the list is empty, return `Nothing`.
+
+    foldr1 (-) [ 1, 2, 3, 4 ]
+    --> Just -2
+
+    foldr1 (++) [ "a", "b", "c" ]
+    --> Just "abc"
+
+    foldr1 min []
+    --> Nothing
+
+-}
+foldr1 : (a -> a -> a) -> List a -> Maybe a
+foldr1 func list =
+    foldl1 func (List.reverse list)
+
+
+{-| Variant of `foldl` that passes the index of the current element to the step function. `indexedFoldl` is to `List.foldl` as `List.indexedMap` is to `List.map`.
+-}
+indexedFoldl : (Int -> a -> b -> b) -> b -> List a -> b
+indexedFoldl func acc list =
+    let
+        step : a -> ( Int, b ) -> ( Int, b )
+        step x ( i, thisAcc ) =
+            ( i + 1, func i x thisAcc )
+    in
+    Tuple.second (List.foldl step ( 0, acc ) list)
+
+
+{-| Variant of `foldr` that passes the index of the current element to the step function. `indexedFoldr` is to `List.foldr` as `List.indexedMap` is to `List.map`.
+-}
+indexedFoldr : (Int -> a -> b -> b) -> b -> List a -> b
+indexedFoldr func acc list =
+    let
+        step : a -> ( Int, b ) -> ( Int, b )
+        step x ( i, thisAcc ) =
+            ( i - 1, func i x thisAcc )
+    in
+    Tuple.second (List.foldr step ( List.length list - 1, acc ) list)
+
+
+{-| A custom type used for stoppable folds.
+-}
+type Step a
+    = Continue a
+    | Stop a
+
+
+{-| A `foldl` that can stop early instead of traversing the whole list.
+
+    stoppableFoldl
+        (\n acc ->
+            if acc >= 50 then
+                Stop acc
+            else
+                Continue (n + acc)
+        )
+        0
+        (List.range 1 10000)
+    --> 55
+
+-}
+stoppableFoldl : (a -> b -> Step b) -> b -> List a -> b
+stoppableFoldl func acc list =
+    case list of
+        [] ->
+            acc
+
+        x :: xs ->
+            case func x acc of
+                Continue newAcc ->
+                    stoppableFoldl func newAcc xs
+
+                Stop finalAcc ->
+                    finalAcc
+
+
+{-| Reduce a list from the left, building up all of the intermediate results into a list.
+
+    scanl (+) 0 [ 1, 2, 3, 4 ]
+    --> [ 0, 1, 3, 6, 10 ]
+
+-}
+scanl : (a -> b -> b) -> b -> List a -> List b
+scanl f b list =
+    let
+        scan1 x ( accHead, accTail ) =
+            ( f x accHead, accHead :: accTail )
+
+        ( h, t ) =
+            List.foldl scan1 ( b, [] ) list
+    in
+    List.reverse (h :: t)
+
+
+{-| `scanl1` is a variant of `scanl` that has no starting value argument.
+
+Compare:
+
+    scanl (+) 0 [ 1, 2, 3 ]
+    --> [ 0, 1, 3, 6 ]
+
+    scanl1 (+) [ 1, 2, 3 ]
+    --> [ 1, 3, 6 ]
+
+    scanl (-) 0 [ 1, 2, 3 ]
+    --> [ 0, 1, 1, 2 ]
+
+    scanl1 (-) [ 1, 2, 3 ]
+    --> [ 1, 1, 2 ]
+
+-}
+scanl1 : (a -> a -> a) -> List a -> List a
+scanl1 f list =
+    case list of
+        [] ->
+            []
+
+        x :: xs ->
+            scanl f x xs
+
+
+{-| `scanr` is a right-to-left dual of `scanl`. Note that:
+
+    head (scanr f z xs) == foldr f z xs
+
+Examples:
+
+    scanr (+) 0 [ 1, 2, 3 ]
+    --> [ 6, 5, 3, 0 ]
+
+    scanr (-) 0 [ 1, 2, 3 ]
+    --> [ 2, -1, 3, 0 ]
+
+-}
+scanr : (a -> b -> b) -> b -> List a -> List b
+scanr f b list =
+    let
+        scan1 x ( accHead, accTail ) =
+            ( f x accHead, accHead :: accTail )
+
+        ( h, t ) =
+            List.foldr scan1 ( b, [] ) list
+    in
+    h :: t
+
+
+{-| `scanr1` is a variant of `scanr` that has no starting value argument.
+
+    scanr1 (+) [ 1, 2, 3 ]
+    --> [ 6, 5, 3 ]
+
+    scanr1 (-) [ 1, 2, 3 ]
+    --> [ 2, -1, 3 ]
+
+-}
+scanr1 : (a -> a -> a) -> List a -> List a
+scanr1 f list =
+    case List.reverse list of
+        [] ->
+            []
+
+        b :: xs ->
+            let
+                scan1 x ( accHead, accTail ) =
+                    ( f x accHead, accHead :: accTail )
+
+                ( h, t ) =
+                    List.foldl scan1 ( b, [] ) xs
+            in
+            h :: t
+
+
+{-| The mapAccuml function behaves like a combination of map and foldl; it applies a
+function to each element of a list, passing an accumulating parameter from left to right,
+and returning a final value of this accumulator together with the new list.
+
+    mapAccuml f a0 [ x1, x2, x3 ] == ( a3, [ y1, y2, y3 ] )
+
+    --        x1    x2    x3
+    --        |     |     |
+    --  a0 -- f --- f --- f -> a3
+    --        |     |     |
+    --        y1    y2    y3
+
+Add a running total to a list of numbers:
+
+    mapAccuml (\a x -> ( a + x, ( x, a + x ) )) 0 [ 2, 4, 8 ]
+        --> ( 14, [ ( 2, 2 ), ( 4, 6 ), ( 8, 14 ) ] )
+
+Map number by multiplying with accumulated sum:
+
+    mapAccuml (\a x -> ( a + x, a * x )) 5 [ 2, 4, 8 ]
+        --> ( 19, [ 10, 28, 88 ] )
+
+-}
+mapAccuml : (a -> b -> ( a, c )) -> a -> List b -> ( a, List c )
+mapAccuml f acc0 list =
+    let
+        ( accFinal, generatedList ) =
+            List.foldl
+                (\x ( acc1, ys ) ->
+                    let
+                        ( acc2, y ) =
+                            f acc1 x
+                    in
+                    ( acc2, y :: ys )
+                )
+                ( acc0, [] )
+                list
+    in
+    ( accFinal, List.reverse generatedList )
+
+
+{-| The mapAccumr function behaves like a combination of map and foldr; it applies a
+function to each element of a list, passing an accumulating parameter from right to left,
+and returning a final value of this accumulator together with the new list.
+
+    mapAccumr f a0 [ x1, x2, x3 ] == ( a3, [ y1, y2, y3 ] )
+
+    --        x1    x2    x3
+    --        |     |     |
+    --  a3 <- f --- f --- f -- a0
+    --        |     |     |
+    --        y1    y2    y3
+
+Add a count of remaining elements:
+
+    mapAccumr (\a x -> ( a + 1, ( x, a ) )) 0 [ 2, 4, 8 ]
+        --> ( 3, [ ( 2, 2 ), ( 4, 1 ), ( 8, 0 ) ] )
+
+Map number by multiplying with right-to-left accumulated sum:
+
+    mapAccumr (\a x -> ( a + x, a * x )) 5 [ 2, 4, 8 ]
+        --> ( 19, [ 34, 52, 40 ] )
+
+-}
+mapAccumr : (a -> b -> ( a, c )) -> a -> List b -> ( a, List c )
+mapAccumr f acc0 list =
+    List.foldr
+        (\x ( acc1, ys ) ->
+            let
+                ( acc2, y ) =
+                    f acc1 x
+            in
+            ( acc2, y :: ys )
+        )
+        ( acc0, [] )
+        list
+
+
+{-| The `unfoldr` function is "dual" to `foldr`. `foldr` reduces a list to a summary value, `unfoldr` builds a list from a seed. The function takes a function and a starting element. It applies the function to the element. If the result is `Just (a, b)`, `a` is accumulated and the function is applied to `b`. If the result is `Nothing`, the list accumulated so far is returned.
+
+    subtractOneUntilZero : Int -> Maybe (Int, Int)
+    subtractOneUntilZero i =
+        if i /= 0 then
+            Just (i, i - 1)
+        else
+            Nothing
+
+    unfoldr subtractOneUntilZero 5
+    --> [ 5, 4, 3, 2, 1 ]
+
+-}
+unfoldr : (b -> Maybe ( a, b )) -> b -> List a
+unfoldr f seed =
+    let
+        go : b -> List a -> List a
+        go x acc =
+            case f x of
+                Nothing ->
+                    List.reverse acc
+
+                Just ( a, b ) ->
+                    go b (a :: acc)
+    in
+    go seed []
+
+
+{-| Take a number and a list, return a tuple of lists, where first part is prefix of the list of length equal the number, and second part is the remainder of the list. `splitAt n xs` is equivalent to `(take n xs, drop n xs)`.
+
+    splitAt 3 [ 1, 2, 3, 4, 5 ]
+    --> ( [ 1, 2, 3 ], [ 4, 5 ] )
+
+    splitAt 1 [ 1, 2, 3 ]
+    --> ( [ 1 ], [ 2, 3 ] )
+
+    splitAt 3 [ 1, 2, 3 ]
+    --> ( [ 1, 2, 3 ], [] )
+
+    splitAt 4 [ 1, 2, 3 ]
+    --> ( [ 1, 2, 3 ], [] )
+
+    splitAt 0 [ 1, 2, 3 ]
+    --> ( [], [ 1, 2, 3 ] )
+
+    splitAt -1 [ 1, 2, 3 ]
+    --> ( [], [ 1, 2, 3 ] )
+
+-}
+splitAt : Int -> List a -> ( List a, List a )
+splitAt n list =
+    ( List.take n list, List.drop n list )
+
+
+{-| Attempts to split the list at the first element where the given predicate is true. If the predicate is not true for any elements in the list, return nothing. Otherwise, return the split list.
+
+    splitWhen (\n -> n == 3) [ 1, 2, 3, 4, 5 ]
+    --> Just ( [ 1, 2 ], [ 3, 4, 5 ] )
+
+    splitWhen (\n -> n == 6) [ 1, 2, 3, 4, 5 ]
+    --> Nothing
+
+-}
+splitWhen : (a -> Bool) -> List a -> Maybe ( List a, List a )
+splitWhen predicate list =
+    findIndex predicate list
+        |> Maybe.map (\i -> splitAt i list)
+
+
+{-| Take the last _n_ members of a list.
+
+    takeRight 2 [ 1, 2, 3, 4, 5 ]
+    --> [ 4, 5 ]
+
+-}
+takeRight : Int -> List a -> List a
+takeRight n list =
+    list
+        |> List.reverse
+        |> List.take n
+        |> List.reverse
+
+
+{-| Drop the last _n_ members of a list.
+
+    dropRight 2 [ 1, 2, 3, 4, 5 ]
+    --> [ 1, 2, 3 ]
+
+-}
+dropRight : Int -> List a -> List a
+dropRight n list =
+    list
+        |> List.reverse
+        |> List.drop n
+        |> List.reverse
+
+
+{-| Take elements from the right, while predicate still holds.
+
+    takeWhileRight ((<) 5) (List.range 1 10)
+    --> [ 6, 7, 8, 9, 10 ]
+
+-}
+takeWhileRight : (a -> Bool) -> List a -> List a
+takeWhileRight p list =
+    let
+        step x ( xs, free ) =
+            if p x && free then
+                ( x :: xs, True )
+
+            else
+                ( xs, False )
+    in
+    Tuple.first (List.foldr step ( [], True ) list)
+
+
+{-| Drop elements from the right, while predicate still holds.
+
+    dropWhileRight ((<) 5) (List.range 1 10)
+    --> [ 1, 2, 3, 4, 5 ]
+
+-}
+dropWhileRight : (a -> Bool) -> List a -> List a
+dropWhileRight p list =
+    List.foldr
+        (\x xs ->
+            if p x && List.isEmpty xs then
+                []
+
+            else
+                x :: xs
+        )
+        []
+        list
+
+
+{-| Take a predicate and a list, return a tuple. The first part of the tuple is the longest prefix of that list, for each element of which the predicate holds. The second part of the tuple is the remainder of the list. `span p xs` is equivalent to `(takeWhile p xs, dropWhile p xs)`.
+
+    span ((>) 3) [ 1, 2, 3, 4, 1, 2, 3, 4 ]
+    --> ( [ 1, 2 ], [ 3, 4, 1, 2, 3, 4 ] )
+
+    span ((>) 5) [ 1, 2, 3 ]
+    --> ( [ 1, 2, 3 ], [] )
+
+    span ((>) 0) [ 1, 2, 3 ]
+    --> ( [], [ 1, 2, 3 ] )
+
+-}
+span : (a -> Bool) -> List a -> ( List a, List a )
+span p list =
+    ( takeWhile p list, dropWhile p list )
+
+
+{-| Take a predicate and a list, return a tuple. The first part of the tuple is the longest prefix of that list, for each element of which the predicate _does not_ hold. The second part of the tuple is the remainder of the list. `break p xs` is equivalent to `(takeWhile (not p) xs, dropWhile (not p) xs)`.
+
+    break ((<) 3) [ 1, 2, 3, 4, 1, 2, 3, 4 ]
+    --> ( [ 1, 2, 3 ], [ 4, 1, 2, 3, 4 ] )
+
+    break ((>) 5) [ 1, 2, 3 ]
+    --> ( [], [ 1, 2, 3 ] )
+
+    break ((<) 5) [ 1, 2, 3 ]
+    --> ( [ 1, 2, 3 ], [] )
+
+-}
+break : (a -> Bool) -> List a -> ( List a, List a )
+break p list =
+    span (\x -> not (p x)) list
+
+
+{-| Drop the given prefix from the list. If the list doesn't start with that prefix, return `Nothing`.
+
+    stripPrefix [ 1, 2 ] [ 1, 2, 3, 4 ]
+    --> Just [ 3, 4 ]
+
+    stripPrefix [ 1, 2, 3 ] [ 1, 2, 3, 4, 5 ]
+    --> Just [ 4, 5 ]
+
+    stripPrefix [ 1, 2, 3 ] [ 1, 2, 3 ]
+    --> Just []
+
+    stripPrefix [ 1, 2, 3 ] [ 1, 2 ]
+    --> Nothing
+
+    stripPrefix [ 3, 2, 1 ] [ 1, 2, 3, 4, 5 ]
+    --> Nothing
+
+-}
+stripPrefix : List a -> List a -> Maybe (List a)
+stripPrefix prefix list =
+    case prefix of
+        [] ->
+            Just list
+
+        prefixHead :: prefixTail ->
+            case list of
+                [] ->
+                    Nothing
+
+                xsHead :: xsTail ->
+                    if prefixHead == xsHead then
+                        stripPrefix prefixTail xsTail
+
+                    else
+                        Nothing
+
+
+{-| Group similar elements together. `group` is equivalent to `groupWhile (==)`.
+
+    group [ 1, 2, 2, 3, 3, 3, 2, 2, 1 ]
+    --> [ (1, []), (2, [ 2 ]), (3, [ 3, 3 ]), (2, [ 2 ]), ( 1,  []) ]
+
+-}
+group : List a -> List ( a, List a )
+group list =
+    groupWhile (==) list
+
+
+{-| Group elements together, using a custom comparison test (`a -> a -> Bool`). Start a new group each time the comparison test doesn't hold for two adjacent elements.
+
+`groupWhile` uses a non-empty list type `(a, List a)` since groups necessarily must have at least one member since they are determined by comparing two members.
+
+    groupWhile
+        (==)
+        [ 1, 2, 3 ]
+    --> [ ( 1, [] ), ( 2, [] ), ( 3, [] ) ]
+
+    groupWhile
+        (<)
+        [ 1, 2, 3, 2, 4, 1, 3, 2, 1 ]
+    --> [ ( 1, [ 2, 3 ] ), ( 2, [ 4 ] ), ( 1, [ 3 ] ), ( 2, [] ), ( 1, [] ) ]
+
+    groupWhile
+        (\a b -> a.id == b.id)
+        [ { value = 4, id = 9 }, { value = 7, id = 2 }, { value = 1, id = 2 } ]
+    --> [ ( { value = 4, id = 9 }, [] ), ( { value = 7, id = 2 }, [ { value = 1, id = 2 } ] ) ]
+
+**Note:**
+The behavior of this function has changed between major versions 7 and 8. In version 7 there was `groupWhile` and `groupWhileTransitively`. The behavior of the two was almost identical, however the transitive function was closer to what users found intuitive about grouping. `groupWhileTransitively` has been deleted, and `groupWhile` has been replaced with the version 7s `groupWhileTransitively` behavior. Furthermore the group type was changed from `List a` to the non-empty list type `(a, List a)`. Sorry for any inconvenience this may cause.
+
+-}
+groupWhile : (a -> a -> Bool) -> List a -> List ( a, List a )
+groupWhile isSameGroup list =
+    List.foldr
+        (\x acc ->
+            case acc of
+                [] ->
+                    [ ( x, [] ) ]
+
+                ( y, restOfGroup ) :: groups ->
+                    if isSameGroup x y then
+                        ( x, y :: restOfGroup ) :: groups
+
+                    else
+                        ( x, [] ) :: acc
+        )
+        []
+        list
+
+
+{-| Return all initial segments of a list, from shortest to longest, empty list first, the list itself last.
+
+    inits [ 1, 2, 3 ]
+    --> [ [], [ 1 ], [ 1, 2 ], [ 1, 2, 3 ] ]
+
+-}
+inits : List a -> List (List a)
+inits =
+    List.foldr (\e acc -> [] :: List.map ((::) e) acc) [ [] ]
+
+
+{-| Return all final segments of a list, from longest to shortest, the list itself first, empty list last.
+
+    tails [ 1, 2, 3 ]
+    --> [ [ 1, 2, 3 ], [ 2, 3 ], [ 3 ], [] ]
+
+-}
+tails : List a -> List (List a)
+tails =
+    List.foldr tailsHelp [ [] ]
+
+
+tailsHelp : a -> List (List a) -> List (List a)
+tailsHelp e list =
+    case list of
+        x :: xs ->
+            (e :: x) :: x :: xs
+
+        [] ->
+            []
+
+
+{-| Primary useful with literals in view style code.
+
+Sometimes you want to include attributes conditionally:
+
+    Html.div
+        ((if isStylish then
+            [ Html.Attributes.class "foo" ]
+
+          else
+            [ Html.Attributes.id "bar" ]
+         )
+            ++ (if isFancy then
+                    [ Html.Attribute.attribute "aria-description" "A very fancy div" ]
+
+                else
+                    []
+               )
+        )
+        [ Html.text "Hello" ]
+
+But this is quite awkward and verbose. But with this helper you can write:
+
+    Html.div
+        (List.Extra.conditional
+            [ ( Html.Attributes.class "foo", isStylish )
+            , ( Html.Attributes.id "bar", not isStylish )
+            , ( Html.Attribute.attribute "aria-description" "A very fancy div", isFancy )
+            ]
+        )
+        [ Html.text "Hello" ]
+
+-}
+conditional : List ( a, Bool ) -> List a
+conditional list =
+    List.filterMap
+        (\( x, b ) ->
+            if b then
+                Just x
+
+            else
+                Nothing
+        )
+        list
+
+
+{-| Return all combinations in the form of (element, rest of the list). Read [Haskell Libraries proposal](https://mail.haskell.org/pipermail/libraries/2008-February/009270.html) for further ideas on how to use this function.
+
+    select [ 1, 2, 3, 4 ]
+    --> [ ( 1, [ 2, 3, 4 ] ), ( 2, [ 1, 3, 4 ] ), ( 3, [ 1, 2, 4 ] ), ( 4, [ 1, 2, 3 ] ) ]
+
+-}
+select : List a -> List ( a, List a )
+select list =
+    case list of
+        [] ->
+            []
+
+        x :: xs ->
+            ( x, xs ) :: List.map (\( y, ys ) -> ( y, x :: ys )) (select xs)
+
+
+{-| Return all combinations in the form of (elements before, element, elements after).
+
+    selectSplit [ 1, 2, 3 ]
+    --> [ ( [], 1, [ 2, 3 ] ), ( [ 1 ], 2, [ 3 ] ), ( [ 1, 2 ], 3, [] ) ]
+
+-}
+selectSplit : List a -> List ( List a, a, List a )
+selectSplit list =
+    case list of
+        [] ->
+            []
+
+        x :: xs ->
+            ( [], x, xs ) :: List.map (\( lys, y, rys ) -> ( x :: lys, y, rys )) (selectSplit xs)
+
+
+{-| Take two lists and return `True`, if the first list is the prefix of the second list.
+-}
+isPrefixOf : List a -> List a -> Bool
+isPrefixOf prefix list =
+    case ( prefix, list ) of
+        ( [], _ ) ->
+            True
+
+        ( _ :: _, [] ) ->
+            False
+
+        ( p :: ps, x :: xs ) ->
+            if p == x then
+                isPrefixOf ps xs
+
+            else
+                False
+
+
+{-| Take two lists and return `True`, if the first list is the suffix of the second list.
+-}
+isSuffixOf : List a -> List a -> Bool
+isSuffixOf suffix list =
+    isPrefixOf (List.reverse suffix) (List.reverse list)
+
+
+{-| Return True if all the elements of the first list occur in-order and
+consecutively anywhere within the second.
+
+    isInfixOf [ 5, 7, 11 ] [ 2, 3, 5, 7, 11, 13 ]
+    --> True
+
+    isInfixOf [ 5, 7, 13 ] [ 2, 3, 5, 7, 11, 13 ]
+    --> False
+
+    isInfixOf [ 3, 5, 2 ] [ 2, 3, 5, 7, 11, 13 ]
+    --> False
+
+-}
+isInfixOf : List a -> List a -> Bool
+isInfixOf infixList list =
+    case infixList of
+        [] ->
+            True
+
+        x :: xs ->
+            isInfixOfHelp x xs list
+
+
+isInfixOfHelp : a -> List a -> List a -> Bool
+isInfixOfHelp infixHead infixTail list =
+    case list of
+        [] ->
+            False
+
+        x :: xs ->
+            if x == infixHead && isPrefixOf infixTail xs then
+                True
+
+            else
+                isInfixOfHelp infixHead infixTail xs
+
+
+{-| Return True if all the elements of the first list occur, in order, in the
+second. The elements do not have to occur consecutively.
+
+    isSubsequenceOf
+        [ "E", "l", "m" ]
+        [ "E", "a", "t", " ", "l", "i", "m", "e", "s" ]
+    --> True
+
+    isSubsequenceOf
+        [ "E", "l", "m" ]
+        [ "E", "m", "a", "i", "l" ]
+    --> False
+
+-}
+isSubsequenceOf : List a -> List a -> Bool
+isSubsequenceOf subseq list =
+    case ( subseq, list ) of
+        ( [], _ ) ->
+            True
+
+        ( _, [] ) ->
+            False
+
+        ( x :: xs, y :: ys ) ->
+            if x == y then
+                isSubsequenceOf xs ys
+
+            else
+                isSubsequenceOf subseq ys
+
+
+{-| Take two lists and return `True`, if the first list is a permutation of the second list.
+In other words: Do the 2 `List`s contain the same elements but in a different order?
+
+    [ 3, 1, 2 ]
+        |> isPermutationOf
+            [ 1, 2, 3 ]
+    --> True
+
+    [ 3, 1, 0 ]
+        |> isPermutationOf
+            [ 1, 2, 3 ]
+    --> False
+
+    [ 3, 1, 2, 2 ]
+        |> isPermutationOf
+            [ 1, 2, 3 ]
+    --> False
+
+-}
+isPermutationOf : List a -> List a -> Bool
+isPermutationOf permut list =
+    case list of
+        [] ->
+            List.isEmpty permut
+
+        x :: after ->
+            let
+                { foundAny, without } =
+                    removeOneMember x permut
+            in
+            if foundAny then
+                isPermutationOf without after
+
+            else
+                False
+
+
+removeOneMember : a -> List a -> { foundAny : Bool, without : List a }
+removeOneMember culprit list =
+    removeOneMemberHelp culprit [] list
+
+
+removeOneMemberHelp : a -> List a -> List a -> { foundAny : Bool, without : List a }
+removeOneMemberHelp culprit before list =
+    case list of
+        [] ->
+            { foundAny = False, without = [] }
+
+        head :: after ->
+            if head == culprit then
+                { foundAny = True, without = before ++ after }
+
+            else
+                removeOneMemberHelp culprit (head :: before) after
+
+
+{-| Take two lists and returns a list of corresponding pairs
+-}
+zip : List a -> List b -> List ( a, b )
+zip =
+    List.map2 Tuple.pair
+
+
+{-| Take three lists and returns a list of triples
+-}
+zip3 : List a -> List b -> List c -> List ( a, b, c )
+zip3 =
+    List.map3 triple
+
+
+triple : a -> b -> c -> ( a, b, c )
+triple a b c =
+    ( a, b, c )
+
+
+{-| Map functions taking multiple arguments over multiple lists, regardless of list length.
+All possible combinations will be explored.
+
+    lift2 (+) [1,2,3][4,5]
+    --> [5,6,6,7,7,8]
+
+-}
+lift2 : (a -> b -> c) -> List a -> List b -> List c
+lift2 f la lb =
+    List.foldl (\a aacc -> List.foldl (\b bacc -> f a b :: bacc) aacc lb) [] la
+        |> List.reverse
+
+
+{-| Maps a function over three lists, exploring all possible combinations.
+-}
+lift3 : (a -> b -> c -> d) -> List a -> List b -> List c -> List d
+lift3 f la lb lc =
+    List.foldl (\a aacc -> List.foldl (\b bacc -> List.foldl (\c cacc -> f a b c :: cacc) bacc lc) aacc lb) [] la
+        |> List.reverse
+
+
+{-| Maps a function over four lists, exploring all possible combinations.
+-}
+lift4 : (a -> b -> c -> d -> e) -> List a -> List b -> List c -> List d -> List e
+lift4 f la lb lc ld =
+    List.foldl (\a aacc -> List.foldl (\b bacc -> List.foldl (\c cacc -> List.foldl (\d dacc -> f a b c d :: dacc) cacc ld) bacc lc) aacc lb) [] la
+        |> List.reverse
+
+
+{-| Split list into groups of length `size`. If there are not enough elements
+to completely fill the last group, it will not be included. This is equivalent
+to calling `groupsOfWithStep` with the same `size` and `step`.
+
+    groupsOf 3 (List.range 1 10)
+    --> [ [ 1, 2, 3 ], [ 4, 5, 6 ], [ 7, 8, 9 ] ]
+
+-}
+groupsOf : Int -> List a -> List (List a)
+groupsOf size list =
+    groupsOfWithStep size size list
+
+
+{-| Split list into groups of length `size` at offsets `step` apart. If there
+are not enough elements to completely fill the last group, it will not be
+included. (See `greedyGroupsOfWithStep` if you would like the last group to be
+included regardless.)
+
+    groupsOfWithStep 4 4 (List.range 1 10)
+    --> [ [ 1, 2, 3, 4 ], [ 5, 6, 7, 8 ] ]
+
+    groupsOfWithStep 3 1 (List.range 1 5)
+    --> [ [ 1, 2, 3 ], [ 2, 3, 4 ], [ 3, 4, 5 ] ]
+
+    groupsOfWithStep 3 6 (List.range 1 20)
+    --> [ [ 1, 2, 3 ], [ 7, 8, 9 ], [ 13, 14, 15 ] ]
+
+If `step == size`, every element (except for perhaps the last few due to the
+non-greedy behavior) will appear in exactly one group. If `step < size`, there
+will be an overlap between groups. If `step > size`, some elements will be
+skipped and not appear in any groups.
+
+-}
+groupsOfWithStep : Int -> Int -> List a -> List (List a)
+groupsOfWithStep size step list =
+    if size <= 0 || step <= 0 then
+        []
+
+    else
+        let
+            go : List a -> List (List a) -> List (List a)
+            go xs acc =
+                if List.isEmpty xs then
+                    List.reverse acc
+
+                else
+                    let
+                        thisGroup =
+                            takeTailRec size xs
+                    in
+                    if size == List.length thisGroup then
+                        let
+                            rest =
+                                List.drop step xs
+                        in
+                        go rest (thisGroup :: acc)
+
+                    else
+                        List.reverse acc
+        in
+        go list []
+
+
+
+{- List.take starts out non-tail-recursive and switches to a tail-recursive
+   implementation after the first 1000 iterations.  For functions which are themselves
+   recursive and use List.take on each call (e.g. List.Extra.groupsOf), this can result
+   in potential call stack overflow from the successive accumulation of up to 1000-long
+   non-recursive List.take calls.  Here we provide an always tail recursive version of
+   List.take to avoid this problem.  The code is taken directly from the implementation
+   of elm/core and shares its copyright (see LICENSE file).
+
+-}
+
+
+takeTailRec : Int -> List a -> List a
+takeTailRec n list =
+    List.reverse (takeReverse n list [])
+
+
+takeReverse : Int -> List a -> List a -> List a
+takeReverse n list kept =
+    if n <= 0 then
+        kept
+
+    else
+        case list of
+            [] ->
+                kept
+
+            x :: xs ->
+                takeReverse (n - 1) xs (x :: kept)
+
+
+{-| `groupsOfVarying ns` takes `n` elements from a list for each `n` in `ns`, splitting the list into variably sized segments
+
+    groupsOfVarying [ 2, 3, 1 ] [ "a", "b", "c", "d", "e", "f" ]
+    --> [ [ "a", "b" ], [ "c", "d", "e" ], [ "f" ] ]
+
+    groupsOfVarying [ 2 ] [ "a", "b", "c", "d", "e", "f" ]
+    --> [ [ "a", "b" ] ]
+
+    groupsOfVarying [ 2, 3, 1, 5, 6 ] [ "a", "b", "c", "d", "e" ]
+    --> [ [ "a", "b" ], [ "c", "d", "e" ] ]
+
+-}
+groupsOfVarying : List Int -> List a -> List (List a)
+groupsOfVarying listOfLengths list =
+    groupsOfVarying_ listOfLengths list []
+
+
+groupsOfVarying_ : List Int -> List a -> List (List a) -> List (List a)
+groupsOfVarying_ listOfLengths list accu =
+    case ( listOfLengths, list ) of
+        ( length :: tailLengths, _ :: _ ) ->
+            let
+                ( head, tail ) =
+                    splitAt length list
+            in
+            groupsOfVarying_ tailLengths tail (head :: accu)
+
+        _ ->
+            List.reverse accu
+
+
+{-| Greedily split list into groups of length `size`. The last group of
+elements will be included regardless of whether there are enough elements in
+the list to completely fill it. This is equivalent to calling
+`greedyGroupsOfWithStep` with the same `size` and `step`.
+
+    greedyGroupsOf 3 (List.range 1 10)
+    --> [ [ 1, 2, 3 ], [ 4, 5, 6 ], [ 7, 8, 9 ], [ 10 ] ]
+
+-}
+greedyGroupsOf : Int -> List a -> List (List a)
+greedyGroupsOf size list =
+    greedyGroupsOfWithStep size size list
+
+
+{-| Greedily split list into groups of length `size` at offsets `step` apart.
+The last group of elements will be included regardless of whether there are
+enough elements in the list to completely fill it. (See `groupsOfWithStep`
+for the non-greedy version of this function).
+
+    greedyGroupsOfWithStep 4 4 (List.range 1 10)
+    --> [ [ 1, 2, 3, 4 ], [ 5, 6, 7, 8 ], [ 9, 10 ] ]
+
+    greedyGroupsOfWithStep 3 2 (List.range 1 6)
+    --> [ [ 1, 2, 3 ], [ 3, 4, 5 ], [ 5, 6 ] ]
+
+    greedyGroupsOfWithStep 3 6 (List.range 1 20)
+    --> [ [ 1, 2, 3 ], [ 7, 8, 9 ], [ 13, 14, 15 ], [ 19, 20 ] ]
+
+If `step == size`, every element will appear in exactly one group. If
+`step < size`, there will be an overlap between groups. If `step > size`, some
+elements will be skipped and not appear in any groups.
+
+-}
+greedyGroupsOfWithStep : Int -> Int -> List a -> List (List a)
+greedyGroupsOfWithStep size step list =
+    if size <= 0 || step <= 0 then
+        []
+
+    else
+        let
+            go : List a -> List (List a) -> List (List a)
+            go xs acc =
+                if List.isEmpty xs then
+                    List.reverse acc
+
+                else
+                    go
+                        (List.drop step xs)
+                        (takeTailRec size xs :: acc)
+        in
+        go list []
+
+
+{-| Group equal elements together. This is different from `group` as each sublist
+will contain _all_ equal elements of the original list. Elements will be grouped
+in the same order as they appear in the original list. The same applies to elements
+within each group.
+
+    gatherEquals [1,2,1,3,2]
+    --> [(1,[1]),(2,[2]),(3,[])]
+
+-}
+gatherEquals : List a -> List ( a, List a )
+gatherEquals list =
+    gatherWith (==) list
+
+
+{-| Group equal elements together. A function is applied to each element of the list
+and then the equality check is performed against the results of that function evaluation.
+Elements will be grouped in the same order as they appear in the original list. The
+same applies to elements within each group.
+
+    gatherEqualsBy .age [{age=25},{age=23},{age=25}]
+    --> [({age=25},[{age=25}]),({age=23},[])]
+
+**See also:** [`Dict.Extra.groupBy`](./Dict-Extra#groupBy).
+
+-}
+gatherEqualsBy : (a -> b) -> List a -> List ( a, List a )
+gatherEqualsBy extract list =
+    gatherWith (\a b -> extract a == extract b) list
+
+
+{-| Group equal elements together using a custom equality function. Elements will be
+grouped in the same order as they appear in the original list. The same applies to
+elements within each group.
+
+    gatherWith (==) [1,2,1,3,2]
+    --> [(1,[1]),(2,[2]),(3,[])]
+
+-}
+gatherWith : (a -> a -> Bool) -> List a -> List ( a, List a )
+gatherWith testFn list =
+    let
+        helper : List a -> List ( a, List a ) -> List ( a, List a )
+        helper scattered gathered =
+            case scattered of
+                [] ->
+                    List.reverse gathered
+
+                toGather :: population ->
+                    let
+                        ( gathering, remaining ) =
+                            List.partition (testFn toGather) population
+                    in
+                    helper remaining (( toGather, gathering ) :: gathered)
+    in
+    helper list []
+
+
+{-| Calculate the number of occurences for each element in a list. Elements
+will be ordered ascendingly, then grouped in a tuple with the number of
+occurences.
+
+    frequencies [2,1,3,2,3,3]
+    --> [(1,1),(2,2),(3,3)]
+
+-}
+frequencies : List comparable -> List ( comparable, Int )
+frequencies list =
+    list
+        |> List.sort
+        |> group
+        |> List.map (\( x, y ) -> ( x, 1 + List.length y ))
+
+
+{-| Performs an inner join, combining data items from both lists if they match by their respective key functions.
+
+    employees : List { name : String, departmentId : Int }
+    employees =
+        [ { name = "Rafferty", departmentId = 31 }
+        , { name = "Jones", departmentId = 33 }
+        , { name = "Heisenberg", departmentId = 33 }
+        , { name = "Robinson", departmentId = 34 }
+        , { name = "Smith", departmentId = 34 }
+        ]
+
+    departments : List { name : String, departmentId : Int }
+    departments =
+        [ { departmentId = 31, name = "Sales" }
+        , { departmentId = 33, name = "Engineering" }
+        , { departmentId = 34, name = "Clerical" }
+        , { departmentId = 35, name = "Marketing" }
+        ]
+
+    joinOn (\empl dep -> { employee = empl.name, department = dep.name}) .departmentId .departmentId employees departments
+    --> [ { department = "Clerical", employee = "Robinson" }
+    --> , { department = "Clerical", employee = "Smith" }
+    --> , { department = "Engineering", employee = "Jones" }
+    --> , { department = "Engineering", employee = "Heisenberg" }
+    --> , { department = "Sales", employee = "Rafferty" }
+    --> ]
+
+This is akin to the SQL query:
+
+    SELECT employee.name, department.name
+    FROM employee
+    INNER JOIN department
+    ON employee.departmentId = department.departmentId
+
+-}
+joinOn : (a -> b -> c) -> (a -> comparable) -> (b -> comparable) -> List a -> List b -> List c
+joinOn selectFn aKeyFn bKeyFn aList bList =
+    let
+        aListWithKeys : List ( ( comparable, a ), List ( comparable, a ) )
+        aListWithKeys =
+            List.map (\a -> ( aKeyFn a, a )) aList
+                |> List.sortBy Tuple.first
+                |> gatherEqualsBy Tuple.first
+
+        bListWithKeys : List ( ( comparable, b ), List ( comparable, b ) )
+        bListWithKeys =
+            List.map (\b -> ( bKeyFn b, b )) bList
+                |> List.sortBy Tuple.first
+                |> gatherEqualsBy Tuple.first
+
+        helper : List ( ( comparable, a ), List ( comparable, a ) ) -> List ( ( comparable, b ), List ( comparable, b ) ) -> List c -> List c
+        helper aInp bInp result =
+            case ( aInp, bInp ) of
+                ( ( ( aKey, a ), ass ) :: restAs, ( ( bKey, b ), bss ) :: restBs ) ->
+                    if aKey == bKey then
+                        let
+                            prod =
+                                List.concatMap
+                                    (\( _, sA ) ->
+                                        List.map
+                                            (\( _, sB ) ->
+                                                selectFn sA sB
+                                            )
+                                            (( bKey, b ) :: bss)
+                                    )
+                                    (( aKey, a ) :: ass)
+                        in
+                        helper restAs restBs (prod ++ result)
+
+                    else if aKey < bKey then
+                        helper restAs bInp result
+
+                    else
+                        helper aInp restBs result
+
+                _ ->
+                    result
+    in
+    helper aListWithKeys bListWithKeys []

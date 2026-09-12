@@ -1,0 +1,49 @@
+{
+    "type": "package",
+    "name": "ianmackenzie/elm-units",
+    "summary": "Simple, safe and convenient unit types and conversions for Elm",
+    "license": "BSD-3-Clause",
+    "version": "2.10.0",
+    "exposed-modules": [
+        "Acceleration",
+        "Angle",
+        "AngularAcceleration",
+        "AngularSpeed",
+        "Area",
+        "Charge",
+        "Capacitance",
+        "Current",
+        "Density",
+        "Duration",
+        "Energy",
+        "Force",
+        "Illuminance",
+        "Inductance",
+        "Length",
+        "Luminance",
+        "LuminousFlux",
+        "LuminousIntensity",
+        "Mass",
+        "Molarity",
+        "Pixels",
+        "Power",
+        "Pressure",
+        "Quantity",
+        "Resistance",
+        "SolidAngle",
+        "Speed",
+        "SubstanceAmount",
+        "Temperature",
+        "Torque",
+        "Voltage",
+        "Volume"
+    ],
+    "elm-version": "0.19.0 <= v < 0.20.0",
+    "dependencies": {
+        "elm/core": "1.0.0 <= v < 2.0.0",
+        "elm/time": "1.0.0 <= v < 2.0.0"
+    },
+    "test-dependencies": {
+        "elm-explorations/test": "1.0.0 <= v < 2.0.0"
+    }
+}

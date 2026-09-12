@@ -1,25 +1,32 @@
-module TypeLookupTable exposing
-    ( TypeLookupTable
-    , fromDict
-    , get
-    )
+module TypeLookupTable exposing (TypeLookupTable, fromDict, get)
+
+{-| Types inferred for source ranges in one Elm module.
+
+@docs TypeLookupTable, fromDict, get
+
+-}
 
 import Dict exposing (Dict)
-import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Type exposing (Type)
 import RangeLike exposing (RangeLike)
 
 
+{-| The inferred type associated with each source range in one module.
+-}
 type TypeLookupTable
-    = TypeLookupTable ModuleName (Dict RangeLike Type)
+    = TypeLookupTable (Dict RangeLike Type)
 
 
+{-| Look up the inferred type for a source range.
+-}
 get : Range -> TypeLookupTable -> Maybe Type
-get range (TypeLookupTable _ dict) =
+get range (TypeLookupTable dict) =
     Dict.get (RangeLike.fromRange range) dict
 
 
-fromDict : ModuleName -> Dict RangeLike Type -> TypeLookupTable
-fromDict moduleName dict =
-    TypeLookupTable moduleName dict
+{-| Build a lookup table from its internal range map.
+-}
+fromDict : Dict RangeLike Type -> TypeLookupTable
+fromDict dict =
+    TypeLookupTable dict

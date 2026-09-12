@@ -3,7 +3,7 @@ port module Runner exposing (main)
 {-| Used by e2e/run.mjs.
 
 Reads Elm project's source files and dependency docs.json files, parses
-everything and runs Elm.TypeInference.infer and reports back via a port.
+everything, runs Elm.TypeInference.inferAndCheck and reports back via a port.
 
 -}
 
@@ -27,7 +27,8 @@ port result : Encode.Value -> Cmd msg
 
 type alias Flags =
     { sources : List SourceFile
-    , dependencies : List RawDependency
+    , directDependencies : List String
+    , allDependencies : List RawDependency
     }
 
 
@@ -46,9 +47,10 @@ type alias RawDependency =
 
 flagsDecoder : Decode.Decoder Flags
 flagsDecoder =
-    Decode.map2 Flags
+    Decode.map3 Flags
         (Decode.field "sources" (Decode.list sourceFileDecoder))
-        (Decode.field "dependencies" (Decode.list dependencyDecoder))
+        (Decode.field "directDependencies" (Decode.list Decode.string))
+        (Decode.field "allDependencies" (Decode.list dependencyDecoder))
 
 
 sourceFileDecoder : Decode.Decoder SourceFile
@@ -92,14 +94,14 @@ run flagsValue =
                 ]
 
         Ok flags ->
-            case buildDependencies flags.dependencies of
+            case buildDependencies flags.allDependencies of
                 Err err ->
                     Encode.object
                         [ ( "ok", Encode.bool False )
                         , ( "error", Encode.string ("docs.json decode error: " ++ err) )
                         ]
 
-                Ok dependencies ->
+                Ok allDependencies ->
                     case parseAllSources flags.sources of
                         Err err ->
                             Encode.object
@@ -113,7 +115,13 @@ run flagsValue =
                                 moduleCount =
                                     Dict.size files
                             in
-                            case Elm.TypeInference.infer { dependencies = dependencies, files = files } of
+                            case
+                                Elm.TypeInference.inferAndCheck
+                                    { directDependencies = flags.directDependencies
+                                    , allDependencies = allDependencies
+                                    , files = files
+                                    }
+                            of
                                 Err inferError ->
                                     Encode.object
                                         [ ( "ok", Encode.bool False )

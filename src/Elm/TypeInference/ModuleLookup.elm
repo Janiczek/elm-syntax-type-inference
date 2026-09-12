@@ -1,5 +1,7 @@
 module Elm.TypeInference.ModuleLookup exposing
-    ( findModuleOfVar
+    ( Index
+    , buildIndex
+    , findModuleOfVar
     , moduleOfVar
     , resolveOperatorFunction
     , typeResolverFor
@@ -7,23 +9,98 @@ module Elm.TypeInference.ModuleLookup exposing
 
 import Dict exposing (Dict)
 import Elm.Docs
-import Elm.Syntax.Exposing
-import Elm.Syntax.File exposing (File)
-import Elm.Syntax.File.Extra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
-import Elm.Syntax.Import exposing (Import)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.Node as Node
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.ImplicitImports as ImplicitImports
+import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
 import Elm.TypeInference.State as State exposing (PackageName, TIState)
 import Elm.TypeInference.Type as Type exposing (TypeResolver)
-import Maybe.Extra
+import List.ExtraExtra
 import Result.Extra
 import Result.ExtraExtra
+import Set
+
+
+{-| A precomputed `module name -> value/type name -> packages defining it` index,
+built once per `infer` run and reused for every name occurrence, instead of
+rescanning every package × module × value on each lookup (see
+`Elm.TypeInference.Dependencies.DependencyPackage`).
+
+Search order matches iterating `Dict.toList deps` directly (packages in
+alphabetical order, modules in their package's declared order), so
+`AmbiguousModuleOwner` errors still list candidates in the same order as
+before.
+
+-}
+type Index
+    = Index
+        { values : Dict String (Dict VarName (List PackageName))
+        , types : Dict String (Dict VarName (List PackageName))
+        }
+
+
+buildIndex : Dependencies -> Index
+buildIndex deps =
+    deps
+        |> Dict.foldl
+            (\packageName pkg acc ->
+                List.foldl (addModule packageName) acc pkg.modules
+            )
+            emptyIndex
+
+
+addModule : PackageName -> Elm.Docs.Module -> Index -> Index
+addModule packageName mod (Index idx) =
+    Index
+        { values = List.foldl (addName packageName mod.name) idx.values (valueNamesOf mod)
+        , types = List.foldl (addName packageName mod.name) idx.types (typeNamesOf mod)
+        }
+
+
+valueNamesOf : Elm.Docs.Module -> List VarName
+valueNamesOf mod =
+    List.map .name mod.values
+        ++ List.map .name mod.binops
+        ++ List.ExtraExtra.fastConcatMap (\u -> List.map Tuple.first u.tags) mod.unions
+        ++ (mod.aliases |> List.filter isRecordAlias |> List.map .name)
+
+
+typeNamesOf : Elm.Docs.Module -> List VarName
+typeNamesOf mod =
+    List.map .name mod.unions ++ List.map .name mod.aliases
+
+
+addName :
+    PackageName
+    -> String
+    -> VarName
+    -> Dict String (Dict VarName (List PackageName))
+    -> Dict String (Dict VarName (List PackageName))
+addName packageName moduleName name acc =
+    Dict.update moduleName
+        (\maybeInner ->
+            Maybe.withDefault Dict.empty maybeInner
+                |> Dict.update name
+                    (\maybeOwners -> Just (Maybe.withDefault [] maybeOwners ++ [ packageName ]))
+                |> Just
+        )
+        acc
+
+
+ownersOf : Dict String (Dict VarName (List PackageName)) -> String -> VarName -> List PackageName
+ownersOf index moduleNameStr name =
+    Dict.get moduleNameStr index
+        |> Maybe.andThen (Dict.get name)
+        |> Maybe.withDefault []
+
+
+emptyIndex : Index
+emptyIndex =
+    Index { values = Dict.empty, types = Dict.empty }
 
 
 {-| We have roughly these options:
@@ -39,31 +116,35 @@ of the var.
 
 -}
 moduleOfVar :
-    Dependencies
-    -> Dict FullModuleName File
-    -> File
+    Index
+    -> Dict FullModuleName ModuleIndex
+    -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> Result Error (Maybe ( PackageName, FullModuleName ))
-moduleOfVar deps files thisFile maybeModuleName varName =
+moduleOfVar index modules thisModule maybeModuleName varName =
     Result.ExtraExtra.firstJustLazy
-        [ \() -> unqualifiedVarInThisModule thisFile maybeModuleName varName
-        , \() -> unqualifiedVarInImportedModule deps files thisFile maybeModuleName varName
-        , \() -> qualifiedVarInImportedModule deps files maybeModuleName varName
-        , \() -> qualifiedVarInAliasedModule deps files thisFile maybeModuleName varName
-        , \() -> implicitUnqualifiedValue deps maybeModuleName varName
+        [ \() -> unqualifiedVarInThisModule thisModule maybeModuleName varName
+        , \() -> unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName
+        , -- Aliases must be resolved before a bare qualifier lookup: otherwise
+          -- `import Quantity.Interval as Interval` would let a qualified
+          -- `Interval.from` resolve to an unrelated, unimported `Interval`
+          -- module that happens to share the alias's name.
+          \() -> qualifiedVarInAliasedModule index modules thisModule maybeModuleName varName
+        , \() -> qualifiedVarInImportedModule index modules maybeModuleName varName
+        , \() -> implicitUnqualifiedValue index thisModule maybeModuleName varName
         ]
 
 
 findModuleOfVar :
-    Dependencies
-    -> Dict FullModuleName File
-    -> File
+    Index
+    -> Dict FullModuleName ModuleIndex
+    -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> TIState ( PackageName, FullModuleName )
-findModuleOfVar deps files thisFile maybeModuleName varName =
-    case moduleOfVar deps files thisFile maybeModuleName varName of
+findModuleOfVar index modules thisModule maybeModuleName varName =
+    case moduleOfVar index modules thisModule maybeModuleName varName of
         Err err ->
             State.error err
 
@@ -71,7 +152,7 @@ findModuleOfVar deps files thisFile maybeModuleName varName =
             State.error <|
                 VarNotFound
                     { varName = varName
-                    , usedIn = Elm.Syntax.File.Extra.moduleName thisFile
+                    , usedIn = thisModule.moduleName
                     }
 
         Ok (Just result) ->
@@ -84,97 +165,67 @@ the compiler allows as defining operators is pretty niche functionality only
 reserved for elm/\* packages).
 -}
 resolveOperatorFunction :
-    Dict FullModuleName File
+    Dict FullModuleName ModuleIndex
     -> FullModuleName
     -> VarName
     -> Result Error (Maybe ( FullModuleName, VarName ))
-resolveOperatorFunction files operatorModuleName operator =
-    case Dict.get operatorModuleName files of
+resolveOperatorFunction modules operatorModuleName operator =
+    case Dict.get operatorModuleName modules of
         Nothing ->
             Ok Nothing
 
-        Just operatorFile ->
-            case Elm.Syntax.File.Extra.resolveOperatorFunction operator operatorFile of
+        Just operatorModule ->
+            case Dict.get operator operatorModule.infixes of
                 Nothing ->
                     Ok Nothing
 
                 Just functionName ->
-                    moduleOfVar Dict.empty files operatorFile Nothing functionName
+                    moduleOfVar emptyIndex modules operatorModule Nothing functionName
                         |> Result.map (Maybe.map (\( _, functionModuleName ) -> ( functionModuleName, functionName )))
 
 
 unqualifiedVarInThisModule :
-    File
+    ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> Result Error (Maybe ( PackageName, FullModuleName ))
-unqualifiedVarInThisModule thisFile maybeModuleName varName =
+unqualifiedVarInThisModule thisModule maybeModuleName varName =
     Ok <|
-        if maybeModuleName == Nothing && Elm.Syntax.File.Extra.containsValueDeclaration varName thisFile then
-            Just ( "", Elm.Syntax.File.Extra.moduleName thisFile )
+        if maybeModuleName == Nothing && Set.member varName thisModule.declaredValues then
+            Just ( "", thisModule.moduleName )
 
         else
             Nothing
 
 
-{-| Could this import bring this value/operator into unqualified scope?
-
-A pre-filter for speed optimization (`True` doesn't mean "does expose").
-
--}
-importCouldExposeValue : Import -> VarName -> Bool
-importCouldExposeValue import_ varName =
-    case import_.exposingList of
-        Nothing ->
-            -- `import Foo` brings nothing into unqualified scope
-            False
-
-        Just exposingList ->
-            case Elm.Syntax.File.Extra.exposesInExposing varName (Node.value exposingList) of
-                Just answer ->
-                    answer
-
-                Nothing ->
-                    -- (..) was used
-                    True
-
-
 unqualifiedVarInImportedModule :
-    Dependencies
-    -> Dict FullModuleName File
-    -> File
+    Index
+    -> Dict FullModuleName ModuleIndex
+    -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> Result Error (Maybe ( PackageName, FullModuleName ))
-unqualifiedVarInImportedModule deps files thisFile maybeModuleName varName =
+unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName =
     if maybeModuleName /= Nothing then
         -- we don't care about qualified vars in this function
         Ok Nothing
 
     else
         let
-            importDefinesValue : Import -> Result Error Bool
+            importDefinesValue : ImportIndex -> Result Error Bool
             importDefinesValue import_ =
-                let
-                    importName : FullModuleName
-                    importName =
-                        import_.moduleName
-                            |> Node.value
-                            |> FullModuleName.fromModuleName_
-                in
-                case Dict.get importName files of
-                    Just file ->
-                        Ok (Elm.Syntax.File.Extra.exposesValue varName file)
+                case Dict.get import_.moduleName modules of
+                    Just importedModule ->
+                        Ok (Set.member varName importedModule.exposedValues)
 
                     Nothing ->
-                        dependencyModuleDefines deps (FullModuleName.toString importName) varName
+                        dependencyModuleDefines index import_.dottedModuleName varName
                             |> Result.map ((/=) Nothing)
 
-            acceptableImports : Result Error (List Import)
+            acceptableImports : Result Error (List ImportIndex)
             acceptableImports =
-                thisFile.imports
-                    |> List.map Node.value
-                    |> List.filter (\import_ -> importCouldExposeValue import_ varName)
+                thisModule.imports
+                    |> List.filter (\import_ -> ModuleIndex.importCouldExposeValue import_ varName)
                     |> Result.ExtraExtra.combineFilter importDefinesValue
         in
         acceptableImports
@@ -185,34 +236,19 @@ unqualifiedVarInImportedModule deps files thisFile maybeModuleName varName =
                             Ok Nothing
 
                         [ acceptableImport ] ->
-                            let
-                                importModuleName : ModuleName
-                                importModuleName =
-                                    Node.value acceptableImport.moduleName
-
-                                fullName : FullModuleName
-                                fullName =
-                                    FullModuleName.fromModuleName_ importModuleName
-                            in
-                            if Dict.member fullName files then
-                                Ok (Just ( "", fullName ))
+                            if Dict.member acceptableImport.moduleName modules then
+                                Ok (Just ( "", acceptableImport.moduleName ))
 
                             else
-                                dependencyModuleDefines deps (FullModuleName.toString fullName) varName
-                                    |> Result.map (Maybe.map (\package -> ( package, fullName )))
+                                dependencyModuleDefines index acceptableImport.dottedModuleName varName
+                                    |> Result.map (Maybe.map (\package -> ( package, acceptableImport.moduleName )))
 
                         _ ->
                             Err <|
                                 AmbiguousName
                                     { varName = varName
-                                    , usedIn = Elm.Syntax.File.Extra.moduleName thisFile
-                                    , possibleModules =
-                                        imports
-                                            |> List.map
-                                                (.moduleName
-                                                    >> Node.value
-                                                    >> FullModuleName.fromModuleName_
-                                                )
+                                    , usedIn = thisModule.moduleName
+                                    , possibleModules = List.map .moduleName imports
                                     }
                 )
 
@@ -220,70 +256,84 @@ unqualifiedVarInImportedModule deps files thisFile maybeModuleName varName =
 {-| We don't think about module `as` aliasing here.
 -}
 qualifiedVarInImportedModule :
-    Dependencies
-    -> Dict FullModuleName File
+    Index
+    -> Dict FullModuleName ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> Result Error (Maybe ( PackageName, FullModuleName ))
-qualifiedVarInImportedModule deps files maybeModuleName varName =
+qualifiedVarInImportedModule index modules maybeModuleName varName =
     case maybeModuleName of
         Nothing ->
             Ok Nothing
 
         Just moduleName ->
-            case Dict.get moduleName files of
-                Just file ->
+            case Dict.get moduleName modules of
+                Just moduleIndex ->
                     Ok <|
-                        if Elm.Syntax.File.Extra.containsValueDeclaration varName file then
+                        if Set.member varName moduleIndex.declaredValues then
                             Just ( "", moduleName )
 
                         else
                             Nothing
 
                 Nothing ->
-                    dependencyModuleDefines deps (FullModuleName.toString moduleName) varName
+                    dependencyModuleDefines index (FullModuleName.toString moduleName) varName
                         |> Result.map (Maybe.map (\package -> ( package, moduleName )))
 
 
 qualifiedVarInAliasedModule :
-    Dependencies
-    -> Dict FullModuleName File
-    -> File
+    Index
+    -> Dict FullModuleName ModuleIndex
+    -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> Result Error (Maybe ( PackageName, FullModuleName ))
-qualifiedVarInAliasedModule deps files thisFile maybeModuleName varName =
+qualifiedVarInAliasedModule index modules thisModule maybeModuleName varName =
     let
-        unaliasedModuleName : Maybe FullModuleName
-        unaliasedModuleName =
+        {- The same alias can be given to more than one import (e.g.
+           `import Svg as S` and `import Internal.Svg as S`), so a qualified
+           reference like `S.Gradient` might belong to any of them. Try every
+           aliased candidate, in import order, and use whichever one actually
+           defines the name.
+        -}
+        unaliasedModuleNames : List FullModuleName
+        unaliasedModuleNames =
             case maybeModuleName of
                 Nothing ->
-                    Nothing
+                    []
 
                 Just ( single, [] ) ->
-                    case Elm.Syntax.File.Extra.unalias thisFile single of
-                        Just m ->
-                            Just m
-
-                        Nothing ->
+                    case ModuleIndex.modulesWithAlias thisModule single of
+                        [] ->
                             ImplicitImports.unaliasModule single
+                                |> Maybe.map List.singleton
+                                |> Maybe.withDefault []
+
+                        found ->
+                            found
 
                 Just _ ->
-                    Nothing
+                    []
     in
-    qualifiedVarInImportedModule
-        deps
-        files
-        unaliasedModuleName
-        varName
+    unaliasedModuleNames
+        |> List.map
+            (\unaliasedModuleName () ->
+                qualifiedVarInImportedModule
+                    index
+                    modules
+                    (Just unaliasedModuleName)
+                    varName
+            )
+        |> Result.ExtraExtra.firstJustLazy
 
 
 implicitUnqualifiedValue :
-    Dependencies
+    Index
+    -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> Result Error (Maybe ( PackageName, FullModuleName ))
-implicitUnqualifiedValue deps maybeModuleName varName =
+implicitUnqualifiedValue index thisModule maybeModuleName varName =
     if maybeModuleName /= Nothing then
         Ok Nothing
 
@@ -291,32 +341,35 @@ implicitUnqualifiedValue deps maybeModuleName varName =
         ImplicitImports.modulesPossiblyExposingValue varName
             |> Result.Extra.combineMap
                 (\moduleNameStr ->
-                    dependencyModuleDefines deps moduleNameStr varName
+                    dependencyModuleDefines index moduleNameStr varName
                         |> Result.map (Maybe.map (\package -> ( package, FullModuleName.fromDotted moduleNameStr )))
                 )
-            |> Result.map (List.filterMap identity >> List.head)
+            |> Result.andThen
+                (\matches ->
+                    case List.filterMap identity matches of
+                        [] ->
+                            Ok Nothing
+
+                        [ single ] ->
+                            Ok (Just single)
+
+                        many ->
+                            Err
+                                (AmbiguousName
+                                    { usedIn = thisModule.moduleName
+                                    , varName = varName
+                                    , possibleModules = List.map Tuple.second many
+                                    }
+                                )
+                )
 
 
-dependencyModuleDefines : Dependencies -> String -> VarName -> Result Error (Maybe PackageName)
-dependencyModuleDefines deps moduleNameStr varName =
+dependencyModuleDefines : Index -> String -> VarName -> Result Error (Maybe PackageName)
+dependencyModuleDefines (Index index) moduleNameStr varName =
     let
         matches : List PackageName
         matches =
-            Dict.toList deps
-                |> List.filterMap
-                    (\( packageName, pkg ) ->
-                        pkg.modules
-                            |> List.filter (\m -> m.name == moduleNameStr)
-                            |> List.head
-                            |> Maybe.andThen
-                                (\mod ->
-                                    if moduleDefinesValue mod varName then
-                                        Just packageName
-
-                                    else
-                                        Nothing
-                                )
-                    )
+            ownersOf index.values moduleNameStr varName
     in
     case matches of
         [] ->
@@ -329,14 +382,6 @@ dependencyModuleDefines deps moduleNameStr varName =
             Err (AmbiguousModuleOwner { moduleName = moduleNameStr, possiblePackages = matches })
 
 
-moduleDefinesValue : Elm.Docs.Module -> VarName -> Bool
-moduleDefinesValue mod varName =
-    List.any (\v -> v.name == varName) mod.values
-        || List.any (\b -> b.name == varName) mod.binops
-        || List.any (\u -> List.any (\( ctor, _ ) -> ctor == varName) u.tags) mod.unions
-        || List.any (\a -> a.name == varName && isRecordAlias a) mod.aliases
-
-
 isRecordAlias : Elm.Docs.Alias -> Bool
 isRecordAlias alias_ =
     case alias_.tipe of
@@ -347,59 +392,11 @@ isRecordAlias alias_ =
             False
 
 
-moduleDefinesType : Elm.Docs.Module -> VarName -> Bool
-moduleDefinesType mod typeName =
-    List.any (\u -> u.name == typeName) mod.unions
-        || List.any (\a -> a.name == typeName) mod.aliases
-
-
-{-| Does this import's own `exposing` clause name this type?
--}
-importExposesType : Import -> VarName -> Bool
-importExposesType import_ typeName =
-    import_.exposingList
-        |> Maybe.map
-            (Node.value
-                >> (\exposing_ ->
-                        case exposing_ of
-                            Elm.Syntax.Exposing.All _ ->
-                                True
-
-                            Elm.Syntax.Exposing.Explicit exposedNodes ->
-                                exposedNodes
-                                    |> List.any
-                                        (\exposedNode ->
-                                            case Node.value exposedNode of
-                                                Elm.Syntax.Exposing.TypeOrAliasExpose name ->
-                                                    name == typeName
-
-                                                Elm.Syntax.Exposing.TypeExpose exposedType ->
-                                                    exposedType.name == typeName
-
-                                                _ ->
-                                                    False
-                                        )
-                   )
-            )
-        |> Maybe.withDefault False
-
-
-dependencyModuleDefinesType : Dependencies -> FullModuleName -> VarName -> Maybe ( PackageName, FullModuleName )
-dependencyModuleDefinesType deps moduleName typeName =
-    let
-        moduleNameStr : String
-        moduleNameStr =
-            FullModuleName.toString moduleName
-    in
-    Dict.toList deps
-        |> List.filterMap
-            (\( packageName, pkg ) ->
-                pkg.modules
-                    |> List.filter (\m -> m.name == moduleNameStr && moduleDefinesType m typeName)
-                    |> List.head
-                    |> Maybe.map (\_ -> ( packageName, moduleName ))
-            )
+dependencyModuleDefinesType : Index -> FullModuleName -> VarName -> Maybe ( PackageName, FullModuleName )
+dependencyModuleDefinesType (Index index) moduleName typeName =
+    ownersOf index.types (FullModuleName.toString moduleName) typeName
         |> List.head
+        |> Maybe.map (\packageName -> ( packageName, moduleName ))
 
 
 implicitTypeModule : ModuleName -> VarName -> Maybe ( PackageName, FullModuleName )
@@ -418,72 +415,88 @@ implicitTypeModule qualifier typeName =
     import Parser
 
 Elm accepts this as long as each individual name is unambiguous, so we can't
-just unalias `Parser` and be done - we have to try the modules the qualifier
-could stand for and pick the one that actually declares the type.
+just resolve `Parser` to a single module and be done - we have to try the
+modules the qualifier could stand for and pick the one that actually declares
+the type.
 
 -}
-qualifierCandidates : File -> ModuleName -> List ModuleName
-qualifierCandidates thisFile qualifier =
+qualifierCandidates : ModuleIndex -> ModuleName -> List ModuleName
+qualifierCandidates thisModule qualifier =
     let
-        unaliased : ModuleName
-        unaliased =
+        aliasedModules : List ModuleName
+        aliasedModules =
             case qualifier of
                 [ single ] ->
-                    Elm.Syntax.File.Extra.unalias thisFile single
-                        |> Maybe.Extra.orElseLazy (\() -> ImplicitImports.unaliasModule single)
-                        |> Maybe.map FullModuleName.toModuleName
-                        |> Maybe.withDefault qualifier
+                    ModuleIndex.modulesWithAlias thisModule single
+                        |> List.map FullModuleName.toModuleName
 
                 _ ->
-                    qualifier
+                    []
 
-        isImportedUnaliased : Bool
-        isImportedUnaliased =
-            thisFile.imports
-                |> List.any (\import_ -> Node.value (Node.value import_).moduleName == qualifier)
+        implicitAliasedModule : List ModuleName
+        implicitAliasedModule =
+            case ( qualifier, aliasedModules ) of
+                ( [ single ], [] ) ->
+                    case ImplicitImports.unaliasModule single of
+                        Just m ->
+                            [ FullModuleName.toModuleName m ]
+
+                        Nothing ->
+                            []
+
+                _ ->
+                    []
+
+        aliasCandidates : List ModuleName
+        aliasCandidates =
+            aliasedModules ++ implicitAliasedModule
     in
-    if unaliased == qualifier || not isImportedUnaliased then
-        [ unaliased ]
+    if List.isEmpty aliasCandidates then
+        [ qualifier ]
 
     else
-        -- The alias wins if it declares the type, the literal module name is
-        -- the fallback.
-        [ unaliased, qualifier ]
+        let
+            isImportedUnaliased : Bool
+            isImportedUnaliased =
+                ModuleIndex.isImportedUnaliased thisModule qualifier
+        in
+        if isImportedUnaliased then
+            -- The alias(es) win if one of them declares the type, the literal
+            -- module name is the fallback.
+            aliasCandidates ++ [ qualifier ]
+
+        else
+            aliasCandidates
 
 
-typeResolverFor : Dependencies -> Dict FullModuleName File -> File -> TypeResolver
-typeResolverFor deps files thisFile qualifier typeName =
+typeResolverFor : Index -> Dict FullModuleName ModuleIndex -> ModuleIndex -> TypeResolver
+typeResolverFor ((Index index) as wrappedIndex) modules thisModule qualifier typeName =
     let
         candidates : List ModuleName
         candidates =
-            qualifierCandidates thisFile qualifier
+            qualifierCandidates thisModule qualifier
 
         firstParty : ModuleName -> Maybe ( PackageName, FullModuleName )
         firstParty unaliasedQualifier =
             if List.isEmpty unaliasedQualifier then
-                if Elm.Syntax.File.Extra.containsTypeDeclaration typeName thisFile then
-                    Just ( "", Elm.Syntax.File.Extra.moduleName thisFile )
+                if Set.member typeName thisModule.declaredTypes then
+                    Just ( "", thisModule.moduleName )
 
                 else
-                    thisFile.imports
-                        |> List.map Node.value
+                    thisModule.imports
                         |> List.filterMap
                             (\import_ ->
-                                let
-                                    importName =
-                                        FullModuleName.fromModuleName_ (Node.value import_.moduleName)
-                                in
-                                case Dict.get importName files of
-                                    Just file ->
-                                        if Elm.Syntax.File.Extra.exposesType typeName file then
-                                            Just ( "", importName )
+                                case Dict.get import_.moduleName modules of
+                                    Just importedModule ->
+                                        if Set.member typeName importedModule.exposedTypes then
+                                            Just ( "", import_.moduleName )
 
                                         else
                                             Nothing
 
                                     Nothing ->
-                                        if importExposesType import_ typeName then
-                                            dependencyModuleDefinesType deps importName typeName
+                                        if ModuleIndex.importExposesType import_ typeName then
+                                            dependencyModuleDefinesType wrappedIndex import_.moduleName typeName
 
                                         else
                                             Nothing
@@ -492,13 +505,14 @@ typeResolverFor deps files thisFile qualifier typeName =
 
             else
                 let
+                    fullName : FullModuleName
                     fullName =
                         FullModuleName.fromModuleName_ unaliasedQualifier
                 in
-                Dict.get fullName files
+                Dict.get fullName modules
                     |> Maybe.andThen
-                        (\file ->
-                            if Elm.Syntax.File.Extra.containsTypeDeclaration typeName file then
+                        (\moduleIndex ->
+                            if Set.member typeName moduleIndex.declaredTypes then
                                 Just ( "", fullName )
 
                             else
@@ -512,31 +526,25 @@ typeResolverFor deps files thisFile qualifier typeName =
 
             else
                 let
+                    dottedQualifier : String
                     dottedQualifier =
                         unaliasedQualifier |> String.join "."
 
-                    matches : List ( PackageName, FullModuleName )
-                    matches =
-                        Dict.toList deps
-                            |> List.filterMap
-                                (\( packageName, pkg ) ->
-                                    pkg.modules
-                                        |> List.filter (\m -> m.name == dottedQualifier && moduleDefinesType m typeName)
-                                        |> List.head
-                                        |> Maybe.map (\m -> ( packageName, FullModuleName.fromDotted m.name ))
-                                )
+                    matchingPackages : List PackageName
+                    matchingPackages =
+                        ownersOf index.types dottedQualifier typeName
                 in
-                case matches of
+                case matchingPackages of
                     [] ->
                         Ok Nothing
 
                     [ single ] ->
-                        Ok (Just single)
+                        Ok (Just ( single, FullModuleName.fromDotted dottedQualifier ))
 
                     _ :: _ :: _ ->
                         Err
                             { moduleName = dottedQualifier
-                            , possiblePackages = matches |> List.map Tuple.first
+                            , possiblePackages = matchingPackages
                             }
 
         defaultQualifier : ModuleName
@@ -546,7 +554,7 @@ typeResolverFor deps files thisFile qualifier typeName =
                 |> Maybe.withDefault qualifier
     in
     candidates
-        |> List.concatMap
+        |> List.ExtraExtra.fastConcatMap
             (\candidate ->
                 [ \() -> Ok (firstParty candidate)
                 , \() -> dependency candidate
@@ -566,7 +574,7 @@ typeResolverFor deps files thisFile qualifier typeName =
             (Maybe.withDefault
                 ( ""
                 , if List.isEmpty defaultQualifier then
-                    Elm.Syntax.File.Extra.moduleName thisFile
+                    thisModule.moduleName
 
                   else
                     FullModuleName.fromModuleName_ defaultQualifier

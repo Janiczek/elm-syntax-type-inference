@@ -1,0 +1,550 @@
+module Vendor.IntSet exposing
+    ( IntSet
+    , empty, insert
+    , remove
+    , member
+    , getSharedKey
+    , keys
+    , foldl
+    )
+
+{-|
+
+
+# IntSet
+
+This module exposes the same API as [`Dict`](http://package.elm-lang.org/packages/elm-lang/core/latest/Dict).
+
+
+# Technicalities
+
+Since JavaScript's number type is kind of messed up, Elm's `Int` is not particularly
+well-behaved wrt. bitwise operations. Currently, JS supports 32 bit integers, so there is
+probably enough room for key picks. **However, when sanitizing user input, it is mandatory
+that a prior `isValidKey` or one of the safe versions in `IntSet.Safe` is used!** This is
+to prevent the overflow behavior.
+
+This library is inspired by Haskells [IntMap](http://hackage.haskell.org/package/containers-0.2.0.1/docs/Data-IntMap.html),
+which in turn implements Okasaki and Gill's [Fast mergable integer maps](http://ittc.ku.edu/~andygill/papers/IntMap98.pdf).
+
+As noted in the [references](http://ittc.ku.edu/~andygill/papers/IntMap98.pdf), here are some runtimes:
+
+_O(min(n, W))_: `insert`, `update`, `remove`, `get`, `member`
+
+_O(n + m)_: `uniteWith`, `union`, `intersection`, `diff`, `merge`
+
+where _n_ and _m_ are the sizes of the first and second dictionary respectively and _W_
+is the number of bits in `Int` (so a constant with current value 32).
+
+Dictionary equality with `(==)` is unreliable and should not be used.
+
+
+# Data
+
+@docs IntSet
+
+
+# Build
+
+@docs empty, insert
+@docs remove
+
+
+# Query
+
+@docs member
+
+
+# Combine
+
+@docs getSharedKey
+
+
+# Lists
+
+@docs keys
+
+
+# Transform
+
+@docs foldl
+
+-}
+
+import Bitwise
+
+
+type alias KeyPrefix =
+    { prefixBits : Int -- higher key prefix excluding the branching bit
+    , branchingBit : Int -- already in 2^i form -> always > 0 (except when the sign bit is set, then it's < 0)
+    }
+
+
+
+-- only so that we don't repeat ourselves
+
+
+type alias InnerType =
+    { prefix : KeyPrefix
+    , left : IntSet
+    , right : IntSet
+    }
+
+
+{-| A dictionary mapping `Int`s to values of a type `v`. Analogous to
+`Dict Int v`.
+-}
+type IntSet
+    = Empty () -- Invariant: Never child of an `Inner` node
+    | Leaf Int
+    | Inner InnerType
+
+
+
+-- into an integer. We can then check for overflow.
+-- This seems easier than checking for 32 bits.
+-- `or` 0 is similar to `mod` <32bits>
+-- SMART CONSTRUCTORS
+-- not exported
+-- exported as the singleton alias
+
+
+leaf : Int -> IntSet
+leaf =
+    Leaf
+
+
+
+-- SOME PRIMITIVES
+
+
+{-| Consider a branchingBit of 2^4 = 16 = 0b00010000.
+Then branchingBit-1 = 15 = 0b00001111,
+Now apply bitwise NOT to get the mask 0b11110000.
+Finally, we clear out the branchingBit itself with `Bitwise.xor`.
+-}
+higherBitMask : Int -> Int
+higherBitMask branchingBit =
+    branchingBit
+        - 1
+        |> Bitwise.complement
+        |> Bitwise.xor branchingBit
+
+
+prefixMatches : KeyPrefix -> Int -> Bool
+prefixMatches p n =
+    Bitwise.and n (higherBitMask p.branchingBit) == p.prefixBits
+
+
+{-| Clear all bits other than the highest in n.
+For implementation notes, see [this](<http://aggregate.org/MAGIC/#Most> Significant 1 Bit).
+-}
+highestBitSet : Int -> Int
+highestBitSet n =
+    let
+        shiftOr i shift =
+            Bitwise.or i (Bitwise.shiftRightZfBy shift i)
+
+        n1 =
+            shiftOr n 1
+
+        n2 =
+            shiftOr n1 2
+
+        n3 =
+            shiftOr n2 4
+
+        n4 =
+            shiftOr n3 8
+
+        n5 =
+            shiftOr n4 16
+
+        -- n6 = shiftOr n5 32 -- 64 bit support?!
+        -- n5 has the same msb set as diff. However, all
+        -- bits below the msb are also 1! This means we can
+        -- do the following to get the msb:
+    in
+    n5 |> Bitwise.shiftRightZfBy 1 |> Bitwise.complement |> Bitwise.and n5
+
+
+mostSignificantBranchingBit : Int -> Int -> Int
+mostSignificantBranchingBit a b =
+    if a == signBit || b == signBit then
+        signBit
+
+    else
+        max a b
+
+
+{-| Compute the longest common prefix of two keys.
+Returns 0 as branchingBit if equal.
+
+Find the highest bit not set in
+
+
+    diff =
+        x `xor` y
+
+    -- 0b011001 `xor` 0b011010 = 0b000011
+
+-}
+lcp : Int -> Int -> KeyPrefix
+lcp x y =
+    let
+        branchingBit =
+            highestBitSet (Bitwise.xor x y)
+
+        mask =
+            higherBitMask branchingBit
+
+        prefixBits =
+            Bitwise.and x mask
+
+        -- should equal y & mask
+    in
+    { prefixBits = prefixBits
+    , branchingBit = branchingBit
+    }
+
+
+signBit : Int
+signBit =
+    highestBitSet -1
+
+
+isBranchingBitSet : KeyPrefix -> Int -> Bool
+isBranchingBitSet p n =
+    (n
+        |> Bitwise.xor signBit
+        -- This is a hack that fixes the ordering of keys.
+        |> Bitwise.and p.branchingBit
+    )
+        /= 0
+
+
+
+-- BUILD
+
+
+{-| Create an empty dictionary.
+-}
+empty : IntSet
+empty =
+    Empty ()
+
+
+{-| Insert a key-value pair into a dictionary. Replaces value when there is
+a collision.
+-}
+insert : Int -> IntSet -> IntSet
+insert key set =
+    case set of
+        Empty () ->
+            leaf key
+
+        Leaf leafKey ->
+            if leafKey == key then
+                set
+                -- This updates or removes the leaf with the same key
+
+            else
+                join key leafKey set
+
+        -- This potentially inserts a new node
+        Inner i ->
+            if prefixMatches i.prefix key then
+                if isBranchingBitSet i.prefix key then
+                    Inner { prefix = i.prefix, left = i.left, right = insert key i.right }
+
+                else
+                    Inner { prefix = i.prefix, left = insert key i.left, right = i.right }
+
+            else
+                -- we have to join a new leaf with the current diverging Inner node
+                join key i.prefix.prefixBits set
+
+
+{-| Update the value of a dictionary for a specific key with a given function.
+-}
+remove : Int -> IntSet -> IntSet
+remove key dict =
+    case dict of
+        Empty () ->
+            empty
+
+        Leaf leafKey ->
+            if leafKey == key then
+                empty
+
+            else
+                dict
+
+        Inner { prefix, left, right } ->
+            if prefixMatches prefix key then
+                if isBranchingBitSet prefix key then
+                    let
+                        r : IntSet
+                        r =
+                            remove key right
+                    in
+                    if left == empty then
+                        r
+
+                    else if r == empty then
+                        left
+
+                    else
+                        Inner
+                            { prefix = prefix
+                            , left = left
+                            , right = r
+                            }
+
+                else
+                    let
+                        l : IntSet
+                        l =
+                            remove key left
+                    in
+                    if l == empty then
+                        right
+
+                    else if right == empty then
+                        l
+
+                    else
+                        Inner
+                            { prefix = prefix
+                            , left = l
+                            , right = right
+                            }
+
+            else
+                dict
+
+
+join : Int -> Int -> IntSet -> IntSet
+join key k2 set =
+    -- precondition: k1 /= k2
+    let
+        prefix : KeyPrefix
+        prefix =
+            lcp key k2
+    in
+    if
+        isBranchingBitSet prefix k2
+        -- if so, r will be the right child
+    then
+        Inner { prefix = prefix, left = leaf key, right = set }
+
+    else
+        Inner { prefix = prefix, left = set, right = leaf key }
+
+
+
+-- QUERY
+
+
+{-| Determine if a key is in a dictionary.
+-}
+member : Int -> IntSet -> Bool
+member key dict =
+    case dict of
+        Empty () ->
+            False
+
+        Leaf leafKey ->
+            leafKey == key
+
+        Inner i ->
+            if not (prefixMatches i.prefix key) then
+                False
+
+            else if
+                -- continue in left or right branch
+                isBranchingBitSet i.prefix key
+            then
+                -- depending on whether the branching
+                member key i.right
+
+            else
+                -- bit is set in the key
+                member key i.left
+
+
+
+-- TRANSFORM
+
+
+{-| Fold over the key-value pairs in a dictionary, in order from lowest
+key to highest key.
+-}
+foldl : (Int -> a -> a) -> a -> IntSet -> a
+foldl f acc dict =
+    case dict of
+        Empty () ->
+            acc
+
+        Leaf key ->
+            f key acc
+
+        Inner i ->
+            foldl f (foldl f acc i.left) i.right
+
+
+{-| Fold over the keys pairs in a dictionary, in order from highest
+key to lowest key.
+-}
+foldr : (Int -> a -> a) -> a -> IntSet -> a
+foldr f acc dict =
+    case dict of
+        Empty () ->
+            acc
+
+        Leaf key ->
+            f key acc
+
+        Inner i ->
+            foldr f (foldr f acc i.right) i.left
+
+
+
+-- COMBINE
+
+
+type Choice
+    = Left
+    | Right
+
+
+type BranchRelation
+    = SamePrefix
+    | Parent Choice Choice -- which is the parent and which child the other is of the parent
+    | Disjunct -- the longest common prefix and which child would be the left edge
+
+
+
+{- Take bits from a or b, depending on the value of the bit in that position in mask.
+   0 -> a, 1 -> b. Implemented as a & ~mask | b & mask
+-}
+
+
+combineBits : Int -> Int -> Int -> Int
+combineBits a b mask =
+    Bitwise.or
+        (Bitwise.and a (Bitwise.complement mask))
+        (Bitwise.and b mask)
+
+
+
+{- While merging/uniting 2 inner nodes, we encounter the 4 possible base cases
+   represented by BranchRelation. This function computes that relation.
+-}
+
+
+determineBranchRelation : InnerType -> InnerType -> BranchRelation
+determineBranchRelation l r =
+    let
+        lp =
+            l.prefix
+
+        rp =
+            r.prefix
+    in
+    if lp == rp then
+        SamePrefix
+
+    else
+        let
+            -- l.prefixBits and modifiedRightPrefix are guaranteed to be different
+            childEdge branchPrefix c =
+                if isBranchingBitSet branchPrefix c.prefix.prefixBits then
+                    Right
+
+                else
+                    Left
+
+            mask =
+                -- this is the region where we want to force different bits
+                highestBitSet (mostSignificantBranchingBit lp.branchingBit rp.branchingBit)
+
+            modifiedRightPrefix =
+                combineBits rp.prefixBits (Bitwise.complement lp.prefixBits) mask
+
+            prefix =
+                lcp lp.prefixBits modifiedRightPrefix
+        in
+        if prefix == lp then
+            Parent Left (childEdge l.prefix r)
+
+        else if prefix == rp then
+            Parent Right (childEdge r.prefix l)
+
+        else
+            Disjunct
+
+
+getSharedKey : IntSet -> IntSet -> Maybe Int
+getSharedKey l r =
+    case l of
+        Empty () ->
+            Nothing
+
+        Leaf key ->
+            if member key r then
+                Just key
+
+            else
+                Nothing
+
+        Inner il ->
+            case r of
+                Empty () ->
+                    Nothing
+
+                Leaf key ->
+                    if member key l then
+                        Just key
+
+                    else
+                        Nothing
+
+                Inner ir ->
+                    case determineBranchRelation il ir of
+                        SamePrefix ->
+                            -- Intersect both left and right sub trees
+                            case getSharedKey il.left ir.left of
+                                Nothing ->
+                                    getSharedKey il.right ir.right
+
+                                justKey ->
+                                    justKey
+
+                        Parent Left Right ->
+                            getSharedKey il.right r
+
+                        Parent Right Right ->
+                            getSharedKey l ir.right
+
+                        Parent Left Left ->
+                            getSharedKey il.left r
+
+                        Parent Right Left ->
+                            getSharedKey l ir.left
+
+                        Disjunct ->
+                            Nothing
+
+
+
+-- We have no common keys
+-- l and r contain different keys
+-- LISTS
+
+
+{-| Get all of the keys in a dictionary, sorted from lowest to highest.
+-}
+keys : IntSet -> List Int
+keys dict =
+    foldr (\key keyList -> key :: keyList) [] dict

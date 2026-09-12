@@ -2,20 +2,26 @@ module Tests exposing (suite)
 
 import Dict exposing (Dict)
 import Elm.Docs
-import Elm.Syntax.FullModuleName as FullModuleName
+import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Type
+import Elm.TypeInference exposing (Dependency, PackageName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type
     exposing
         ( MonoType(..)
-        , SuperType(..)
         , Type(..)
-        , TypeVarStyle(..)
         )
 import Elm.TypeInference.Type.External as ExternalType
-import Elm.TypeInference.Unify as Unify
+import Elm.TypeInference.TypeVar
+    exposing
+        ( SuperType(..)
+        , TypeVar
+        , TypeVarStyle(..)
+        )
+import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import Expect
 import String.ExtraExtra
 import Test exposing (Test)
@@ -25,6 +31,7 @@ import Tests.Elm.TypeInference.Helpers
         ( TestError(..)
         , getDeclType
         , getDeclTypeWithDeps
+        , getDeclTypeWithDirectAndDeps
         , getExprType
         , getExprTypeWithDeps
         , inferMainModule
@@ -35,23 +42,25 @@ import TypeLookupTable
 testExpr : ( String, Result Error Type -> Bool ) -> Test
 testExpr ( exprCode, predicate ) =
     let
+        trimmedExprCode : String
         trimmedExprCode =
             String.ExtraExtra.multilineInput exprCode
     in
-    Test.test trimmedExprCode <| \() ->
-    case getExprType trimmedExprCode of
-        Err (CouldntInfer err) ->
-            predicate (Err err)
-                |> Expect.equal True
-                |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
+    Test.test trimmedExprCode <|
+        \() ->
+            case getExprType trimmedExprCode of
+                Err (CouldntInfer err) ->
+                    predicate (Err err)
+                        |> Expect.equal True
+                        |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
-        Ok type_ ->
-            predicate (Ok type_)
-                |> Expect.equal True
-                |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
+                Ok type_ ->
+                    predicate (Ok type_)
+                        |> Expect.equal True
+                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
 
-        Err err ->
-            Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+                Err err ->
+                    Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
 
 
 is : MonoType -> Result Error Type -> Bool
@@ -128,11 +137,12 @@ isFunction fromCheck toCheck actual =
 isFunctionWithSignature : String -> Result Error Type -> Bool
 isFunctionWithSignature signature actual =
     case actual of
-        Ok ((Forall [] (Function { from, to })) as type_) ->
+        Ok ((Forall [] (Function _)) as type_) ->
             let
                 (Forall _ mono) =
                     Type.normalize type_
 
+                actualSignature : String
                 actualSignature =
                     Type.monoTypeToString mono
             in
@@ -208,6 +218,7 @@ isExtensibleRecordWithFields fieldChecks actual =
     case actual of
         Ok (Forall [] ((ExtensibleRecord _) as mono)) ->
             let
+                allFields : Dict String MonoType
                 allFields =
                     flatten mono
             in
@@ -393,8 +404,9 @@ suite =
             [ Test.describe "good expressions" (List.map testExpr goodExprs)
             , Test.describe "bad expressions" (List.map testExpr badExprs)
             , Test.describe "subexpressions"
-                [ Test.test "the `2` in `main = [1.0, 2]` is a Float" <| \() ->
-                """module Main exposing (main)
+                [ Test.test "the `2` in `main = [1.0, 2]` is a Float" <|
+                    \() ->
+                        """module Main exposing (main)
 
 main = [1.0, 2]
 """
@@ -407,8 +419,9 @@ main = [1.0, 2]
                                         }
                                 )
                             |> Expect.equal (Ok (Just (Forall [] Float)))
-                , Test.test "a top-level function reports its function type, not its body's" <| \() ->
-                """module Main exposing (main)
+                , Test.test "a top-level function reports its function type, not its body's" <|
+                    \() ->
+                        """module Main exposing (main)
 
 main x = x
 """
@@ -424,8 +437,9 @@ main x = x
                             |> Expect.equal (Ok (Just "#0 -> #0"))
                 ]
             , Test.describe "declarations other than functions"
-                [ Test.test "a type alias and a custom type don't crash the inference" <| \() ->
-                """module Main exposing (main)
+                [ Test.test "a type alias and a custom type don't crash the inference" <|
+                    \() ->
+                        """module Main exposing (main)
 
 type alias Foo =
     { a : Float }
@@ -443,14 +457,18 @@ main = ()
             , Test.describe "e == (e)" <|
                 List.map
                     (\( expr, _ ) ->
-                        Test.test expr <| \() ->
-                        Result.map Type.normalize (getExprType ("(" ++ expr ++ ")"))
-                            |> Expect.equal (Result.map Type.normalize (getExprType expr))
+                        Test.test expr <|
+                            \() ->
+                                Result.map Type.normalize (getExprType ("(" ++ expr ++ ")"))
+                                    |> Expect.equal (Result.map Type.normalize (getExprType expr))
                     )
                     goodExprs
             ]
         , unifyAliasSuite
+        , comparableAliasedTupleRegression
         , substitutionMapCompressionSuite
+        , composeCycleRegression
+        , instantiateIdCollisionRegression
         , bindingGroupSuite
         , dependenciesSuite
         , glslSuite
@@ -463,16 +481,18 @@ main = ()
         , recordConstructorReexposeRegression
         , unexposedUnionConstructorIsntFound
         , importWithSpecificExposes
+        , duplicateImportAliasRegression
         ]
 
 
 largeInputsSuite : Test
 largeInputsSuite =
     Test.describe "large inputs"
-        [ Test.test "a large list literal doesn't blow the stack" <| \() ->
-        -- One declaration's binding group holds ~2 type equations per
-        -- list item; solving them used to recurse once per equation.
-        ("""module Main exposing (main)
+        [ Test.test "a large list literal doesn't blow the stack" <|
+            \() ->
+                -- One declaration's binding group holds ~2 type equations per
+                -- list item; solving them used to recurse once per equation.
+                ("""module Main exposing (main)
 
 main =
     [ """
@@ -484,30 +504,30 @@ main =
                     |> inferMainModule
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
-
-        , Test.test "a large list of large records doesn't blow the stack" <| \() ->
-            let
-                record : String
-                record =
-                    "{ "
-                        ++ (List.range 1 17
-                                |> List.map (\i -> "field" ++ String.fromInt i ++ " = " ++ String.fromInt i)
-                                |> String.join ", "
-                           )
-                        ++ " }"
-            in
-            ("""module Main exposing (main)
+        , Test.test "a large list of large records doesn't blow the stack" <|
+            \() ->
+                let
+                    record : String
+                    record =
+                        "{ "
+                            ++ (List.range 1 17
+                                    |> List.map (\i -> "field" ++ String.fromInt i ++ " = " ++ String.fromInt i)
+                                    |> String.join ", "
+                               )
+                            ++ " }"
+                in
+                ("""module Main exposing (main)
 
 main =
     [ """
-                ++ String.join "\n    , " (List.repeat 500 record)
-                ++ """
+                    ++ String.join "\n    , " (List.repeat 500 record)
+                    ++ """
     ]
 """
-            )
-                |> inferMainModule
-                |> Result.map (always ())
-                |> Expect.equal (Ok ())
+                )
+                    |> inferMainModule
+                    |> Result.map (always ())
+                    |> Expect.equal (Ok ())
         ]
 
 
@@ -687,20 +707,21 @@ dependenciesSuite =
     let
         testWithCore : ( String, Result Error Type -> Bool ) -> Test
         testWithCore ( exprCode, predicate ) =
-            Test.test exprCode <| \() ->
-            case getExprTypeWithDeps [ CoreFixture.core ] exprCode of
-                Err (CouldntInfer err) ->
-                    predicate (Err err)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
+            Test.test exprCode <|
+                \() ->
+                    case getExprTypeWithDeps [ CoreFixture.core ] exprCode of
+                        Err (CouldntInfer err) ->
+                            predicate (Err err)
+                                |> Expect.equal True
+                                |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
-                Ok type_ ->
-                    predicate (Ok type_)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
+                        Ok type_ ->
+                            predicate (Ok type_)
+                                |> Expect.equal True
+                                |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString (Type.normalize type_))
 
-                Err err ->
-                    Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+                        Err err ->
+                            Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
     in
     Test.describe "3rd party dependency types (using an elm/core fixture)"
         [ Test.describe "good expressions"
@@ -720,53 +741,57 @@ dependenciesSuite =
                 , ( "True + 1", fails ) -- Bool isn't a number
                 ]
             )
-        , Test.test "a module name exposed by one package and shipped internally by another stays two distinct types" <| \() ->
-        let
-            pkgA =
-                { name = "authorA/pkg-a"
-                , dependencies = []
-                , modules =
-                    [ { name = "ModuleA"
-                      , comment = ""
-                      , unions = []
-                      , aliases = []
-                      , values =
-                            [ { name = "consume"
+        , Test.test "a module name exposed by one package and shipped internally by another stays two distinct types" <|
+            \() ->
+                let
+                    pkgA : Dependency
+                    pkgA =
+                        { name = "authorA/pkg-a"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "ModuleA"
                               , comment = ""
-                              , tipe =
-                                    Elm.Type.Lambda
-                                        (Elm.Type.Type "Char.Extra.Classification" [])
-                                        (Elm.Type.Type "Basics.Int" [])
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "consume"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "Char.Extra.Classification" [])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
                               }
                             ]
-                      , binops = []
-                      }
-                    ]
-                }
+                        }
 
-            pkgB =
-                { name = "authorB/pkg-b"
-                , dependencies = []
-                , modules =
-                    [ { name = "Char.Extra"
-                      , comment = ""
-                      , unions =
-                            [ { name = "Classification"
+                    pkgB : Dependency
+                    pkgB =
+                        { name = "authorB/pkg-b"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Char.Extra"
                               , comment = ""
-                              , args = []
-                              , tags = [ ( "Alpha", [] ) ]
+                              , unions =
+                                    [ { name = "Classification"
+                                      , comment = ""
+                                      , args = []
+                                      , tags = [ ( "Alpha", [] ) ]
+                                      }
+                                    ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
                               }
                             ]
-                      , aliases = []
-                      , values = []
-                      , binops = []
-                      }
-                    ]
-                }
+                        }
 
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 import ModuleA
@@ -778,61 +803,66 @@ main = ModuleA.consume Char.Extra.Alpha
                 getDeclTypeWithDeps [ pkgA, pkgB ] modules [ "Main" ] "main"
                     |> Result.map (always ())
                     |> Expect.err
-        , Test.test "ambiguity between two same-named exposed modules across packages (miniBill/elm-ui-with-context's Element) is an error" <| \() ->
-        let
-            elmUi =
-                { name = "mdgriffith/elm-ui"
-                , dependencies = []
-                , modules =
-                    [ { name = "Element"
-                      , comment = ""
-                      , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
-                      , aliases = []
-                      , values = []
-                      , binops = []
-                      }
-                    ]
-                }
-
-            styleElements =
-                { name = "mdgriffith/style-elements"
-                , dependencies = []
-                , modules =
-                    [ { name = "Element"
-                      , comment = ""
-                      , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
-                      , aliases = []
-                      , values = []
-                      , binops = []
-                      }
-                    ]
-                }
-
-            elmUiWithContext =
-                { name = "miniBill/elm-ui-with-context"
-                , dependencies = [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
-                , modules =
-                    [ { name = "Element.WithContext"
-                      , comment = ""
-                      , unions = []
-                      , aliases = []
-                      , values =
-                            [ { name = "toElement"
+        , Test.test "ambiguity between two same-named exposed modules across packages (miniBill/elm-ui-with-context's Element) is an error" <|
+            \() ->
+                let
+                    elmUi : Dependency
+                    elmUi =
+                        { name = "mdgriffith/elm-ui"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
                               , comment = ""
-                              , tipe =
-                                    Elm.Type.Lambda
-                                        (Elm.Type.Type "Element.Element" [ Elm.Type.Var "msg" ])
-                                        (Elm.Type.Type "Basics.Int" [])
+                              , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
                               }
                             ]
-                      , binops = []
-                      }
-                    ]
-                }
+                        }
 
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+                    styleElements : Dependency
+                    styleElements =
+                        { name = "mdgriffith/style-elements"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    elmUiWithContext : Dependency
+                    elmUiWithContext =
+                        { name = "miniBill/elm-ui-with-context"
+                        , dependencies = [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                        , modules =
+                            [ { name = "Element.WithContext"
+                              , comment = ""
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "toElement"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "Element.Element" [ Elm.Type.Var "msg" ])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main = 1
@@ -848,55 +878,59 @@ main = 1
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
-        , Test.test "ambiguity between two packages both defining Element.text is an error" <| \() ->
-        let
-            elmUi =
-                { name = "mdgriffith/elm-ui"
-                , dependencies = []
-                , modules =
-                    [ { name = "Element"
-                      , comment = ""
-                      , unions = []
-                      , aliases = []
-                      , values =
-                            [ { name = "text"
+        , Test.test "ambiguity between two packages both defining Element.text is an error" <|
+            \() ->
+                let
+                    elmUi : Dependency
+                    elmUi =
+                        { name = "mdgriffith/elm-ui"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
                               , comment = ""
-                              , tipe =
-                                    Elm.Type.Lambda
-                                        (Elm.Type.Type "String.String" [])
-                                        (Elm.Type.Type "Basics.Int" [])
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "text"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "String.String" [])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
                               }
                             ]
-                      , binops = []
-                      }
-                    ]
-                }
+                        }
 
-            styleElements =
-                { name = "mdgriffith/style-elements"
-                , dependencies = []
-                , modules =
-                    [ { name = "Element"
-                      , comment = ""
-                      , unions = []
-                      , aliases = []
-                      , values =
-                            [ { name = "text"
+                    styleElements : Dependency
+                    styleElements =
+                        { name = "mdgriffith/style-elements"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
                               , comment = ""
-                              , tipe =
-                                    Elm.Type.Lambda
-                                        (Elm.Type.Type "String.String" [])
-                                        (Elm.Type.Type "Basics.Int" [])
+                              , unions = []
+                              , aliases = []
+                              , values =
+                                    [ { name = "text"
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "String.String" [])
+                                                (Elm.Type.Type "Basics.Int" [])
+                                      }
+                                    ]
+                              , binops = []
                               }
                             ]
-                      , binops = []
-                      }
-                    ]
-                }
+                        }
 
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 import Element
@@ -914,42 +948,51 @@ main = Element.text "hi"
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
-        , Test.test "ambiguity between two packages both defining an Element type is an error" <| \() ->
-        let
-            elementUnion =
-                { name = "Element", comment = "", args = [ "msg" ], tags = [] }
+        , Test.test "ambiguity between two packages both defining an Element type is an error" <|
+            \() ->
+                let
+                    elementUnion : Elm.Docs.Union
+                    elementUnion =
+                        { name = "Element"
+                        , comment = ""
+                        , args = [ "msg" ]
+                        , tags = []
+                        }
 
-            elmUi =
-                { name = "mdgriffith/elm-ui"
-                , dependencies = []
-                , modules =
-                    [ { name = "Element"
-                      , comment = ""
-                      , unions = [ elementUnion ]
-                      , aliases = []
-                      , values = []
-                      , binops = []
-                      }
-                    ]
-                }
+                    elmUi : Dependency
+                    elmUi =
+                        { name = "mdgriffith/elm-ui"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = [ elementUnion ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
 
-            styleElements =
-                { name = "mdgriffith/style-elements"
-                , dependencies = []
-                , modules =
-                    [ { name = "Element"
-                      , comment = ""
-                      , unions = [ elementUnion ]
-                      , aliases = []
-                      , values = []
-                      , binops = []
-                      }
-                    ]
-                }
+                    styleElements : Dependency
+                    styleElements =
+                        { name = "mdgriffith/style-elements"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "Element"
+                              , comment = ""
+                              , unions = [ elementUnion ]
+                              , aliases = []
+                              , values = []
+                              , binops = []
+                              }
+                            ]
+                        }
 
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 import Element
@@ -970,11 +1013,82 @@ main = 1
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
-        , Test.test "`import Platform.Cmd as Cmd exposing (Cmd)` is implicit" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a module exposed by both a direct dependency and a dependency-of-a-dependency isn't ambiguous (regression: gampleman/elm-visualization depends directly on elmcraft/core-extra, which exposes List.Extra; folkertdev/one-true-path-experiment -- itself only a direct dep -- separately depends on elm-community/list-extra, which *also* exposes a module named List.Extra, but that package isn't reachable/importable from our own source, exactly as with `elm make`)" <|
+            \() ->
+                let
+                    coreExtra : Dependency
+                    coreExtra =
+                        { name = "elmcraft/core-extra"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "List.Extra"
+                              , comment = ""
+                              , unions = [ { name = "Sentinel", comment = "", args = [], tags = [ ( "Sentinel", [] ) ] } ]
+                              , aliases = []
+                              , values =
+                                    [ { name = "last"
+                                      , comment = ""
+                                      , tipe = Elm.Type.Type "List.Extra.Sentinel" []
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    listExtra : Dependency
+                    listExtra =
+                        { name = "elm-community/list-extra"
+                        , dependencies = []
+                        , modules =
+                            [ { name = "List.Extra"
+                              , comment = ""
+                              , unions = [ { name = "Sentinel", comment = "", args = [], tags = [ ( "Sentinel", [] ) ] } ]
+                              , aliases = []
+                              , values =
+                                    [ { name = "last"
+                                      , comment = ""
+                                      , tipe = Elm.Type.Type "List.Extra.Sentinel" []
+                                      }
+                                    ]
+                              , binops = []
+                              }
+                            ]
+                        }
+
+                    onePathExperiment : Dependency
+                    onePathExperiment =
+                        { name = "folkertdev/one-true-path-experiment"
+                        , dependencies = [ "elm-community/list-extra" ]
+                        , modules = []
+                        }
+
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
+module Main exposing (main)
+
+import List.Extra
+
+main = List.Extra.last
+"""
+                in
+                getDeclTypeWithDirectAndDeps
+                    [ "elmcraft/core-extra", "folkertdev/one-true-path-experiment" ]
+                    [ coreExtra, listExtra, onePathExperiment ]
+                    modules
+                    [ "Main" ]
+                    "main"
+                    |> Result.map (always ())
+                    |> Expect.equal (Ok ())
+        , Test.test "`import Platform.Cmd as Cmd exposing (Cmd)` is implicit" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main : Cmd msg
@@ -984,38 +1098,41 @@ main = Cmd.none
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Platform.Cmd.Cmd #0")
-        , Test.test "custom operator" <| \() ->
-        let
-            pkgCustomOps =
-                { name = "author/custom-ops"
-                , dependencies = [ "elm/core" ]
-                , modules =
-                    [ { name = "CustomOps"
-                      , comment = ""
-                      , unions = []
-                      , aliases = []
-                      , values = []
-                      , binops =
-                            [ { name = "|="
+        , Test.test "custom operator" <|
+            \() ->
+                let
+                    pkgCustomOps : Dependency
+                    pkgCustomOps =
+                        { name = "author/custom-ops"
+                        , dependencies = [ "elm/core" ]
+                        , modules =
+                            [ { name = "CustomOps"
                               , comment = ""
-                              , tipe =
-                                    Elm.Type.Lambda
-                                        (Elm.Type.Type "Basics.Int" [])
-                                        (Elm.Type.Lambda
-                                            (Elm.Type.Type "Basics.Int" [])
-                                            (Elm.Type.Type "Basics.Int" [])
-                                        )
-                              , associativity = Elm.Docs.Left
-                              , precedence = 5
+                              , unions = []
+                              , aliases = []
+                              , values = []
+                              , binops =
+                                    [ { name = "|="
+                                      , comment = ""
+                                      , tipe =
+                                            Elm.Type.Lambda
+                                                (Elm.Type.Type "Basics.Int" [])
+                                                (Elm.Type.Lambda
+                                                    (Elm.Type.Type "Basics.Int" [])
+                                                    (Elm.Type.Type "Basics.Int" [])
+                                                )
+                                      , associativity = Elm.Docs.Left
+                                      , precedence = 5
+                                      }
+                                    ]
                               }
                             ]
-                      }
-                    ]
-                }
+                        }
 
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 import CustomOps exposing ((|=))
@@ -1026,11 +1143,13 @@ main = 1 |= 2
                 getDeclTypeWithDeps [ CoreFixture.core, pkgCustomOps ] modules [ "Main" ] "main"
                     |> Result.map (Ok >> is Int)
                     |> Expect.equal (Ok True)
-        , Test.test "`Basics.Bool` unifies with `True` (qualified primitive)" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "`Basics.Bool` unifies with `True` (qualified primitive)" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (x)
 
 x : Basics.Bool
@@ -1040,11 +1159,13 @@ x = True
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "x"
                     |> Result.map (Ok >> is Bool)
                     |> Expect.equal (Ok True)
-        , Test.test "`x : B.Int` (aliased import) unifies with an Int literal" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "`x : B.Int` (aliased import) unifies with an Int literal" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (x)
 
 import Basics as B
@@ -1056,11 +1177,13 @@ x = 1
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "x"
                     |> Result.map (Ok >> is Int)
                     |> Expect.equal (Ok True)
-        , Test.test "`x : Char.Char` unifies with a Char literal" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "`x : Char.Char` unifies with a Char literal" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (x)
 
 x : Char.Char
@@ -1076,11 +1199,13 @@ x = 'a'
 bindingGroupSuite : Test
 bindingGroupSuite =
     Test.describe "binding groups"
-        [ Test.test "top-level declaration order doesn't matter" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        [ Test.test "top-level declaration order doesn't matter" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main = helper 1
@@ -1101,12 +1226,14 @@ helper x = x
            main = isEven
            """
         -}
-        , Test.test "a top-level var is usable, at its own inferred type, across modules" <| \() ->
-        let
-            modules =
-                Dict.fromList
-                    [ ( [ "Other" ]
-                      , """
+        , Test.test "a top-level var is usable, at its own inferred type, across modules" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Other" ]
+                              , """
 module Other exposing (identity)
 
 identity x = x
@@ -1126,11 +1253,13 @@ main = Other.identity 1
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a project's own custom-type constructor is usable in an expression" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a project's own custom-type constructor is usable in an expression" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 type Box a = Box a
@@ -1140,11 +1269,13 @@ main = Box 1
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Main.Box number#0")
-        , Test.test "a custom operator declaration is type-checked (infix usage)" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a custom operator declaration is type-checked (infix usage)" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 myAdd a b = a
@@ -1157,11 +1288,13 @@ main = 1 + 2
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a custom operator declaration is type-checked (prefix usage)" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a custom operator declaration is type-checked (prefix usage)" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 myAdd a b = a
@@ -1174,12 +1307,14 @@ main = (+) 1 2
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a custom operator declaration aliasing an imported function is type-checked" <| \() ->
-        let
-            modules =
-                Dict.fromList
-                    [ ( [ "Other" ]
-                      , """
+        , Test.test "a custom operator declaration aliasing an imported function is type-checked" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Other" ]
+                              , """
 module Other exposing (myAdd)
 
 myAdd a b = a
@@ -1201,11 +1336,13 @@ main = 1 + 2
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a let destructuring can use a let function defined above it" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a let destructuring can use a let function defined above it" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1219,11 +1356,13 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let destructuring can use a let function defined below it" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a let destructuring can use a let function defined below it" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1237,11 +1376,13 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let function can use a name bound by a let destructuring below it" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a let function can use a name bound by a let destructuring below it" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1255,11 +1396,13 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let record destructuring can use a let function defined above it" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a let record destructuring can use a let function defined above it" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1275,11 +1418,13 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a chain of let destructurings resolves in dependency order" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a chain of let destructurings resolves in dependency order" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1294,11 +1439,13 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a case-pattern variable shadows an implicitly imported name" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a case-pattern variable shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 type Box a = Box a
@@ -1312,11 +1459,13 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let binding shadows an implicitly imported name" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a let binding shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1329,11 +1478,13 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a lambda argument shadows an implicitly imported name" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a lambda argument shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1343,11 +1494,13 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a function argument shadows an implicitly imported name" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a function argument shadows an implicitly imported name" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 useIt identity = identity
@@ -1358,11 +1511,13 @@ main = useIt 'x'
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a local binding shadowing an implicitly imported name keeps the annotated type of its declaration" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "a local binding shadowing an implicitly imported name keeps the annotated type of its declaration" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 type MyResult e a = MyOk a | MyErr e
@@ -1380,12 +1535,14 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Main.MyResult Char Int")
-        , Test.test "a qualifier shared by an alias and a real module resolves a type to whichever declares it" <| \() ->
-        let
-            modules =
-                Dict.fromList
-                    [ ( [ "Parser" ]
-                      , """
+        , Test.test "a qualifier shared by an alias and a real module resolves a type to whichever declares it" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Parser" ]
+                              , """
 module Parser exposing (Problem(..))
 
 type Problem = Oops
@@ -1416,12 +1573,14 @@ main = describe Parser.Oops
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Char")
-        , Test.test "a qualifier shared by an alias and a real module prefers the aliased module when it declares the type" <| \() ->
-        let
-            modules =
-                Dict.fromList
-                    [ ( [ "Parser" ]
-                      , """
+        , Test.test "a qualifier shared by an alias and a real module prefers the aliased module when it declares the type" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Parser" ]
+                              , """
 module Parser exposing (Problem(..))
 
 type Problem = TheWrongOne
@@ -1450,12 +1609,14 @@ main = Parser.TheRightOne
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Elm.Parser.Problem")
-        , Test.test "an aliased qualifier still resolves when no module of the alias's own name is imported" <| \() ->
-        let
-            modules =
-                Dict.fromList
-                    [ ( [ "Elm", "Parser" ]
-                      , """
+        , Test.test "an aliased qualifier still resolves when no module of the alias's own name is imported" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.fromList
+                            [ ( [ "Elm", "Parser" ]
+                              , """
 module Elm.Parser exposing (Problem(..))
 
 type Problem = Oops
@@ -1476,11 +1637,13 @@ main = Parser.Oops
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Type.normalize >> Type.toString)
                     |> Expect.equal (Ok "Elm.Parser.Problem")
-        , Test.test "an `as` destructuring binds both the alias and the inner names" <| \() ->
-        let
-            modules =
-                Dict.singleton [ "Main" ]
-                    """
+        , Test.test "an `as` destructuring binds both the alias and the inner names" <|
+            \() ->
+                let
+                    modules : Dict ModuleName String
+                    modules =
+                        Dict.singleton [ "Main" ]
+                            """
 module Main exposing (main)
 
 main =
@@ -1499,6 +1662,7 @@ main =
         ]
 
 
+mainModule : FullModuleName
 mainModule =
     FullModuleName.fromModuleName_ [ "Main" ]
 
@@ -1508,10 +1672,13 @@ var n =
     TypeVar ( Generated n, Normal )
 
 
-runUnify : Dict ( Type.PackageName, FullModuleName.FullModuleName, String ) Unify.TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+runUnify : Dict ( PackageName, FullModuleName, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
-    Unify.unifyMany { typeAliases = typeAliases, checks = True } SubstitutionMap.empty eqs
-        |> State.run (State.init Dict.empty)
+    (State.do (Unify.unifyMany { typeAliases = typeAliases, checks = True, internalChecks = False } eqs) <|
+        \() ->
+            State.getSubst
+    )
+        |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = Dict.empty })
         |> Tuple.first
 
 
@@ -1527,6 +1694,7 @@ unifyAliasSuite =
             , type_ = Tuple (TypeVar ( Named "a", Normal )) (TypeVar ( Named "a", Normal ))
             }
 
+        typeAliases : Dict ( PackageName, FullModuleName, String ) TypeAlias
         typeAliases =
             Dict.singleton ( "", mainModule, "Pair" ) pairAlias
 
@@ -1539,31 +1707,65 @@ unifyAliasSuite =
             runUnify typeAliases
     in
     Test.describe "Unify: type alias expansion"
-        [ Test.test "a Pair Float unifies with (Float, Float)" <| \() ->
-        run [ ( pairOf Float, Tuple (var 0) (var 1) ) ]
-            |> Result.map (\subst -> SubstitutionMap.substituteMonoPure subst (Tuple (var 0) (var 1)))
-            |> Expect.equal (Ok (Tuple Float Float))
-        , Test.test "two different uses of the same alias don't leak into each other" <| \() ->
-        run
-            [ ( pairOf Float, Tuple (var 0) (var 1) )
-            , ( pairOf Char, Tuple (var 2) (var 3) )
-            ]
-            |> Result.map
-                (\subst ->
-                    ( SubstitutionMap.substituteMonoPure subst (var 0)
-                    , SubstitutionMap.substituteMonoPure subst (var 2)
-                    )
-                )
-            |> Expect.equal (Ok ( Float, Char ))
-        , Test.test "a Pair Float does not unify with (Float, Char)" <| \() ->
-        run [ ( pairOf Float, Tuple Float Char ) ]
-            |> Result.map (always ())
-            |> Expect.err
+        [ Test.test "a Pair Float unifies with (Float, Float)" <|
+            \() ->
+                run [ ( pairOf Float, Tuple (var 0) (var 1) ) ]
+                    |> Result.map (\subst -> SubstitutionMap.substituteMonoPure subst (Tuple (var 0) (var 1)))
+                    |> Expect.equal (Ok (Tuple Float Float))
+        , Test.test "two different uses of the same alias don't leak into each other" <|
+            \() ->
+                run
+                    [ ( pairOf Float, Tuple (var 0) (var 1) )
+                    , ( pairOf Char, Tuple (var 2) (var 3) )
+                    ]
+                    |> Result.map
+                        (\subst ->
+                            ( SubstitutionMap.substituteMonoPure subst (var 0)
+                            , SubstitutionMap.substituteMonoPure subst (var 2)
+                            )
+                        )
+                    |> Expect.equal (Ok ( Float, Char ))
+        , Test.test "a Pair Float does not unify with (Float, Char)" <|
+            \() ->
+                run [ ( pairOf Float, Tuple Float Char ) ]
+                    |> Result.map (always ())
+                    |> Expect.err
         ]
 
 
-{-| `optimizations-plan.md` Step 1: path compression must not jump *over* a
-quantified var. `SubstitutionMap.substitute` removes the scheme's bound ids
+{-| `elm-review-unused` e2e regression: `comparable`'s check must expand
+aliases found _inside_ a structural type (here a tuple element aliased as
+`type alias ModuleName = List String`), not just at the top level -- `elm
+make` accepts `Set ( ModuleName, String )` since `List String` is comparable.
+-}
+comparableAliasedTupleRegression : Test
+comparableAliasedTupleRegression =
+    let
+        moduleNameAlias : Unify.TypeAlias
+        moduleNameAlias =
+            { args = [], type_ = List String }
+
+        typeAliases : Dict ( PackageName, FullModuleName, String ) TypeAlias
+        typeAliases =
+            Dict.singleton ( "", mainModule, "ModuleName" ) moduleNameAlias
+
+        moduleNameType : MonoType
+        moduleNameType =
+            UserDefinedType { package = "", moduleName = mainModule, name = "ModuleName", args = [] }
+
+        comparableVar : MonoType
+        comparableVar =
+            TypeVar ( Generated 0, Comparable )
+    in
+    Test.test "a tuple with an aliased (List String) element unifies with a `comparable` var" <|
+        \() ->
+            runUnify typeAliases [ ( comparableVar, Tuple moduleNameType String ) ]
+                |> Result.map (always ())
+                |> Expect.equal (Ok ())
+
+
+{-| `optimizations-plan.md` Step 1: path compression must not jump _over_ a
+quantified var. `SubstitutionMap.substituteTracked` removes the scheme's bound ids
 from the map's domain before substituting the body, precisely so a chain
 resolution stops there instead of continuing on to whatever the bound var
 would otherwise point at outside the map. This assumes a quantified var is
@@ -1573,13 +1775,13 @@ never itself in the substitution's domain (see `optimizations-plan.md` Step 1
 substitutionMapCompressionSuite : Test
 substitutionMapCompressionSuite =
     let
-        a : Type.TypeVar
+        a : TypeVar
         a =
-            ( Type.Generated 0, Type.Normal )
+            ( Generated 0, Normal )
 
-        b : Type.TypeVar
+        b : TypeVar
         b =
-            ( Type.Generated 1, Type.Normal )
+            ( Generated 1, Normal )
 
         -- a -> b -> Int, a chain that would otherwise compress straight to Int.
         subst : SubstitutionMap.SubstitutionMap
@@ -1588,13 +1790,85 @@ substitutionMapCompressionSuite =
                 [ ( a, TypeVar b ), ( b, Int ) ]
     in
     Test.describe "SubstitutionMap: path compression stops at quantified vars"
-        [ Test.test "substituting outside any scheme resolves the whole chain" <| \() ->
-        SubstitutionMap.substituteMonoPure subst (TypeVar a)
-            |> Expect.equal Int
-        , Test.test "substituting a scheme quantified over `b` stops the chain at `b`" <| \() ->
-        SubstitutionMap.substitute subst (Type.Forall [ b ] (TypeVar a))
-            |> Expect.equal (Type.Forall [ b ] (TypeVar b))
+        [ Test.test "substituting outside any scheme resolves the whole chain" <|
+            \() ->
+                SubstitutionMap.substituteMonoPure subst (TypeVar a)
+                    |> Expect.equal Int
+        , Test.test "substituting a scheme quantified over `b` stops the chain at `b`" <|
+            \() ->
+                SubstitutionMap.substituteTracked subst (Type.Forall [ b ] (TypeVar a))
+                    |> Tuple.first
+                    |> Expect.equal (Type.Forall [ b ] (TypeVar b))
         ]
+
+
+{-| Inference runs one module at a time, so every module starts its id counter
+at 0 -- but a scheme reaching it from an imported module's `Interface` carries
+bound ids from _that_ module's counter. The two id spaces overlap.
+
+So `instantiate` must replace a scheme's bound vars **once, simultaneously**.
+A chain-following substitution renames `#5 -> #0` and then follows `#0 -> #1`,
+collapsing two distinct quantified variables into one and silently misaligning
+the instantiated type.
+
+-}
+instantiateIdCollisionRegression : Test
+instantiateIdCollisionRegression =
+    Test.test "instantiate doesn't chain when a fresh id collides with another bound id" <|
+        \() ->
+            -- Counter starts at 0, so the fresh ids will be #0 and #1 -- and
+            -- #0 is itself one of the scheme's bound vars.
+            State.instantiate
+                (Type.Forall
+                    [ ( Generated 5, Normal )
+                    , ( Generated 0, Normal )
+                    ]
+                    (Tuple
+                        (TypeVar ( Generated 5, Normal ))
+                        (TypeVar ( Generated 0, Normal ))
+                    )
+                )
+                |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = Dict.empty })
+                |> Tuple.first
+                |> Expect.equal
+                    (Ok
+                        (Tuple
+                            (TypeVar ( Generated 0, Normal ))
+                            (TypeVar ( Generated 1, Normal ))
+                        )
+                    )
+
+
+{-| `composeSubstGeometryBug.md`: the old composed-immutable-maps design could
+stitch two individually-acyclic substitutions into a cycle (`a -> b` from one,
+`b -> a` from the other) that `resolveVarHelp` then walked forever.
+
+The union-find store can't: `a := b` links two roots, and solving `b := a`
+afterwards finds the same root on both sides and does nothing. Substitution
+terminates, and both vars resolve to the same representative.
+
+-}
+composeCycleRegression : Test
+composeCycleRegression =
+    let
+        a : MonoType
+        a =
+            TypeVar ( Generated 0, Normal )
+
+        b : MonoType
+        b =
+            TypeVar ( Generated 1, Normal )
+    in
+    Test.test "unifying two vars in both directions can't build a cycle that hangs substitution" <|
+        \() ->
+            runUnify Dict.empty [ ( a, b ), ( b, a ) ]
+                |> Result.map
+                    (\subst ->
+                        ( SubstitutionMap.substituteMonoPure subst a
+                        , SubstitutionMap.substituteMonoPure subst b
+                        )
+                    )
+                |> Expect.equal (Ok ( a, a ))
 
 
 importedTypeInferredProperly : Test
@@ -1618,12 +1892,14 @@ importedTypeInferredProperly =
             , binops = []
             }
 
+        core : Dependency
         core =
             { name = "elm/core"
             , dependencies = []
             , modules = [ setModule ]
             }
 
+        modules : Dict ModuleName String
         modules =
             Dict.singleton [ "Main" ] <|
                 String.ExtraExtra.multilineInput """
@@ -1636,25 +1912,27 @@ importedTypeInferredProperly =
                     Set.fromList []
                 """
     in
-    Test.test "import Set exposing (Set) then using Set, gets inferred correctly" <| \() ->
-    getDeclTypeWithDeps [ core ] modules [ "Main" ] "allowedNames"
-        |> Expect.equal
-            (Ok
-                (Forall []
-                    (UserDefinedType
-                        { package = "elm/core"
-                        , moduleName = FullModuleName.fromModuleName_ [ "Set" ]
-                        , name = "Set"
-                        , args = [ String ]
-                        }
+    Test.test "import Set exposing (Set) then using Set, gets inferred correctly" <|
+        \() ->
+            getDeclTypeWithDeps [ core ] modules [ "Main" ] "allowedNames"
+                |> Expect.equal
+                    (Ok
+                        (Forall []
+                            (UserDefinedType
+                                { package = "elm/core"
+                                , moduleName = FullModuleName.fromModuleName_ [ "Set" ]
+                                , name = "Set"
+                                , args = [ String ]
+                                }
+                            )
+                        )
                     )
-                )
-            )
 
 
 infiniteLoopRegression : Test
 infiniteLoopRegression =
     let
+        modules : Dict ModuleName String
         modules =
             Dict.singleton [ "Main" ] <|
                 String.ExtraExtra.multilineInput """
@@ -1678,15 +1956,17 @@ infiniteLoopRegression =
                     List.map updatePosition windows
                 """
     in
-    Test.test "infinite loop for extensible records - regression test" <| \() ->
-    getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "update"
-        |> Result.map (Type.normalize >> Type.toString)
-        |> Expect.equal (Ok "List Main.Window -> List Main.Window")
+    Test.test "infinite loop for extensible records - regression test" <|
+        \() ->
+            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "update"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "List Main.Window -> List Main.Window")
 
 
 aliasParamNameCollisionRegression : Test
 aliasParamNameCollisionRegression =
     let
+        modules : Dict ModuleName String
         modules =
             Dict.singleton [ "Main" ] <|
                 String.ExtraExtra.multilineInput """
@@ -1700,19 +1980,22 @@ aliasParamNameCollisionRegression =
                     f x
                 """
     in
-    Test.test "type alias whose own generic param name collides with the caller's generic name (regression test)" <| \() ->
-    getDeclType modules [ "Main" ] "apply"
-        |> Result.map (Type.normalize >> Type.toString)
-        |> Expect.equal (Ok "(Main.Wrap #0) -> #0 -> #0")
+    Test.test "type alias whose own generic param name collides with the caller's generic name (regression test)" <|
+        \() ->
+            getDeclType modules [ "Main" ] "apply"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "(Main.Wrap #0) -> #0 -> #0")
 
 
 recordConstructorFunctionRegression : Test
 recordConstructorFunctionRegression =
-    Test.test "a record type alias's own module can call it as a constructor function" <| \() ->
-    let
-        modules =
-            Dict.singleton [ "Main" ] <|
-                String.ExtraExtra.multilineInput """
+    Test.test "a record type alias's own module can call it as a constructor function" <|
+        \() ->
+            let
+                modules : Dict ModuleName String
+                modules =
+                    Dict.singleton [ "Main" ] <|
+                        String.ExtraExtra.multilineInput """
                     module Main exposing (main)
 
                     type alias Foo =
@@ -1724,28 +2007,30 @@ recordConstructorFunctionRegression =
                     main =
                         Foo 1 "x"
                     """
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map (Type.normalize >> Type.toString)
-        |> Expect.equal (Ok "{a : Int, b : String}")
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "{a : Int, b : String}")
 
 
 unionConstructorReexposeRegression : Test
 unionConstructorReexposeRegression =
-    Test.test "a union constructor re-exported via `exposing (Foo(..))` resolves unqualified in an importing module" <| \() ->
-    let
-        modules =
-            Dict.fromList
-                [ ( [ "A" ]
-                  , String.ExtraExtra.multilineInput """
+    Test.test "a union constructor re-exported via `exposing (Foo(..))` resolves unqualified in an importing module" <|
+        \() ->
+            let
+                modules : Dict ModuleName String
+                modules =
+                    Dict.fromList
+                        [ ( [ "A" ]
+                          , String.ExtraExtra.multilineInput """
                         module A exposing (Foo(..))
 
                         type Foo
                             = Foo Int
                         """
-                  )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
                         module Main exposing (main)
 
                         import A exposing (Foo(..))
@@ -1754,30 +2039,32 @@ unionConstructorReexposeRegression =
                         main =
                             Foo 1
                         """
-                  )
-                ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map (Type.normalize >> Type.toString)
-        |> Expect.equal (Ok "A.Foo")
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "A.Foo")
 
 
 recordConstructorReexposeRegression : Test
 recordConstructorReexposeRegression =
-    Test.test "a record type alias's implicit constructor re-exported via `exposing (Bar)` resolves unqualified in an importing module" <| \() ->
-    let
-        modules =
-            Dict.fromList
-                [ ( [ "A" ]
-                  , String.ExtraExtra.multilineInput """
+    Test.test "a record type alias's implicit constructor re-exported via `exposing (Bar)` resolves unqualified in an importing module" <|
+        \() ->
+            let
+                modules : Dict ModuleName String
+                modules =
+                    Dict.fromList
+                        [ ( [ "A" ]
+                          , String.ExtraExtra.multilineInput """
                         module A exposing (Bar)
 
                         type alias Bar =
                             { x : Int }
                         """
-                  )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
                         module Main exposing (main)
 
                         import A exposing (Bar)
@@ -1786,30 +2073,32 @@ recordConstructorReexposeRegression =
                         main =
                             Bar 1
                         """
-                  )
-                ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map (Type.normalize >> Type.toString)
-        |> Expect.equal (Ok "{x : Int}")
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "{x : Int}")
 
 
 unexposedUnionConstructorIsntFound : Test
 unexposedUnionConstructorIsntFound =
-    Test.test "union type exposed without `(..)` does not let an importing module use its constructor unqualified" <| \() ->
-    let
-        modules =
-            Dict.fromList
-                [ ( [ "A" ]
-                  , String.ExtraExtra.multilineInput """
+    Test.test "union type exposed without `(..)` does not let an importing module use its constructor unqualified" <|
+        \() ->
+            let
+                modules : Dict ModuleName String
+                modules =
+                    Dict.fromList
+                        [ ( [ "A" ]
+                          , String.ExtraExtra.multilineInput """
                         module A exposing (Foo)
 
                         type Foo
                             = Foo Int
                         """
-                  )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
                         module Main exposing (main)
 
                         import A exposing (Foo)
@@ -1817,48 +2106,112 @@ unexposedUnionConstructorIsntFound =
                         main =
                             Foo 1
                         """
-                  )
-                ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map (Type.normalize >> Type.toString)
-        |> Expect.equal
-            (Err
-                (CouldntInfer
-                    (VarNotFound
-                        { usedIn = FullModuleName.fromModuleName_ [ "Main" ]
-                        , varName = "Foo"
-                        }
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal
+                    (Err
+                        (CouldntInfer
+                            (VarNotFound
+                                { usedIn = FullModuleName.fromModuleName_ [ "Main" ]
+                                , varName = "Foo"
+                                }
+                            )
+                        )
                     )
-                )
-            )
+
+
+duplicateImportAliasRegression : Test
+duplicateImportAliasRegression =
+    Test.test "two different modules imported under the same alias resolve a qualified type and constructor to whichever one actually declares it (regression test)" <|
+        \() ->
+            let
+                modules : Dict ModuleName String
+                modules =
+                    Dict.fromList
+                        [ ( [ "A" ]
+                          , String.ExtraExtra.multilineInput """
+                        module A exposing (Placeholder)
+
+                        type alias Placeholder =
+                            Int
+                        """
+                          )
+                        , ( [ "B" ]
+                          , String.ExtraExtra.multilineInput """
+                        module B exposing (Bar(..), Baz)
+
+                        type alias Baz =
+                            { x : Int }
+
+                        type Bar
+                            = Only
+                        """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+                        module Main exposing (value, useBaz)
+
+                        import A as M
+                        import B as M
+
+                        useBaz : M.Baz -> Int
+                        useBaz r =
+                            r.x
+
+                        value : M.Bar
+                        value =
+                            M.Only
+                        """
+                          )
+                        ]
+            in
+            Expect.all
+                [ \() ->
+                    getDeclType modules [ "Main" ] "useBaz"
+                        |> Result.map (Type.normalize >> Type.toString)
+                        |> Expect.equal (Ok "B.Baz -> Int")
+                , \() ->
+                    getDeclType modules [ "Main" ] "value"
+                        |> Result.map (Type.normalize >> Type.toString)
+                        |> Expect.equal (Ok "B.Bar")
+                ]
+                ()
 
 
 importWithSpecificExposes : Test
 importWithSpecificExposes =
-    Test.test "a lambda parameter isn't confused with an unrelated value from a dependency imported only for its type" <| \() ->
-    let
-        decoderModule : Elm.Docs.Module
-        decoderModule =
-            { name = "Json.Decode"
-            , comment = ""
-            , unions = [ { name = "Decoder", comment = "", args = [ "a" ], tags = [] } ]
-            , aliases = []
-            , values =
-                [ { name = "value"
-                  , comment = ""
-                  , tipe = Elm.Type.Type "Json.Decode.Decoder" [ Elm.Type.Type "Basics.Int" [] ]
-                  }
-                ]
-            , binops = []
-            }
+    Test.test "a lambda parameter isn't confused with an unrelated value from a dependency imported only for its type" <|
+        \() ->
+            let
+                decoderModule : Elm.Docs.Module
+                decoderModule =
+                    { name = "Json.Decode"
+                    , comment = ""
+                    , unions = [ { name = "Decoder", comment = "", args = [ "a" ], tags = [] } ]
+                    , aliases = []
+                    , values =
+                        [ { name = "value"
+                          , comment = ""
+                          , tipe = Elm.Type.Type "Json.Decode.Decoder" [ Elm.Type.Type "Basics.Int" [] ]
+                          }
+                        ]
+                    , binops = []
+                    }
 
-        pkg =
-            { name = "elm/json", dependencies = [], modules = [ decoderModule ] }
+                pkg : Dependency
+                pkg =
+                    { name = "elm/json"
+                    , dependencies = []
+                    , modules = [ decoderModule ]
+                    }
 
-        modules =
-            Dict.singleton [ "Main" ] <|
-                String.ExtraExtra.multilineInput """
+                modules : Dict ModuleName String
+                modules =
+                    Dict.singleton [ "Main" ] <|
+                        String.ExtraExtra.multilineInput """
                     module Main exposing (attributeToString)
 
                     import Json.Decode exposing (Decoder)
@@ -1867,7 +2220,7 @@ importWithSpecificExposes =
                     attributeToString ( name, value ) =
                         value
                     """
-    in
-    getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
-        |> Result.map (Type.normalize >> Type.toString)
-        |> Expect.equal (Ok "( String, String ) -> String")
+            in
+            getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
+                |> Result.map (Type.normalize >> Type.toString)
+                |> Expect.equal (Ok "( String, String ) -> String")

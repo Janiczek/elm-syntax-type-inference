@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 
-const ELM_VERSION = "0.19.1";
+const ELM_VERSION = "0.19.2";
 const ELM_HOME = process.env.ELM_HOME || path.join(os.homedir(), ".elm");
 const PACKAGES_DIR = path.join(ELM_HOME, ELM_VERSION, "packages");
 
@@ -85,6 +85,21 @@ function packageDeps(name, version) {
   return Object.keys(readJson(path.join(PACKAGES_DIR, name, version, "elm.json")).dependencies || {});
 }
 
+function directDependencyNames(elmJson) {
+  switch (elmJson.type) {
+    case "application": {
+      const { direct } = elmJson.dependencies;
+      return Object.keys(direct);
+    }
+
+    case "package":
+      return Object.keys(elmJson.dependencies);
+
+    default:
+      throw new Error(`Unknown elm.json type: ${elmJson.type}`);
+  }
+}
+
 // Resolves elm.json dependencies to exact versions (for packages, pick latest version).
 // Loads their docs.json.
 function resolveDependencies(elmJson) {
@@ -149,7 +164,7 @@ function discoverTests(filters) {
     .sort();
 
   if (filters.length === 0) return names;
-  return names.filter((n) => filters.some((f) => n.includes(f)));
+  return names.filter((n) => filters.some((f) => n === f));
 }
 
 async function runTest(name) {
@@ -162,22 +177,27 @@ async function runTest(name) {
   const sourceFiles = findSourceFiles(projectDir, elmJson);
   ensureDependenciesCached(projectDir, sourceFiles);
 
-  const result = await runOnce({
+  const flags = {
     sources: sourceFiles.map((f) => ({
       path: path.relative(projectDir, f),
       source: fs.readFileSync(f, "utf8"),
     })),
-    dependencies: resolveDependencies(elmJson),
-  });
+    directDependencies: directDependencyNames(elmJson),
+    allDependencies: resolveDependencies(elmJson),
+  };
+
+  const start = process.hrtime.bigint();
+  const result = await runOnce(flags);
+  const elapsedSeconds = Number(process.hrtime.bigint() - start) / 1e9;
 
   const passed = result.ok === (expected.expect === "pass");
-  return { name, expected, result, passed };
+  return { name, expected, result, passed, elapsedSeconds };
 }
 
-function printReport({ name, expected, result, passed }) {
+function printReport({ name, expected, result, passed, elapsedSeconds }) {
   const actual = result.ok ? "pass" : "fail";
   const suffix = passed ? "" : `  (expected: ${expected.expect}, actual: ${actual})`;
-  console.log(` ${passed ? "✓ PASS" : "✗ FAIL"}${suffix}`);
+  console.log(` ${passed ? "✓ PASS" : "✗ FAIL"} (${elapsedSeconds.toFixed(3)}s)${suffix}`);
 
   if (!result.ok && result.error) {
     console.log(`    error: ${result.error}`);

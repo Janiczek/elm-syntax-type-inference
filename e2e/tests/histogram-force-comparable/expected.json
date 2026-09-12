@@ -1,0 +1,4 @@
+{
+  "expect": "pass",
+  "note": "Minimized from a bug originally triggered by gampleman/elm-visualization - collision of a two type aliases with a `comparable` typevar."
+}

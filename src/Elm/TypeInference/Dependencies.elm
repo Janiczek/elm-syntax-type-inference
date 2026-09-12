@@ -2,10 +2,8 @@ module Elm.TypeInference.Dependencies exposing
     ( Dependencies
     , DependencyPackage
     , Resolver
-    , fromDocsType
     , fromList
     , register
-    , resolverFor
     )
 
 {-| Dependency types from docs.json.
@@ -14,13 +12,13 @@ module Elm.TypeInference.Dependencies exposing
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (PackageName, TIState)
 import Elm.TypeInference.Type as Type exposing (MonoType(..))
+import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
-import Elm.TypeInference.VarName exposing (VarName)
-import List.ExtraExtra
 import Result.Extra
 
 
@@ -99,6 +97,7 @@ resolverFor deps selfPackage =
 splitLastDot : String -> ( String, String )
 splitLastDot qualifiedName =
     let
+        parts : List String
         parts =
             String.split "." qualifiedName
     in
@@ -117,7 +116,7 @@ fromDocsType : Resolver -> Elm.Type.Type -> Result Error MonoType
 fromDocsType resolver type_ =
     case type_ of
         Elm.Type.Var name ->
-            Ok (TypeVar (Type.parseVarName name))
+            Ok (TypeVar (TypeVar.parse name))
 
         Elm.Type.Lambda from to ->
             Result.map2 (\f t -> Function { from = f, to = t })
@@ -168,7 +167,7 @@ fromDocsType resolver type_ =
                 |> Result.map
                     (\resolvedFields ->
                         ExtensibleRecord
-                            { type_ = TypeVar (Type.parseVarName rowVar)
+                            { type_ = TypeVar (TypeVar.parse rowVar)
                             , fields = Dict.fromList resolvedFields
                             }
                     )
@@ -221,15 +220,19 @@ registerModule pkgName resolver mod =
 
         addBinding : VarName -> Elm.Type.Type -> TIState ()
         addBinding name tipe =
-            State.do (State.fromResult (fromDocsType resolver tipe)) <| \monoType ->
-            State.addGlobalBinding ( pkgName, fullModuleName, name ) (Type.closeOver monoType)
+            State.do (State.fromResult (fromDocsType resolver tipe)) <|
+                \monoType ->
+                    State.addGlobalBinding ( pkgName, fullModuleName, name ) (Type.closeOver monoType)
     in
-    State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
-    State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
-    State.do (State.traverse (registerUnion pkgName fullModuleName resolver) mod.unions) <| \_ ->
-    mod.aliases
-        |> State.traverse (registerAlias pkgName fullModuleName resolver)
-        |> State.map (List.filterMap identity >> Dict.fromList)
+    State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <|
+        \_ ->
+            State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <|
+                \_ ->
+                    State.do (State.traverse (registerUnion pkgName fullModuleName resolver) mod.unions) <|
+                        \_ ->
+                            mod.aliases
+                                |> State.traverse (registerAlias pkgName fullModuleName resolver)
+                                |> State.map (List.filterMap identity >> Dict.fromList)
 
 
 registerUnion : PackageName -> FullModuleName -> Resolver -> Elm.Docs.Union -> TIState ()
@@ -237,7 +240,7 @@ registerUnion pkgName fullModuleName resolver union =
     let
         args : List MonoType
         args =
-            union.args |> List.map (\argName -> TypeVar ( Type.Named argName, Type.Normal ))
+            union.args |> List.map (\argName -> TypeVar (TypeVar.parse argName))
 
         resultType : MonoType
         resultType =
@@ -256,14 +259,15 @@ registerUnion pkgName fullModuleName resolver union =
     union.tags
         |> State.traverse
             (\( ctorName, argTypeStrings ) ->
-                State.do (State.fromResult (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings)) <| \argTypes ->
-                let
-                    ctorType : MonoType
-                    ctorType =
-                        argTypes
-                            |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
-                in
-                State.addGlobalBinding ( pkgName, fullModuleName, ctorName ) (Type.closeOver ctorType)
+                State.do (State.fromResult (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings)) <|
+                    \argTypes ->
+                        let
+                            ctorType : MonoType
+                            ctorType =
+                                argTypes
+                                    |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
+                        in
+                        State.addGlobalBinding ( pkgName, fullModuleName, ctorName ) (Type.closeOver ctorType)
             )
         |> State.map (always ())
 
@@ -277,28 +281,31 @@ registerAlias :
     -> Elm.Docs.Alias
     -> TIState (Maybe ( ( PackageName, FullModuleName, VarName ), TypeAlias ))
 registerAlias pkgName fullModuleName resolver alias_ =
-    State.do (State.fromResult (fromDocsType resolver alias_.tipe)) <| \aliasMono ->
-    let
-        registerConstructor : TIState ()
-        registerConstructor =
-            case alias_.tipe of
-                Elm.Type.Record fields Nothing ->
-                    State.do (State.fromResult (fromDocsFields resolver fields)) <| \resolvedFields ->
-                    let
-                        ctorType : MonoType
-                        ctorType =
-                            resolvedFields
-                                |> List.map Tuple.second
-                                |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
-                    in
-                    State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (Type.closeOver ctorType)
+    State.do (State.fromResult (fromDocsType resolver alias_.tipe)) <|
+        \aliasMono ->
+            let
+                registerConstructor : TIState ()
+                registerConstructor =
+                    case alias_.tipe of
+                        Elm.Type.Record fields Nothing ->
+                            State.do (State.fromResult (fromDocsFields resolver fields)) <|
+                                \resolvedFields ->
+                                    let
+                                        ctorType : MonoType
+                                        ctorType =
+                                            resolvedFields
+                                                |> List.map Tuple.second
+                                                |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
+                                    in
+                                    State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (Type.closeOver ctorType)
 
-                _ ->
-                    State.pure ()
-    in
-    State.do registerConstructor <| \() ->
-    State.pure <|
-        Just
-            ( ( pkgName, fullModuleName, alias_.name )
-            , { args = alias_.args, type_ = aliasMono }
-            )
+                        _ ->
+                            State.pure ()
+            in
+            State.do registerConstructor <|
+                \() ->
+                    State.pure <|
+                        Just
+                            ( ( pkgName, fullModuleName, alias_.name )
+                            , { args = alias_.args, type_ = aliasMono }
+                            )

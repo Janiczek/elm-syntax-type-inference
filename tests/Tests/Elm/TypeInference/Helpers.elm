@@ -2,11 +2,10 @@ module Tests.Elm.TypeInference.Helpers exposing
     ( TestError(..)
     , getDeclType
     , getDeclTypeWithDeps
+    , getDeclTypeWithDirectAndDeps
     , getExprType
     , getExprTypeWithDeps
     , inferMainModule
-    , inferModules
-    , inferModulesWithDeps
     )
 
 import Dict exposing (Dict)
@@ -26,7 +25,7 @@ import TypeLookupTable exposing (TypeLookupTable)
 
 
 type TestError
-    = CouldntParse (List String)
+    = CouldntParse
     | CouldntInfer Error
     | CouldntFindMainModule
     | CouldntFindMainDeclaration
@@ -44,10 +43,14 @@ inferMainModule moduleCode =
     moduleCode
         |> Elm.Parser.parse
         |> Result.map (Elm.Processing.process Elm.Processing.init)
-        |> Result.mapError (List.map Debug.toString >> CouldntParse)
+        |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                Elm.TypeInference.inferAndCheck { dependencies = [], files = Dict.singleton mainModule file }
+                Elm.TypeInference.inferAndCheck
+                    { directDependencies = []
+                    , allDependencies = []
+                    , files = Dict.singleton mainModule file
+                    }
                     |> Result.mapError CouldntInfer
                     |> Result.andThen
                         (\lookupTables ->
@@ -64,7 +67,7 @@ getExprType exprCode =
 
 
 getExprTypeWithDeps : List DependencyPackage -> String -> Result TestError Type
-getExprTypeWithDeps dependencies exprCode =
+getExprTypeWithDeps allDependencies exprCode =
     """
 module Main exposing (main)
 
@@ -74,10 +77,14 @@ main =
         |> String.replace "{EXPR}" (String.ExtraExtra.indent 4 exprCode)
         |> Elm.Parser.parse
         |> Result.map (Elm.Processing.process Elm.Processing.init)
-        |> Result.mapError (List.map Debug.toString >> CouldntParse)
+        |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                Elm.TypeInference.inferAndCheck { dependencies = dependencies, files = Dict.singleton mainModule file }
+                Elm.TypeInference.inferAndCheck
+                    { directDependencies = List.map .name allDependencies
+                    , allDependencies = allDependencies
+                    , files = Dict.singleton mainModule file
+                    }
                     |> Result.mapError CouldntInfer
                     |> Result.andThen
                         (\lookupTables ->
@@ -94,16 +101,17 @@ main =
             )
 
 
-inferModules : Dict ModuleName String -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
-inferModules modules =
-    inferModulesWithDeps [] modules
-
-
-inferModulesWithDeps :
-    List DependencyPackage
+{-| Lets a test say which of `dependencies`
+are actually direct (root) dependencies of the project being analyzed, vs.
+only transitively required (a dependency of a dependency) -- the latter
+can't be `import`ed by our own source, same as with real `elm make`.
+-}
+inferModules :
+    List String
+    -> List DependencyPackage
     -> Dict ModuleName String
     -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
-inferModulesWithDeps dependencies modules =
+inferModules directDependencies allDependencies modules =
     modules
         |> Dict.foldl
             (\moduleName code acc ->
@@ -113,14 +121,18 @@ inferModulesWithDeps dependencies modules =
                             code
                                 |> Elm.Parser.parse
                                 |> Result.map (Elm.Processing.process Elm.Processing.init)
-                                |> Result.mapError (List.map Debug.toString >> CouldntParse)
+                                |> Result.mapError (always CouldntParse)
                                 |> Result.map (\file -> Dict.insert moduleName file filesAcc)
                         )
             )
             (Ok Dict.empty)
         |> Result.andThen
             (\files ->
-                Elm.TypeInference.inferAndCheck { dependencies = dependencies, files = files }
+                Elm.TypeInference.inferAndCheck
+                    { directDependencies = directDependencies
+                    , allDependencies = allDependencies
+                    , files = files
+                    }
                     |> Result.mapError CouldntInfer
                     |> Result.map
                         (\lookupTables ->
@@ -129,7 +141,7 @@ inferModulesWithDeps dependencies modules =
                                     (\moduleName file ->
                                         ( file
                                         , Dict.get moduleName lookupTables
-                                            |> Maybe.withDefault (TypeLookupTable.fromDict moduleName Dict.empty)
+                                            |> Maybe.withDefault (TypeLookupTable.fromDict Dict.empty)
                                         )
                                     )
                         )
@@ -148,7 +160,18 @@ getDeclTypeWithDeps :
     -> String
     -> Result TestError Type
 getDeclTypeWithDeps dependencies modules moduleName declName =
-    inferModulesWithDeps dependencies modules
+    getDeclTypeWithDirectAndDeps (List.map .name dependencies) dependencies modules moduleName declName
+
+
+getDeclTypeWithDirectAndDeps :
+    List String
+    -> List DependencyPackage
+    -> Dict ModuleName String
+    -> ModuleName
+    -> String
+    -> Result TestError Type
+getDeclTypeWithDirectAndDeps directDependencies dependencies modules moduleName declName =
+    inferModules directDependencies dependencies modules
         |> Result.andThen
             (\inferred ->
                 Dict.get moduleName inferred

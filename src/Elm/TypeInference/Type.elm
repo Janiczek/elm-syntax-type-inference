@@ -1,57 +1,48 @@
 module Elm.TypeInference.Type exposing
-    ( FromTypeAnnotationError(..)
-    , Id
-    , MonoType(..)
+    ( Type(..), MonoType(..)
     , PackageName
-    , ResolverAmbiguity
-    , SuperType(..)
-    , Type(..)
-    , TypeResolver
-    , TypeVar
-    , TypeVarStyle(..)
-    , closeOver
-    , collapseExtensible
-    , collapsePrimitive
-    , external
-    , freeVars
-    , freeVarsMono
-    , freeVarsTypeEnv
-    , freshVar
-    , fromTypeAnnotation
-    , generalize
-    , getDebugId
-    , id
-    , id_
-    , isParametric
-    , mono
-    , monoTypeToString
-    , normalize
-    , number
-    , number_
-    , parseVarName
-    , recurse
-    , superTypeToString
-    , toString
-    , varToString
+    , FromTypeAnnotationError(..), Id, ResolverAmbiguity, TypeResolver, closeOver, collapseExtensible, collapsePrimitive, external, freeVarsMono, fromTypeAnnotation, id_, mapVarsMono, mono, monoTypeToString, normalize, number_, toString, toTypeAnnotation
     )
 
 {-| A data structure representing the Elm types.
 
-Module is not `Elm.Type` because that already exists in elm/project-metadata-utils.
+This module is not named `Elm.Type` because that already exists in elm/project-metadata-utils.
+
+TODO put most of these into Internal, and keep this only the outwards-facing API
+
+@docs Type, MonoType
+@docs PackageName
+
+
+# TODO move to Internal
+
+@docs FromTypeAnnotationError, Id, ResolverAmbiguity, TypeResolver, closeOver, collapseExtensible, collapsePrimitive, external, freeVarsMono, fromTypeAnnotation, id_, mapVarsMono, mono, monoTypeToString, normalize, number_, toString, toTypeAnnotation
 
 -}
 
-import AssocList
-import AssocSet as Set exposing (Set)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
+import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
-import Elm.TypeInference.VarName exposing (VarName)
+import Elm.TypeInference.TypeVar as TypeVar
+    exposing
+        ( SuperType(..)
+        , TypeVar
+        , TypeVarStyle(..)
+        )
+import Elm.TypeInference.VarSet as VarSet
+    exposing
+        ( VarKey
+        , VarSet
+        , varKey
+        )
 import Result.Extra
 
 
+{-| TODO docs
+-}
 type alias Id =
     Int
 
@@ -71,79 +62,41 @@ type alias ResolverAmbiguity =
     }
 
 
+{-| TODO docs
+-}
 type alias TypeResolver =
     List String -> String -> Result ResolverAmbiguity ( PackageName, FullModuleName )
 
 
+{-| TODO docs
+-}
 type FromTypeAnnotationError
     = ImpossibleAnnotation TypeAnnotation
     | AmbiguousModuleName ResolverAmbiguity
 
 
-id : Id -> Type
-id theId =
-    mono (id_ theId)
-
-
+{-| TODO docs
+-}
 id_ : Id -> MonoType
 id_ theId =
     TypeVar ( Generated theId, Normal )
 
 
-number : Id -> Type
-number theId =
-    mono (number_ theId)
-
-
+{-| TODO docs
+-}
 number_ : Id -> MonoType
 number_ theId =
     TypeVar ( Generated theId, Number )
 
 
-{-| When instantiating, we want to keep the supertype (eg. `number`) when making
-the fresh variable.
--}
-freshVar : SuperType -> Id -> MonoType
-freshVar super theId =
-    TypeVar ( Generated theId, super )
-
-
-{-| `Int`, `Float`, `Char`, `String`, `Bool` and `List` are deliberately kept as
-`MonoType` primitives instead of `UserDefinedType`, since that would make `elm/core`
-`docs.json` a hard prerequisite for all inference and turn `Unify`'s primitive arms
-into string comparisons. We actually do the inverse - turn qualified `Basics.Int`
-into the primitive in `collapsePrimitive`.
+{-| TODO docs
 -}
 type Type
     = Forall (List TypeVar) MonoType
 
 
-{-|
-
-    x : a (in source code) == NormalVar "a"
-    x : a (given by compiler) == NormalId 1
-    x : number (in source code) == SuperVar Number ""
-    x : number1 (in source code) == SuperVar Number "1"
-    x : number (given by compiler) == SuperId Number 1
-
+{-| TODO docs
 -}
-type alias TypeVar =
-    ( TypeVarStyle, SuperType )
-
-
-type TypeVarStyle
-    = Generated Id
-    | Named String
-
-
-type SuperType
-    = Normal
-    | {- Int | Float -} Number
-    | {- Int | Float | Char | String | List comparable | tuples of comparables -} Comparable
-    | {- String | List a -} Appendable
-    | {- String | List comparable -} CompAppend
-
-
 type MonoType
     = TypeVar TypeVar
     | Function
@@ -171,75 +124,16 @@ type MonoType
         , args : List MonoType
         }
     | WebGLShader
+        -- TODO do we need to also be able to support ExtensibleRecord here?
+        -- See eg. https://github.com/elm-explorations/webgl/blob/main/README.md#writing-shaders
         { attributes : Dict VarName MonoType
         , uniforms : Dict VarName MonoType
         , varyings : Dict VarName MonoType
         }
 
 
-isParametric : Type -> Bool
-isParametric (Forall _ monoType) =
-    isParametricMono monoType
-
-
-isParametricMono : MonoType -> Bool
-isParametricMono type_ =
-    let
-        inFields : Dict VarName MonoType -> Bool
-        inFields fields =
-            List.any isParametricMono (Dict.values fields)
-    in
-    case type_ of
-        TypeVar _ ->
-            True
-
-        Function { from, to } ->
-            isParametricMono from || isParametricMono to
-
-        Int ->
-            False
-
-        Float ->
-            False
-
-        Char ->
-            False
-
-        String ->
-            False
-
-        Bool ->
-            False
-
-        List listItemType ->
-            isParametricMono listItemType
-
-        Unit ->
-            False
-
-        Tuple t1 t2 ->
-            isParametricMono t1 || isParametricMono t2
-
-        Tuple3 t1 t2 t3 ->
-            isParametricMono t1
-                || isParametricMono t2
-                || isParametricMono t3
-
-        Record fields ->
-            inFields fields
-
-        ExtensibleRecord r ->
-            isParametricMono r.type_ || inFields r.fields
-
-        UserDefinedType r ->
-            List.any isParametricMono r.args
-
-        WebGLShader r ->
-            inFields r.attributes
-                || inFields r.uniforms
-                || inFields r.varyings
-
-
+{-| TODO docs
+-}
 external : PackageName -> FullModuleName -> VarName -> MonoType
 external package moduleName typeName =
     UserDefinedType
@@ -250,6 +144,8 @@ external package moduleName typeName =
         }
 
 
+{-| TODO docs
+-}
 mono : MonoType -> Type
 mono =
     Forall []
@@ -452,32 +348,27 @@ recurse f type_ =
                 }
 
 
-freeVars : Type -> Set TypeVar
-freeVars (Forall boundIds monoType) =
-    Set.diff
-        (freeVarsMono monoType)
-        (Set.fromList boundIds)
-
-
-freeVarsMono : MonoType -> Set TypeVar
-freeVarsMono type_ =
-    freeVarsMonoHelp type_ Set.empty
-
-
-{-| Note: this walks the type backwards to insert into Set in a specific order
-(the order of first appearance, to play nice with `normalize` - #0, #1, a, b,
-...)
+{-| TODO docs
 -}
-freeVarsMonoHelp : MonoType -> Set TypeVar -> Set TypeVar
+freeVarsMono : MonoType -> VarSet
+freeVarsMono type_ =
+    freeVarsMonoHelp type_ VarSet.empty
+
+
+{-| Note: this walks the type backwards to insert into VarSet in a specific
+order (the order of first appearance, to play nice with `normalize` - #0, #1,
+a, b, ...)
+-}
+freeVarsMonoHelp : MonoType -> VarSet -> VarSet
 freeVarsMonoHelp type_ acc =
     let
-        inFields : Dict VarName MonoType -> Set TypeVar -> Set TypeVar
+        inFields : Dict VarName MonoType -> VarSet -> VarSet
         inFields fields acc_ =
             Dict.foldr (\_ fieldType -> freeVarsMonoHelp fieldType) acc_ fields
     in
     case type_ of
         TypeVar typeVar ->
-            Set.insert typeVar acc
+            VarSet.insert typeVar acc
 
         Function { from, to } ->
             acc
@@ -534,38 +425,38 @@ freeVarsMonoHelp type_ acc =
                 |> inFields r.attributes
 
 
-freeVarsTypeEnv : Dict VarName Type -> Set TypeVar
-freeVarsTypeEnv env =
-    env
-        |> Dict.values
-        |> List.foldl (\type_ acc -> Set.union (freeVars type_) acc) Set.empty
-
-
+{-| TODO docs
+-}
 closeOver : MonoType -> Type
 closeOver monoType =
     monoType
-        |> generalize Set.empty
+        |> generalize VarSet.empty
 
 
-generalize : Set TypeVar -> MonoType -> Type
+{-| TODO docs
+-}
+generalize : VarSet -> MonoType -> Type
 generalize envFreeVars monoType =
     let
         boundIds : List TypeVar
         boundIds =
-            Set.diff
+            VarSet.diff
                 (freeVarsMono monoType)
                 envFreeVars
-                |> Set.toList
+                |> VarSet.toList
     in
     Forall boundIds monoType
 
 
+{-| TODO docs
+-}
 toString : Type -> String
 toString (Forall boundVars monoType) =
     let
+        preamble : String
         preamble =
             boundVars
-                |> List.map (\var -> "∀" ++ varToString var)
+                |> List.map (\var -> "∀" ++ TypeVar.toString var)
                 |> String.join " "
                 |> (\str ->
                         if String.isEmpty str then
@@ -578,12 +469,16 @@ toString (Forall boundVars monoType) =
     preamble ++ monoTypeToString monoType
 
 
+{-| TODO docs
+-}
 monoTypeToString : MonoType -> String
 monoTypeToString type_ =
     let
+        f : MonoType -> String
         f =
             monoTypeToString
 
+        recordBindings : Dict VarName MonoType -> String
         recordBindings bindings =
             bindings
                 |> Dict.toList
@@ -593,6 +488,7 @@ monoTypeToString type_ =
         {- Wraps a type in parentheses when it wouldn't parse back unambiguously
            in argument position (of `->` or of a type constructor application).
         -}
+        wrapped : MonoType -> String
         wrapped t =
             case t of
                 Function _ ->
@@ -610,7 +506,7 @@ monoTypeToString type_ =
     in
     case type_ of
         TypeVar var ->
-            varToString var
+            TypeVar.toString var
 
         Function { from, to } ->
             -- `->` is right-associative, so only the left side is ambiguous
@@ -645,6 +541,7 @@ monoTypeToString type_ =
 
         Record bindings ->
             let
+                bindingsStr : String
                 bindingsStr =
                     (" " ++ recordBindings bindings ++ " ")
                         |> String.trim
@@ -669,101 +566,17 @@ monoTypeToString type_ =
                     ]
 
 
-{-| The name of the Elm typeclass a type variable is constrained by.
-
-`Normal` (an unconstrained variable) has no such name; we say "any type" since
-that's what it accepts.
-
+{-| TODO docs
 -}
-superTypeToString : SuperType -> String
-superTypeToString super =
-    case super of
-        Normal ->
-            "any type"
-
-        Number ->
-            "number"
-
-        Comparable ->
-            "comparable"
-
-        Appendable ->
-            "appendable"
-
-        CompAppend ->
-            "compappend"
-
-
-varToString : TypeVar -> String
-varToString ( style, super ) =
-    let
-        prefix =
-            if super == Normal then
-                ""
-
-            else
-                superTypeToString super
-    in
-    case ( super, style ) of
-        ( Normal, Generated theId ) ->
-            "#" ++ String.fromInt theId
-
-        ( Normal, Named name ) ->
-            name
-
-        ( _, Generated theId ) ->
-            prefix ++ "#" ++ String.fromInt theId
-
-        ( _, Named name ) ->
-            prefix ++ name
-
-
-{-| Parse typevar; honor Elm's typeclasses (`number`, `comparable`, `appendable`, `compappend`).
-Possibly followed by a disambiguating suffix (`number1`).
--}
-parseVarName : String -> TypeVar
-parseVarName name =
-    let
-        prefixes : List ( String, SuperType )
-        prefixes =
-            [ ( "compappend", CompAppend )
-            , ( "comparable", Comparable )
-            , ( "appendable", Appendable )
-            , ( "number", Number )
-            ]
-    in
-    prefixes
-        |> List.filterMap
-            (\( prefix, super ) ->
-                if String.startsWith prefix name then
-                    Just ( Named (String.dropLeft (String.length prefix) name), super )
-
-                else
-                    Nothing
-            )
-        |> List.head
-        |> Maybe.withDefault ( Named name, Normal )
-
-
-getDebugId : Type -> Int
-getDebugId (Forall _ monoType) =
-    case monoType of
-        TypeVar ( Generated theId, _ ) ->
-            theId
-
-        _ ->
-            -1
-
-
 normalize : Type -> Type
 normalize ((Forall boundVars monoType) as type_) =
     let
         allVars : List TypeVar
         allVars =
-            Set.union
+            VarSet.union
                 (freeVarsMono monoType)
-                (Set.fromList boundVars)
-                |> Set.toList
+                (VarSet.fromList boundVars)
+                |> VarSet.toList
 
         newVars : List TypeVar
         newVars =
@@ -780,17 +593,17 @@ normalize ((Forall boundVars monoType) as type_) =
                     ( 0, 0, [] )
                 |> (\( _, _, vars ) -> List.reverse vars)
 
-        -- We can't use SubstitutionMap.substitute because it works recursively
+        -- We can't use SubstitutionMap.substituteMono because it works recursively
         -- We need to replace the vars just once and not follow the links.
-        subst : AssocList.Dict TypeVar TypeVar
+        subst : Dict VarKey TypeVar
         subst =
-            List.map2 Tuple.pair allVars newVars
-                |> AssocList.fromList
+            List.map2 (\var newVar -> ( varKey var, newVar )) allVars newVars
+                |> Dict.fromList
     in
     type_
         |> mapVars
             (\var ->
-                case AssocList.get var subst of
+                case Dict.get (varKey var) subst of
                     Nothing ->
                         var
 
@@ -804,6 +617,16 @@ mapVars fn (Forall boundVars monoType) =
     Forall (List.map fn boundVars) (mapVarsMono fn monoType)
 
 
+{-| Replace every var **once**, simultaneously -- no chain following.
+
+That matters for `State.instantiate`: the fresh vars it maps a scheme's bound
+vars to are drawn from the id counter of the module being inferred, while the
+scheme's own bound ids come from whichever module defined it. The two id spaces
+overlap, so a fresh id can collide with another bound id of the same scheme. A
+chain-following substitution would then rename twice and collapse two distinct
+quantified variables into one.
+
+-}
 mapVarsMono : (TypeVar -> TypeVar) -> MonoType -> MonoType
 mapVarsMono fn type_ =
     case type_ of
@@ -817,6 +640,7 @@ mapVarsMono fn type_ =
 ordToName : Int -> String
 ordToName n =
     let
+        radix : Int
         radix =
             26
 
@@ -840,6 +664,123 @@ ordToName n =
     go n
 
 
+{-| TODO docs
+-}
+toTypeAnnotation : Type -> TypeAnnotation
+toTypeAnnotation (Forall _ mono_) =
+    toTypeAnnotationMono mono_
+
+
+toTypeAnnotationMono : MonoType -> TypeAnnotation
+toTypeAnnotationMono mono_ =
+    -- TODO non-dummy ranges
+    case mono_ of
+        TypeVar var ->
+            TypeAnnotation.GenericType (TypeVar.toString var)
+
+        Function { from, to } ->
+            TypeAnnotation.FunctionTypeAnnotation
+                (Node.empty (toTypeAnnotationMono from))
+                (Node.empty (toTypeAnnotationMono to))
+
+        Int ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Int" )) []
+
+        Float ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Float" )) []
+
+        Char ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Char" )) []
+
+        String ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "String" )) []
+
+        Bool ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Bool" )) []
+
+        List ts ->
+            TypeAnnotation.Typed
+                (Node.empty ( [ "List" ], "List" ))
+                [ Node.empty (toTypeAnnotationMono ts) ]
+
+        Unit ->
+            TypeAnnotation.Unit
+
+        Tuple t1 t2 ->
+            TypeAnnotation.Tupled
+                [ Node.empty (toTypeAnnotationMono t1)
+                , Node.empty (toTypeAnnotationMono t2)
+                ]
+
+        Tuple3 t1 t2 t3 ->
+            TypeAnnotation.Tupled
+                [ Node.empty (toTypeAnnotationMono t1)
+                , Node.empty (toTypeAnnotationMono t2)
+                , Node.empty (toTypeAnnotationMono t3)
+                ]
+
+        Record fields ->
+            TypeAnnotation.Record
+                (recordFieldsToRecordDefinition fields)
+
+        ExtensibleRecord r ->
+            TypeAnnotation.GenericRecord
+                -- the var needs to be stringified
+                (Node.empty
+                    (case
+                        r.type_
+                     of
+                        TypeVar var ->
+                            TypeVar.toString var
+
+                        _ ->
+                            -- Should be impossible for compiling code;
+                            -- could happen for manually created MonoType values
+                            -- TODO should we be more explicit in the type definition? ie. TypeVar instead of MonoType in the extensible record thingy
+                            "<elm-syntax-type-inference bug: non-var as extensible record base>"
+                    )
+                )
+                (Node.empty (recordFieldsToRecordDefinition r.fields))
+
+        UserDefinedType r ->
+            TypeAnnotation.Typed
+                (Node.empty
+                    ( FullModuleName.toModuleName r.moduleName
+                    , r.name
+                    )
+                )
+                (List.map (toTypeAnnotationMono >> Node.empty) r.args)
+
+        WebGLShader r ->
+            TypeAnnotation.Typed
+                (Node.empty ( [ "WebGL" ], "Shader" ))
+                ([ r.attributes
+                 , r.uniforms
+                 , r.varyings
+                 ]
+                    |> List.map
+                        (recordFieldsToRecordDefinition
+                            >> TypeAnnotation.Record
+                            >> Node.empty
+                        )
+                )
+
+
+recordFieldsToRecordDefinition : Dict VarName MonoType -> TypeAnnotation.RecordDefinition
+recordFieldsToRecordDefinition fields =
+    fields
+        |> Dict.toList
+        |> List.map
+            (\( fieldName, fieldType ) ->
+                Node.empty
+                    ( Node.empty fieldName
+                    , Node.empty (toTypeAnnotationMono fieldType)
+                    )
+            )
+
+
+{-| TODO docs
+-}
 fromTypeAnnotation : TypeResolver -> TypeAnnotation -> Result FromTypeAnnotationError MonoType
 fromTypeAnnotation resolver typeAnnotation =
     let
@@ -870,18 +811,12 @@ fromTypeAnnotation resolver typeAnnotation =
     in
     case typeAnnotation of
         TypeAnnotation.GenericType name ->
-            Ok <| TypeVar (parseVarName name)
+            Ok <| TypeVar (TypeVar.parse name)
 
         TypeAnnotation.Typed name annotations ->
             let
                 ( moduleName, typeName ) =
                     Node.value name
-
-                args : Result FromTypeAnnotationError (List MonoType)
-                args =
-                    annotations
-                        |> List.map (Node.value >> f)
-                        |> Result.Extra.combine
             in
             case ( moduleName, typeName ) of
                 ( [], "Int" ) ->
@@ -908,6 +843,13 @@ fromTypeAnnotation resolver typeAnnotation =
                             Err (ImpossibleAnnotation typeAnnotation)
 
                 _ ->
+                    let
+                        args : Result FromTypeAnnotationError (List MonoType)
+                        args =
+                            annotations
+                                |> List.map (Node.value >> f)
+                                |> Result.Extra.combine
+                    in
                     Result.andThen
                         (\args_ ->
                             resolver moduleName typeName

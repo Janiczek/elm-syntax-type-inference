@@ -3,14 +3,10 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 {-| Solve a binding group (SCC of mutually-referencing bindings).
 -}
 
-import Dict exposing (Dict)
-import Elm.Syntax.FullModuleName exposing (FullModuleName)
-import Elm.TypeInference.State as State exposing (PackageName, TIState)
-import Elm.TypeInference.SubstitutionMap as SubstitutionMap
+import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type as Type exposing (Id, MonoType, Type)
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
-import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
-import Elm.TypeInference.VarName exposing (VarName)
+import Elm.TypeInference.Unify as Unify exposing (UnifyCfg)
 
 
 {-| One binding in the binding group.
@@ -29,54 +25,53 @@ type alias Member =
     }
 
 
-solveGroup : Dict ( PackageName, FullModuleName, VarName ) TypeAlias -> List Member -> TIState ()
-solveGroup typeAliases members =
-    State.do State.getLexicalEnv <| \outerEnv ->
-    State.do
-        (State.traverse
-            (\member ->
-                case member.maybeAnnotation of
-                    Just scheme ->
-                        member.install scheme
+solveGroup : UnifyCfg -> List Member -> TIState ()
+solveGroup cfg members =
+    State.do State.enterLevel <|
+        \() ->
+            State.do
+                (State.traverse
+                    (\member ->
+                        State.do (State.setIdLevel member.id) <|
+                            \() ->
+                                case member.maybeAnnotation of
+                                    Just scheme ->
+                                        member.install scheme
 
-                    Nothing ->
-                        member.install (Type.mono (Type.id_ member.id))
-            )
-            members
-        )
-    <| \_ ->
-    State.do (State.traverse .equations members) <| \eqLists ->
-    let
-        eqs : List TypeEquation
-        eqs =
-            List.concat eqLists
-    in
-    State.do State.getSubst <| \accumulatedSubst ->
-    let
-        preSubstitutedEqs : List ( MonoType, MonoType )
-        preSubstitutedEqs =
-            eqs
-                |> List.map TypeEquation.dropLabel
-                |> List.map
-                    (Tuple.mapBoth
-                        (SubstitutionMap.substituteMono accumulatedSubst)
-                        (SubstitutionMap.substituteMono accumulatedSubst)
+                                    Nothing ->
+                                        member.install (Type.mono (Type.id_ member.id))
                     )
-    in
-    State.do (Unify.unifyMany typeAliases preSubstitutedEqs) <| \groupSubst ->
-    State.do (State.composeSubst groupSubst) <| \() ->
-    State.do
-        (State.traverse
-            (\member ->
-                case member.maybeAnnotation of
-                    Just _ ->
-                        State.pure ()
+                    members
+                )
+            <|
+                \_ ->
+                    State.do (State.traverse .equations members) <|
+                        \eqLists ->
+                            let
+                                droppedEqs : List ( MonoType, MonoType )
+                                droppedEqs =
+                                    eqLists
+                                        |> List.concat
+                                        |> List.map TypeEquation.dropLabel
+                            in
+                            State.do (Unify.unifyMany cfg droppedEqs) <|
+                                \() ->
+                                    State.do State.leaveLevel <|
+                                        \() ->
+                                            State.do
+                                                (State.traverse
+                                                    (\member ->
+                                                        case member.maybeAnnotation of
+                                                            Just _ ->
+                                                                State.pure ()
 
-                    Nothing ->
-                        State.do (State.generalize outerEnv (Type.id_ member.id)) <| \scheme ->
-                        member.install scheme
-            )
-            members
-        )
-    <| \_ ->
-    State.pure ()
+                                                            Nothing ->
+                                                                State.do (State.generalizeWith (Type.id_ member.id)) <|
+                                                                    \scheme ->
+                                                                        member.install scheme
+                                                    )
+                                                    members
+                                                )
+                                            <|
+                                                \_ ->
+                                                    State.pure ()

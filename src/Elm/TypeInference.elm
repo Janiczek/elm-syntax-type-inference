@@ -1,16 +1,35 @@
-module Elm.TypeInference exposing (infer)
+module Elm.TypeInference exposing
+    ( inferAndCheck, inferCorrectCode
+    , DependencyEnv, dependencyEnv, PackageName, Dependency
+    , Interface, inferModule, inferProject, interfaceFromAnnotations
+    )
 
-{-| TODO write docs
+{-| Type inference for [`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
+ASTs.
 
 Note: Type annotations are trusted, not checked: this library is written with
 elm-review in mind, which runs _after_ Elm compiler has typechecked the code.
 If you would benefit from this library checking annotations, let me know!
 
-@docs infer
+
+# Whole project at once
+
+@docs inferAndCheck, inferCorrectCode
+
+
+# Dependencies
+
+@docs DependencyEnv, dependencyEnv, PackageName, Dependency
+
+
+# One module at a time
+
+@docs Interface, inferModule, inferProject, interfaceFromAnnotations
 
 -}
 
 import Dict exposing (Dict)
+import Elm.Docs
 import Elm.Syntax.Declaration as Declaration exposing (Declaration)
 import Elm.Syntax.Expression as Expression
 import Elm.Syntax.Expression.Extra
@@ -23,128 +42,583 @@ import Elm.Syntax.Type as SyntaxType
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
-import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies, DependencyPackage)
+import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error as Error exposing (Error(..))
 import Elm.TypeInference.Infer as Infer
+import Elm.TypeInference.Interface as Interface
+import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
-import Elm.TypeInference.State as State exposing (PackageName, TIState)
-import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
-import Elm.TypeInference.Type as Type exposing (Id, MonoType(..), TypeResolver)
+import Elm.TypeInference.State as State exposing (GlobalKey, TIState)
+import Elm.TypeInference.SubstitutionMap as SubstitutionMap
+import Elm.TypeInference.Type as Type exposing (MonoType(..), Type, TypeResolver)
+import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
 import List.ExtraExtra
 import Maybe.Extra
-import RangeLike exposing (RangeLike)
 import Result.Extra
 import Set exposing (Set)
 import TypeLookupTable exposing (TypeLookupTable)
 
 
 
-{- TODO Look at converting between our Type
-   and https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-TypeAnnotation
-   and https://package.elm-lang.org/packages/elm/project-metadata-utils/latest/Elm-Type
--}
+-- WHOLE-PROJECT ENTRY POINTS
 
 
-{-| TODO docs
+{-| Infers types of code already typechecked by Elm compiler.
+This invariant allows it to skip sanity checks that could never fire on already-accepted code.
 -}
-infer :
-    { dependencies : List DependencyPackage
+inferCorrectCode :
+    { directDependencies : List PackageName
+    , allDependencies : List Dependency
     , files : Dict ModuleName File
     }
     -> Result Error (Dict ModuleName TypeLookupTable)
-infer { dependencies, files } =
+inferCorrectCode =
+    infer { checks = False }
+
+
+{-| Infers types of code that might not typecheck.
+Runs all sanity checks.
+-}
+inferAndCheck :
+    { directDependencies : List PackageName
+    , allDependencies : List Dependency
+    , files : Dict ModuleName File
+    }
+    -> Result Error (Dict ModuleName TypeLookupTable)
+inferAndCheck =
+    infer { checks = True }
+
+
+infer :
+    { checks : Bool }
+    ->
+        { directDependencies : List PackageName
+        , allDependencies : List Dependency
+        , files : Dict ModuleName File
+        }
+    -> Result Error (Dict ModuleName TypeLookupTable)
+infer checks { directDependencies, allDependencies, files } =
+    dependencyEnv
+        { directDependencies = directDependencies
+        , allDependencies = allDependencies
+        }
+        |> Result.andThen
+            (\depEnv ->
+                let
+                    project : { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
+                    project =
+                        inferProject checks depEnv files
+                in
+                case Dict.values project.errors of
+                    [] ->
+                        Ok project.tables
+
+                    err :: _ ->
+                        Err err
+            )
+
+
+
+-- DEPENDENCIES
+
+
+{-| A dependency from the top-level elm.json.
+Its `modules` come from the dependency's `docs.json` file.
+Its `dependencies` come from the dependency's `elm.json` file.
+I
+-}
+type alias Dependency =
+    { name : PackageName
+    , dependencies : List PackageName
+    , modules : List Elm.Docs.Module
+    }
+
+
+{-| Sourced from `docs.json` dependencies, eg. "elm/core".
+-}
+type alias PackageName =
+    State.PackageName
+
+
+{-| The dependencies' contribution to inference, precomputed.
+
+Dependencies change far less often than source does, so this is worth building
+once and reusing across many `inferModule` / `inferProject` calls.
+
+-}
+type DependencyEnv
+    = DependencyEnv
+        { globalEnv : Dict GlobalKey Type
+        , typeAliases : Dict GlobalKey TypeAlias
+        , index : ModuleLookup.Index
+        }
+
+
+{-| `directDependencies` are the project's own direct dependencies: only those
+may own a module our source `import`s. `dependencies` is the full transitive
+closure, needed because a direct dependency's types mention them.
+-}
+dependencyEnv :
+    { directDependencies : List PackageName
+    , allDependencies : List Dependency
+    }
+    -> Result Error DependencyEnv
+dependencyEnv { directDependencies, allDependencies } =
     let
         deps : Dependencies
         deps =
-            Dependencies.fromList dependencies
+            Dependencies.fromList allDependencies
+
+        directVisibleDeps : Dependencies
+        directVisibleDeps =
+            allDependencies
+                |> List.filter (\pkg -> List.member pkg.name directDependencies)
+                |> Dependencies.fromList
     in
-    files
-        |> parseModuleNameKeys
-        |> State.fromMaybe MissingModuleName
-        |> State.andThen
-            (\files_ ->
-                State.do (Dependencies.register deps) <| \depAliases ->
-                files_
-                    |> gatherTypeAliases deps
-                    |> State.map (Dict.union depAliases)
-                    |> State.andThen (infer_ deps files_)
-            )
-        |> State.run (State.init Dict.empty)
+    (State.do (Dependencies.register deps) <|
+        \depAliases ->
+            State.do State.getGlobalEnv <|
+                \globalEnv ->
+                    State.pure <|
+                        DependencyEnv
+                            { globalEnv = globalEnv
+                            , typeAliases = depAliases
+                            , index = ModuleLookup.buildIndex directVisibleDeps
+                            }
+    )
+        |> State.run emptyState
         |> Tuple.first
 
 
-parseModuleNameKeys : Dict ModuleName a -> Maybe (Dict FullModuleName a)
-parseModuleNameKeys dict =
+emptyState : State.State
+emptyState =
+    State.init { lexicalEnv = Dict.empty, globalEnv = Dict.empty }
+
+
+
+-- PER-MODULE INFERENCE
+
+
+{-| What one module contributes to the modules importing it. Opaque.
+-}
+type alias Interface =
+    Interface.Interface
+
+
+{-| Infer a single module, given the interfaces of the modules it imports.
+
+Feed modules in topological order (or use [`inferProject`](#inferProject),
+which does that for you).
+
+-}
+inferModule :
+    { checks : Bool }
+    -> DependencyEnv
+    -> Dict ModuleName Interface
+    -> File
+    -> Result Error { table : TypeLookupTable, interface : Interface }
+inferModule checks depEnv importedInterfaces file =
+    inferModule_ checks depEnv (fullModuleNameKeys importedInterfaces) file
+
+
+{-| An interface built from explicit type annotations alone, with no inference
+at all: unannotated exposed values simply aren't in it.
+
+This is the degradation path. A module whose inference failed can still give
+its dependents _something_ instead of cascading the failure through the whole
+import graph.
+
+-}
+interfaceFromAnnotations : DependencyEnv -> Dict ModuleName Interface -> File -> Interface
+interfaceFromAnnotations depEnv importedInterfaces file =
+    interfaceFromAnnotations_ depEnv (fullModuleNameKeys importedInterfaces) file
+
+
+{-| Infer every module of a project, in dependency order.
+
+Unlike [`inferCorrectCode`](#inferCorrectCode) this reports failures **per
+module**: a type error in one module no longer kills the whole run. The failed
+module's dependents are inferred against its annotations
+(see [`interfaceFromAnnotations`](#interfaceFromAnnotations)).
+
+-}
+inferProject :
+    { checks : Bool }
+    -> DependencyEnv
+    -> Dict ModuleName File
+    -> { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
+inferProject checks depEnv files =
+    let
+        modules : List ProjectModule
+        modules =
+            files
+                |> Dict.toList
+                |> List.filterMap
+                    (\( key, file ) ->
+                        -- The caller's key is what the result is keyed by; the
+                        -- file's own `module Foo exposing (..)` line is what
+                        -- imports elsewhere refer to. They agree in practice.
+                        if FullModuleName.fromModuleName key == Nothing then
+                            Nothing
+
+                        else
+                            let
+                                index : ModuleIndex
+                                index =
+                                    ModuleIndex.fromFile file
+                            in
+                            Just { key = key, index = index, file = file }
+                    )
+
+        missingModuleName : Bool
+        missingModuleName =
+            List.length modules /= Dict.size files
+
+        byName : Dict FullModuleName ProjectModule
+        byName =
+            modules
+                |> List.map (\m -> ( m.index.moduleName, m ))
+                |> Dict.fromList
+
+        firstPartyImports : FullModuleName -> List FullModuleName
+        firstPartyImports moduleName =
+            case Dict.get moduleName byName of
+                Nothing ->
+                    []
+
+                Just m ->
+                    m.index.imports
+                        |> List.filterMap
+                            (\import_ ->
+                                if Dict.member import_.moduleName byName then
+                                    Just import_.moduleName
+
+                                else
+                                    Nothing
+                            )
+    in
+    if missingModuleName then
+        { tables = Dict.empty
+        , errors = Dict.singleton [] MissingModuleName
+        }
+
+    else
+        let
+            {- Tarjan emits a component only after everything it can reach, so this
+               is already in dependency-first order. Elm forbids import cycles, so
+               each component is a single module -- but if the caller hands us one
+               anyway we still infer every module in it, just without the benefit
+               of its cyclic partners' interfaces.
+            -}
+            order : List ProjectModule
+            order =
+                SCC.stronglyConnectedComponents (Dict.keys byName) firstPartyImports
+                    |> List.ExtraExtra.fastConcatMap (List.filterMap (\name -> Dict.get name byName))
+        in
+        order
+            |> List.foldl (inferOne checks depEnv)
+                { tables = Dict.empty
+                , errors = Dict.empty
+                , interfaces = Dict.empty
+                }
+            |> (\acc -> { tables = acc.tables, errors = acc.errors })
+
+
+type alias ProjectModule =
+    { key : ModuleName
+    , index : ModuleIndex
+    , file : File
+    }
+
+
+type alias ProjectAcc =
+    { tables : Dict ModuleName TypeLookupTable
+    , errors : Dict ModuleName Error
+    , interfaces : Dict FullModuleName Interface
+    }
+
+
+inferOne : { checks : Bool } -> DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
+inferOne checks depEnv m acc =
+    let
+        imported : Dict FullModuleName Interface
+        imported =
+            m.index.imports
+                |> List.foldl
+                    (\import_ inner ->
+                        case Dict.get import_.moduleName acc.interfaces of
+                            Just interface ->
+                                Dict.insert import_.moduleName interface inner
+
+                            Nothing ->
+                                inner
+                    )
+                    Dict.empty
+    in
+    case inferModule_ checks depEnv imported m.file of
+        Ok { table, interface } ->
+            { acc
+                | tables = Dict.insert m.key table acc.tables
+                , interfaces = Dict.insert m.index.moduleName interface acc.interfaces
+            }
+
+        Err err ->
+            { acc
+                | errors = Dict.insert m.key err acc.errors
+                , interfaces =
+                    Dict.insert m.index.moduleName
+                        (interfaceFromAnnotations_ depEnv imported m.file)
+                        acc.interfaces
+            }
+
+
+fullModuleNameKeys : Dict ModuleName a -> Dict FullModuleName a
+fullModuleNameKeys dict =
     dict
         |> Dict.toList
-        |> Maybe.Extra.combineMap
+        |> List.filterMap
             (\( moduleName, value ) ->
                 FullModuleName.fromModuleName moduleName
                     |> Maybe.map (\fullModuleName -> ( fullModuleName, value ))
             )
-        |> Maybe.map Dict.fromList
+        |> Dict.fromList
 
 
-infer_ :
-    Dependencies
-    -> Dict FullModuleName File
-    -> Dict ( PackageName, FullModuleName, VarName ) TypeAlias
-    -> TIState (Dict ModuleName TypeLookupTable)
-infer_ deps files typeAliases =
-    State.do (registerConstructorsAndPorts deps files) <| \() ->
+
+-- THE CORE
+
+
+{-| Everything a single module's inference needs, derived once from the
+`DependencyEnv` and the imported interfaces.
+-}
+type alias ModuleCtx =
+    { thisIndex : ModuleIndex
+    , thisModuleName : FullModuleName
+    , modules : Dict FullModuleName ModuleIndex
+    , resolver : TypeResolver
+    , index : ModuleLookup.Index
+    , -- what this module passes on to its own importers
+      inheritedAliases : Dict GlobalKey TypeAlias
+    , depTypeAliases : Dict GlobalKey TypeAlias
+    , globalEnv : Dict GlobalKey Type
+    }
+
+
+moduleCtx : DependencyEnv -> Dict FullModuleName Interface -> File -> ModuleCtx
+moduleCtx (DependencyEnv depEnv) importedInterfaces file =
     let
-        topLevelFunctions : List ( ( FullModuleName, VarName ), ( File, Node Declaration, Expression.Function ) )
-        topLevelFunctions =
-            files
-                |> Dict.toList
-                |> List.ExtraExtra.fastConcatMap
-                    (\( moduleName, file ) ->
-                        file.declarations
-                            |> List.filterMap
-                                (\declNode ->
-                                    case Node.value declNode of
-                                        Declaration.FunctionDeclaration fn ->
-                                            Just ( ( moduleName, Elm.Syntax.Expression.Extra.functionName fn ), ( file, declNode, fn ) )
+        thisIndex : ModuleIndex
+        thisIndex =
+            ModuleIndex.fromFile file
 
-                                        _ ->
-                                            Nothing
-                                )
+        modules : Dict FullModuleName ModuleIndex
+        modules =
+            importedInterfaces
+                |> Dict.map (\_ interface -> Interface.moduleIndex interface)
+                |> Dict.insert thisIndex.moduleName thisIndex
+    in
+    { thisIndex = thisIndex
+    , thisModuleName = thisIndex.moduleName
+    , modules = modules
+    , resolver = ModuleLookup.typeResolverFor depEnv.index modules thisIndex
+    , index = depEnv.index
+    , inheritedAliases =
+        Dict.foldl
+            (\_ interface acc -> Dict.union (Interface.typeAliases interface) acc)
+            Dict.empty
+            importedInterfaces
+    , depTypeAliases = depEnv.typeAliases
+    , globalEnv =
+        Dict.foldl
+            (\moduleName interface acc ->
+                Dict.foldl
+                    (\name scheme inner -> Dict.insert ( "", moduleName, name ) scheme inner)
+                    acc
+                    (Interface.values interface)
+            )
+            depEnv.globalEnv
+            importedInterfaces
+    }
+
+
+inferModule_ :
+    { checks : Bool }
+    -> DependencyEnv
+    -> Dict FullModuleName Interface
+    -> File
+    -> Result Error { table : TypeLookupTable, interface : Interface }
+inferModule_ { checks } depEnv importedInterfaces file =
+    let
+        ctx : ModuleCtx
+        ctx =
+            moduleCtx depEnv importedInterfaces file
+    in
+    (State.do (gatherTypeAliases ctx file) <|
+        \ownAliases ->
+            let
+                outgoingAliases : Dict GlobalKey TypeAlias
+                outgoingAliases =
+                    Dict.union ownAliases ctx.inheritedAliases
+
+                typeAliases : Dict GlobalKey TypeAlias
+                typeAliases =
+                    Dict.union outgoingAliases ctx.depTypeAliases
+            in
+            State.do (registerConstructorsAndPorts ctx file) <|
+                \() ->
+                    State.do (solveModule { checks = checks } ctx typeAliases file) <|
+                        \() ->
+                            State.do (moduleResult ctx outgoingAliases) <|
+                                \result ->
+                                    State.pure result
+    )
+        |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = ctx.globalEnv })
+        |> Tuple.first
+
+
+interfaceFromAnnotations_ : DependencyEnv -> Dict FullModuleName Interface -> File -> Interface
+interfaceFromAnnotations_ depEnv importedInterfaces file =
+    let
+        ctx : ModuleCtx
+        ctx =
+            moduleCtx depEnv importedInterfaces file
+    in
+    (State.do (gatherTypeAliases ctx file) <|
+        \ownAliases ->
+            State.do (registerConstructorsAndPorts ctx file) <|
+                \() ->
+                    State.do (registerAnnotations ctx file) <|
+                        \() ->
+                            State.do (moduleResult ctx (Dict.union ownAliases ctx.inheritedAliases)) <|
+                                \result ->
+                                    State.pure result.interface
+    )
+        |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = ctx.globalEnv })
+        |> Tuple.first
+        |> Result.withDefault
+            (Interface.create
+                { moduleIndex = ctx.thisIndex
+                , values = Dict.empty
+                , typeAliases = ctx.inheritedAliases
+                }
+            )
+
+
+moduleResult :
+    ModuleCtx
+    -> Dict GlobalKey TypeAlias
+    -> TIState { table : TypeLookupTable, interface : Interface }
+moduleResult ctx outgoingAliases =
+    State.do State.getNodeIds <|
+        \nodeIds ->
+            State.do State.getSubst <|
+                \substitutionMap ->
+                    State.do State.getGlobalEnv <|
+                        \globalEnv ->
+                            let
+                                ( typesByRange, _ ) =
+                                    nodeIds
+                                        |> Dict.foldl
+                                            (\rangeLike id ( accDict, accSubst ) ->
+                                                let
+                                                    ( monoType, accSubst1 ) =
+                                                        SubstitutionMap.substituteMono accSubst (Type.id_ id)
+                                                in
+                                                ( Dict.insert rangeLike (Type.mono monoType) accDict
+                                                , accSubst1
+                                                )
+                                            )
+                                            ( Dict.empty, substitutionMap )
+
+                                exposedValues : Dict VarName Type
+                                exposedValues =
+                                    ctx.thisIndex.exposedValues
+                                        |> Set.foldl
+                                            (\name acc ->
+                                                case Dict.get ( "", ctx.thisModuleName, name ) globalEnv of
+                                                    Just scheme ->
+                                                        Dict.insert name scheme acc
+
+                                                    Nothing ->
+                                                        acc
+                                            )
+                                            Dict.empty
+                            in
+                            State.pure
+                                { table = TypeLookupTable.fromDict typesByRange
+                                , interface =
+                                    Interface.create
+                                        { moduleIndex = ctx.thisIndex
+                                        , values = exposedValues
+                                        , typeAliases = outgoingAliases
+                                        }
+                                }
+
+
+
+-- SOLVING ONE MODULE'S TOP-LEVEL DECLARATIONS
+
+
+solveModule :
+    { checks : Bool }
+    -> ModuleCtx
+    -> Dict GlobalKey TypeAlias
+    -> File
+    -> TIState ()
+solveModule { checks } ctx typeAliases file =
+    let
+        topLevelFunctions : List ( VarName, ( Node Declaration, Expression.Function ) )
+        topLevelFunctions =
+            file.declarations
+                |> List.filterMap
+                    (\declNode ->
+                        case Node.value declNode of
+                            Declaration.FunctionDeclaration fn ->
+                                Just
+                                    ( Elm.Syntax.Expression.Extra.functionName fn
+                                    , ( declNode, fn )
+                                    )
+
+                            _ ->
+                                Nothing
                     )
 
-        nodeSet : Set ( FullModuleName, VarName )
+        nodeSet : Set VarName
         nodeSet =
             topLevelFunctions
                 |> List.map Tuple.first
                 |> Set.fromList
 
-        byKey : Dict ( FullModuleName, VarName ) ( File, Node Declaration, Expression.Function )
+        byKey : Dict VarName ( Node Declaration, Expression.Function )
         byKey =
             Dict.fromList topLevelFunctions
 
-        edges : ( FullModuleName, VarName ) -> List ( FullModuleName, VarName )
+        edges : VarName -> List VarName
         edges key =
             case Dict.get key byKey of
                 Nothing ->
                     []
 
-                Just ( file, _, fn ) ->
+                Just ( _, fn ) ->
                     Elm.Syntax.Expression.Extra.referencedNames (Node.value (Node.value fn.declaration).expression)
                         -- Resolve operator aliases to the underlying functions
                         |> List.filterMap
                             (\( maybeModuleName, varName ) ->
-                                case ModuleLookup.moduleOfVar deps files file (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
+                                case ModuleLookup.moduleOfVar ctx.index ctx.modules ctx.thisIndex (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
                                     Ok (Just ( "", fullModuleName )) ->
                                         let
-                                            resolvedKey : ( FullModuleName, VarName )
-                                            resolvedKey =
-                                                ModuleLookup.resolveOperatorFunction files fullModuleName varName
+                                            ( resolvedModule, resolvedName ) =
+                                                ModuleLookup.resolveOperatorFunction ctx.modules fullModuleName varName
                                                     |> Result.withDefault Nothing
                                                     |> Maybe.withDefault ( fullModuleName, varName )
                                         in
-                                        if Set.member resolvedKey nodeSet then
-                                            Just resolvedKey
+                                        -- Only this module's own declarations
+                                        -- are being ordered here; everything
+                                        -- else is already in `globalEnv`.
+                                        if resolvedModule == ctx.thisModuleName && Set.member resolvedName nodeSet then
+                                            Just resolvedName
 
                                         else
                                             Nothing
@@ -153,171 +627,185 @@ infer_ deps files typeAliases =
                                         Nothing
                             )
 
-        sccs : List (List ( FullModuleName, VarName ))
+        sccs : List (List VarName)
         sccs =
             SCC.stronglyConnectedComponents (Set.toList nodeSet) edges
+
+        inferCtx : Infer.Ctx
+        inferCtx =
+            { modules = ctx.modules
+            , thisModule = ctx.thisIndex
+            , thisModuleName = ctx.thisModuleName
+            , typeAliases = typeAliases
+            , index = ctx.index
+            , checks = checks
+            }
     in
-    State.do
-        (State.traverse
-            (\group ->
-                group
-                    |> List.filterMap (\key -> Dict.get key byKey |> Maybe.map (Tuple.pair key))
-                    |> State.traverse
-                        (\( ( moduleName, _ ), ( file, declNode, fn ) ) ->
-                            Infer.topLevelMember
-                                { files = files
-                                , thisFile = file
-                                , thisModuleName = moduleName
-                                , typeAliases = typeAliases
-                                , dependencies = deps
-                                }
-                                declNode
-                                fn
-                        )
-                    |> State.andThen (BindingGroup.solveGroup typeAliases)
-            )
-            sccs
-        )
-    <| \_ ->
-    State.do State.getNodeIds <| \nodeIds ->
-    State.do State.getSubst <| \substitutionMap ->
-    files
-        |> Dict.keys
-        |> List.map (toTypeLookupTable substitutionMap nodeIds)
-        |> Dict.fromList
-        |> State.pure
-
-
-toTypeLookupTable :
-    SubstitutionMap
-    -> Dict FullModuleName (Dict RangeLike Id)
-    -> FullModuleName
-    -> ( ModuleName, TypeLookupTable )
-toTypeLookupTable substitutionMap nodeIds fullModuleName =
-    let
-        moduleName : ModuleName
-        moduleName =
-            FullModuleName.toModuleName fullModuleName
-    in
-    ( moduleName
-    , nodeIds
-        |> Dict.get fullModuleName
-        |> Maybe.withDefault Dict.empty
-        |> Dict.map (\_ id -> Type.mono (SubstitutionMap.substituteMono substitutionMap (Type.id_ id)))
-        |> TypeLookupTable.fromDict moduleName
-    )
-
-
-gatherTypeAliases :
-    Dependencies
-    -> Dict FullModuleName File
-    -> TIState (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
-gatherTypeAliases deps files =
-    files
-        |> Dict.toList
-        |> List.map
-            (\( moduleName, file ) ->
-                let
-                    resolver : TypeResolver
-                    resolver =
-                        ModuleLookup.typeResolverFor deps files file
-                in
-                file.declarations
-                    |> List.map
-                        (\declarationNode ->
-                            case Node.value declarationNode of
-                                Declaration.AliasDeclaration typeAlias ->
-                                    let
-                                        type_ : TIState MonoType
-                                        type_ =
-                                            typeAlias.typeAnnotation
-                                                |> Node.value
-                                                |> Type.fromTypeAnnotation resolver
-                                                |> Result.mapError (State.error << Error.fromTypeAnnotationError)
-                                                |> Result.map State.pure
-                                                |> Result.Extra.merge
-
-                                        -- A record type alias also gets a constructor function
-                                        -- (eg. `type alias Foo = { a : Int }` lets you write `Foo 1`).
-                                        registerConstructor : MonoType -> TIState ()
-                                        registerConstructor aliasMono =
-                                            case Node.value typeAlias.typeAnnotation of
-                                                TypeAnnotation.Record fields ->
-                                                    fields
-                                                        |> State.traverse
-                                                            (\fieldNode ->
-                                                                Tuple.second (Node.value fieldNode)
-                                                                    |> Node.value
-                                                                    |> Type.fromTypeAnnotation resolver
-                                                                    |> Result.mapError (State.error << Error.fromTypeAnnotationError)
-                                                                    |> Result.map State.pure
-                                                                    |> Result.Extra.merge
-                                                            )
-                                                        |> State.map
-                                                            (\fieldTypes ->
-                                                                fieldTypes
-                                                                    |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
-                                                            )
-                                                        |> State.andThen
-                                                            (\ctorType ->
-                                                                State.addGlobalBinding
-                                                                    ( "", moduleName, Node.value typeAlias.name )
-                                                                    (Type.closeOver ctorType)
-                                                            )
-
-                                                _ ->
-                                                    State.pure ()
-                                    in
-                                    State.do type_ <| \type__ ->
-                                    State.do (registerConstructor type__) <| \() ->
-                                    State.pure <|
-                                        Just
-                                            ( ( "", moduleName, Node.value typeAlias.name )
-                                            , { args = List.map Node.value typeAlias.generics
-                                              , type_ = type__
-                                              }
-                                            )
-
-                                _ ->
-                                    State.pure Nothing
-                        )
-                    |> State.combine
-                    |> State.map Maybe.Extra.values
-            )
-        |> State.combine
-        |> State.map (List.ExtraExtra.fastConcat >> Dict.fromList)
-
-
-registerConstructorsAndPorts : Dependencies -> Dict FullModuleName File -> TIState ()
-registerConstructorsAndPorts deps files =
-    files
-        |> Dict.toList
+    sccs
         |> State.traverse
-            (\( moduleName, file ) ->
-                let
-                    resolver : TypeResolver
-                    resolver =
-                        ModuleLookup.typeResolverFor deps files file
-                in
-                file.declarations
-                    |> State.traverse
-                        (\declNode ->
-                            case Node.value declNode of
-                                Declaration.CustomTypeDeclaration customType ->
-                                    registerCustomType resolver moduleName customType
-
-                                Declaration.PortDeclaration sig ->
-                                    registerPort resolver moduleName sig
-
-                                _ ->
-                                    State.pure ()
+            (\group ->
+                (group
+                    |> List.filterMap (\key -> Dict.get key byKey)
+                    |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember inferCtx declNode fn)
+                    |> State.andThen
+                        (BindingGroup.solveGroup
+                            { typeAliases = typeAliases
+                            , checks = checks
+                            , internalChecks = not checks
+                            }
                         )
-                    |> State.map (always ())
+                )
+                    |> -- `TypeMismatchMono` and friends carry no location of
+                       -- their own, which makes a failure essentially
+                       -- undebuggable. Say at least which binding group it
+                       -- came from.
+                       State.mapError
+                        (\_ ->
+                            Error.withDeclarations
+                                { moduleName = ctx.thisModuleName
+                                , declarationNames = group
+                                }
+                        )
             )
         |> State.map (always ())
 
 
-registerCustomType : TypeResolver -> FullModuleName -> SyntaxType.Type -> TIState ()
+
+-- REGISTERING A MODULE'S DECLARATIONS
+
+
+gatherTypeAliases : ModuleCtx -> File -> TIState (Dict GlobalKey TypeAlias)
+gatherTypeAliases ctx file =
+    let
+        resolver : TypeResolver
+        resolver =
+            ctx.resolver
+
+        moduleName : FullModuleName
+        moduleName =
+            ctx.thisModuleName
+    in
+    file.declarations
+        |> State.traverse
+            (\declarationNode ->
+                case Node.value declarationNode of
+                    Declaration.AliasDeclaration typeAlias ->
+                        let
+                            type_ : TIState MonoType
+                            type_ =
+                                typeAlias.typeAnnotation
+                                    |> Node.value
+                                    |> Type.fromTypeAnnotation resolver
+                                    |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                                    |> Result.map State.pure
+                                    |> Result.Extra.merge
+
+                            -- A record type alias also gets a constructor function
+                            -- (eg. `type alias Foo = { a : Int }` lets you write `Foo 1`).
+                            registerConstructor : MonoType -> TIState ()
+                            registerConstructor aliasMono =
+                                case Node.value typeAlias.typeAnnotation of
+                                    TypeAnnotation.Record fields ->
+                                        fields
+                                            |> State.traverse
+                                                (\fieldNode ->
+                                                    Tuple.second (Node.value fieldNode)
+                                                        |> Node.value
+                                                        |> Type.fromTypeAnnotation resolver
+                                                        |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                                                        |> Result.map State.pure
+                                                        |> Result.Extra.merge
+                                                )
+                                            |> State.map
+                                                (\fieldTypes ->
+                                                    fieldTypes
+                                                        |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
+                                                )
+                                            |> State.andThen
+                                                (\ctorType ->
+                                                    State.addGlobalBinding
+                                                        ( "", moduleName, Node.value typeAlias.name )
+                                                        (Type.closeOver ctorType)
+                                                )
+
+                                    _ ->
+                                        State.pure ()
+                        in
+                        State.do type_ <|
+                            \type__ ->
+                                State.do (registerConstructor type__) <|
+                                    \() ->
+                                        State.pure <|
+                                            Just
+                                                ( ( "", moduleName, Node.value typeAlias.name )
+                                                , { args = List.map Node.value typeAlias.generics
+                                                  , type_ = type__
+                                                  }
+                                                )
+
+                    _ ->
+                        State.pure Nothing
+            )
+        |> State.map (Maybe.Extra.values >> Dict.fromList)
+
+
+registerConstructorsAndPorts : ModuleCtx -> File -> TIState ()
+registerConstructorsAndPorts ctx file =
+    file.declarations
+        |> State.traverse
+            (\declNode ->
+                case Node.value declNode of
+                    Declaration.CustomTypeDeclaration customType ->
+                        registerCustomType ctx.resolver ctx.thisModuleName customType
+
+                    Declaration.PortDeclaration sig ->
+                        registerPort ctx.resolver ctx.thisModuleName sig
+
+                    _ ->
+                        State.pure ()
+            )
+        |> State.map (always ())
+
+
+{-| The no-inference path: take the explicit annotations at face value and put
+them in `globalEnv`. Annotations that don't resolve are skipped rather than
+failing the whole module -- this is already the degradation path.
+-}
+registerAnnotations : ModuleCtx -> File -> TIState ()
+registerAnnotations ctx file =
+    file.declarations
+        |> State.traverse
+            (\declNode ->
+                case Node.value declNode of
+                    Declaration.FunctionDeclaration fn ->
+                        case fn.signature of
+                            Nothing ->
+                                State.pure ()
+
+                            Just sigNode ->
+                                case
+                                    Node.value (Node.value sigNode).typeAnnotation
+                                        |> Type.fromTypeAnnotation ctx.resolver
+                                of
+                                    Err _ ->
+                                        State.pure ()
+
+                                    Ok monoType ->
+                                        State.addGlobalBinding
+                                            ( "", ctx.thisModuleName, Elm.Syntax.Expression.Extra.functionName fn )
+                                            (Type.closeOver monoType)
+
+                    _ ->
+                        State.pure ()
+            )
+        |> State.map (always ())
+
+
+registerCustomType :
+    TypeResolver
+    -> FullModuleName
+    -> SyntaxType.Type
+    -> TIState ()
 registerCustomType resolver moduleName customType =
     let
         typeName : String
@@ -332,19 +820,22 @@ registerCustomType resolver moduleName customType =
                 , name = typeName
                 , args =
                     customType.generics
-                        |> List.map (\g -> TypeVar ( Type.Named (Node.value g), Type.Normal ))
+                        |> List.map
+                            (\g ->
+                                TypeVar
+                                    ( TypeVar.Named (Node.value g)
+                                    , TypeVar.Normal
+                                    )
+                            )
                 }
     in
     customType.constructors
         |> State.traverse
             (\ctorNode ->
                 let
+                    ctor : SyntaxType.ValueConstructor
                     ctor =
                         Node.value ctorNode
-
-                    ctorName : String
-                    ctorName =
-                        Node.value ctor.name
 
                     argTypes : Result Type.FromTypeAnnotationError (List MonoType)
                     argTypes =
@@ -357,6 +848,10 @@ registerCustomType resolver moduleName customType =
                     |> Result.map
                         (\args ->
                             let
+                                ctorName : String
+                                ctorName =
+                                    Node.value ctor.name
+
                                 ctorType : MonoType
                                 ctorType =
                                     List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args

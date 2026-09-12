@@ -7,6 +7,11 @@
     "exposed-modules": [
         "Elm.TypeInference",
         "Elm.TypeInference.Error",
+        "Elm.TypeInference.Type",
+        "Elm.TypeInference.TypeVar",
+        "Elm.Syntax.FullModuleName",
+        "Elm.TypeInference.VarSet",
+        "Elm.Syntax.VarName",
         "TypeLookupTable"
     ],
     "elm-version": "0.19.1 <= v < 0.20.0",
@@ -15,8 +20,6 @@
         "elm/project-metadata-utils": "1.0.1 <= v < 2.0.0",
         "elm/regex": "1.0.0 <= v < 2.0.0",
         "elmcraft/core-extra": "2.0.0 <= v < 3.0.0",
-        "erlandsona/assoc-set": "1.1.0 <= v < 2.0.0",
-        "pzp1997/assoc-list": "1.0.0 <= v < 2.0.0",
         "stil4m/elm-syntax": "7.3.9 <= v < 8.0.0"
     },
     "test-dependencies": {

@@ -1,4 +1,10 @@
-module Elm.TypeInference.Error exposing (Error(..), fromTypeAnnotationError, toString)
+module Elm.TypeInference.Error exposing (Error(..), fromTypeAnnotationError, toString, withDeclarations)
+
+{-| Errors reported while resolving or inferring a module.
+
+@docs Error, fromTypeAnnotationError, toString, withDeclarations
+
+-}
 
 import Elm.Syntax.Expression exposing (Expression)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
@@ -8,10 +14,13 @@ import Elm.Syntax.Range as Range exposing (Range)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
-import Elm.TypeInference.Type as Type exposing (FromTypeAnnotationError(..), MonoType, SuperType, TypeVar)
+import Elm.TypeInference.Type as Type exposing (FromTypeAnnotationError(..), MonoType)
+import Elm.TypeInference.TypeVar as TypeVar exposing (SuperType, TypeVar)
 import Elm.Writer
 
 
+{-| Failures encountered while resolving or inferring a module.
+-}
 type Error
     = -- Syntax errors
       ImpossibleExpr (Node Expression)
@@ -27,8 +36,37 @@ type Error
     | TypeMismatchMono MonoType MonoType
     | InfiniteType TypeVar MonoType
     | SuperTypeMismatch SuperType MonoType
+    | InternalInconsistency MonoType MonoType
+      {- Location for the three type errors above, which carry none of their
+         own -- without it a failure is essentially undebuggable.
+      -}
+    | InDeclarations { moduleName : FullModuleName, declarationNames : List VarName } Error
 
 
+{-| Attach the binding group an error came from -- but only to the errors that
+don't already say where they happened.
+
+TODO: put the location on the error variants themselves, remove InDeclarations
+
+-}
+withDeclarations : { moduleName : FullModuleName, declarationNames : List VarName } -> Error -> Error
+withDeclarations where_ error =
+    case error of
+        TypeMismatchMono _ _ ->
+            InDeclarations where_ error
+
+        InfiniteType _ _ ->
+            InDeclarations where_ error
+
+        SuperTypeMismatch _ _ ->
+            InDeclarations where_ error
+
+        _ ->
+            error
+
+
+{-| Convert a type-annotation conversion failure into an inference error.
+-}
 fromTypeAnnotationError : FromTypeAnnotationError -> Error
 fromTypeAnnotationError err =
     case err of
@@ -39,6 +77,8 @@ fromTypeAnnotationError err =
             AmbiguousModuleOwner ambiguity
 
 
+{-| Render an error for diagnostic output.
+-}
 toString : Error -> String
 toString error =
     case error of
@@ -101,15 +141,30 @@ toString error =
         InfiniteType typeVar type_ ->
             String.join " "
                 [ "InfiniteType"
-                , parenIfHasSpace (Type.varToString typeVar)
+                , parenIfHasSpace (TypeVar.toString typeVar)
                 , parenIfHasSpace (Type.monoTypeToString type_)
                 ]
+
+        InDeclarations r inner ->
+            toString inner
+                ++ " (in "
+                ++ FullModuleName.toString r.moduleName
+                ++ "."
+                ++ String.join "/" r.declarationNames
+                ++ ")"
 
         SuperTypeMismatch super type_ ->
             String.join " "
                 [ "SuperTypeMismatch"
-                , parenIfHasSpace (Type.superTypeToString super)
+                , parenIfHasSpace (TypeVar.superTypeToString super)
                 , parenIfHasSpace (Type.monoTypeToString type_)
+                ]
+
+        InternalInconsistency t1 t2 ->
+            String.join " "
+                [ "InternalInconsistency"
+                , parenIfHasSpace (Type.monoTypeToString t1)
+                , parenIfHasSpace (Type.monoTypeToString t2)
                 ]
 
 
@@ -191,18 +246,19 @@ docsTypeToString type_ =
 
                         Just var ->
                             var ++ " | "
-
-                fieldsStr : String
-                fieldsStr =
-                    fields
-                        |> List.map
-                            (\( fieldName, fieldType ) ->
-                                fieldName ++ " : " ++ docsTypeToString fieldType
-                            )
-                        |> String.join ", "
             in
             if String.isEmpty prefix && List.isEmpty fields then
                 "{}"
 
             else
+                let
+                    fieldsStr : String
+                    fieldsStr =
+                        fields
+                            |> List.map
+                                (\( fieldName, fieldType ) ->
+                                    fieldName ++ " : " ++ docsTypeToString fieldType
+                                )
+                            |> String.join ", "
+                in
                 "{ " ++ prefix ++ fieldsStr ++ " }"
