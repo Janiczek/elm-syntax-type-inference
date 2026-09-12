@@ -19,7 +19,9 @@ config =
     , NoUnused.Patterns.rule
     , NoUnused.Variables.rule
     , NoDebug.Log.rule
+        |> Review.Rule.ignoreErrorsForDirectories [ "tests" ]
     , NoDebug.TodoOrToString.rule
+        |> Review.Rule.ignoreErrorsForDirectories [ "tests" ]
 
     -- custom
     , NoSlowConcat.rule
