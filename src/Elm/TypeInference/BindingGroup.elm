@@ -4,7 +4,7 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 -}
 
 import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type as Type exposing (Id, MonoType, Type)
+import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, Type)
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyCfg)
 

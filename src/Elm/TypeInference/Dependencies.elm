@@ -15,8 +15,9 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
 import Elm.TypeInference.Error exposing (Error(..))
-import Elm.TypeInference.State as State exposing (PackageName, TIState)
-import Elm.TypeInference.Type as Type exposing (MonoType(..))
+import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
 import Result.Extra
@@ -127,10 +128,15 @@ fromDocsType resolver type_ =
             Ok Unit
 
         Elm.Type.Tuple [ a, b ] ->
-            Result.map2 Tuple (fromDocsType resolver a) (fromDocsType resolver b)
+            Result.map2 Tuple2
+                (fromDocsType resolver a)
+                (fromDocsType resolver b)
 
         Elm.Type.Tuple [ a, b, c ] ->
-            Result.map3 Tuple3 (fromDocsType resolver a) (fromDocsType resolver b) (fromDocsType resolver c)
+            Result.map3 Tuple3
+                (fromDocsType resolver a)
+                (fromDocsType resolver b)
+                (fromDocsType resolver c)
 
         Elm.Type.Tuple _ ->
             Err (ImpossibleDocsType type_)
@@ -145,7 +151,7 @@ fromDocsType resolver type_ =
                     Result.Extra.combineMap (fromDocsType resolver) args
                         |> Result.map
                             (\argTypes ->
-                                Type.collapsePrimitive package fullModuleName typeName argTypes
+                                TypeI.collapsePrimitive package fullModuleName typeName argTypes
                                     |> Maybe.withDefault
                                         (UserDefinedType
                                             { package = package
@@ -160,14 +166,14 @@ fromDocsType resolver type_ =
 
         Elm.Type.Record fields Nothing ->
             fromDocsFields resolver fields
-                |> Result.map (Dict.fromList >> Record)
+                |> Result.map (\fields_ -> Record { fields = Dict.fromList fields_ })
 
         Elm.Type.Record fields (Just rowVar) ->
             fromDocsFields resolver fields
                 |> Result.map
                     (\resolvedFields ->
                         ExtensibleRecord
-                            { type_ = TypeVar (TypeVar.parse rowVar)
+                            { extensionTypevar = TypeVar (TypeVar.parse rowVar)
                             , fields = Dict.fromList resolvedFields
                             }
                     )
@@ -222,7 +228,7 @@ registerModule pkgName resolver mod =
         addBinding name tipe =
             State.do (State.fromResult (fromDocsType resolver tipe)) <|
                 \monoType ->
-                    State.addGlobalBinding ( pkgName, fullModuleName, name ) (Type.closeOver monoType)
+                    State.addGlobalBinding ( pkgName, fullModuleName, name ) (TypeI.closeOver monoType)
     in
     State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <|
         \_ ->
@@ -246,7 +252,7 @@ registerUnion pkgName fullModuleName resolver union =
         resultType =
             -- We later expect eg. Bools in IfBlock conditions instead of
             -- UserDefinedType "Bool"s, so let's collapse here
-            Type.collapsePrimitive pkgName fullModuleName union.name args
+            TypeI.collapsePrimitive pkgName fullModuleName union.name args
                 |> Maybe.withDefault
                     (UserDefinedType
                         { package = pkgName
@@ -267,7 +273,7 @@ registerUnion pkgName fullModuleName resolver union =
                                 argTypes
                                     |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
                         in
-                        State.addGlobalBinding ( pkgName, fullModuleName, ctorName ) (Type.closeOver ctorType)
+                        State.addGlobalBinding ( pkgName, fullModuleName, ctorName ) (TypeI.closeOver ctorType)
             )
         |> State.map (always ())
 
@@ -297,7 +303,7 @@ registerAlias pkgName fullModuleName resolver alias_ =
                                                 |> List.map Tuple.second
                                                 |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
                                     in
-                                    State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (Type.closeOver ctorType)
+                                    State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (TypeI.closeOver ctorType)
 
                         _ ->
                             State.pure ()

@@ -25,7 +25,7 @@ import Dict exposing (Dict)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.State exposing (GlobalKey)
-import Elm.TypeInference.Type exposing (Type)
+import Elm.TypeInference.Type.Internal exposing (Type)
 import Elm.TypeInference.Unify exposing (TypeAlias)
 
 

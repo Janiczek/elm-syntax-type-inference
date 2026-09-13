@@ -30,15 +30,16 @@ import Elm.TypeInference.Error as Error exposing (Error(..))
 import Elm.TypeInference.ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
-import Elm.TypeInference.State as State exposing (PackageName, TIState)
-import Elm.TypeInference.Type as Type
+import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type.ExternalTypes as ExternalTypes
+import Elm.TypeInference.Type.Internal as TypeI
     exposing
         ( Id
         , MonoType(..)
         , Type
         , TypeResolver
         )
-import Elm.TypeInference.Type.External as ExternalType
 import Elm.TypeInference.TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import List.ExtraExtra
@@ -93,8 +94,8 @@ functionType : List Id -> Id -> MonoType
 functionType argIds resultId =
     argIds
         |> List.foldr
-            (\argId toType -> Function { from = Type.id_ argId, to = toType })
-            (Type.id_ resultId)
+            (\argId toType -> Function { from = TypeI.id_ argId, to = toType })
+            (TypeI.id_ resultId)
 
 
 {-| Resolves a value or operator symbol to its type.
@@ -151,7 +152,7 @@ inferFnImplementation ctx declId impl =
                 State.do (inferExpr ctx impl.expression) <|
                     \( bodyId, bodyEqs ) ->
                         State.pure <|
-                            ( Type.id_ declId
+                            ( TypeI.id_ declId
                             , functionType argIds bodyId
                             , "Binding: from its args to its body"
                             )
@@ -170,9 +171,9 @@ annotationScheme ctx maybeSigNode =
             Node.value sigNode
                 |> .typeAnnotation
                 |> Node.value
-                |> Type.fromTypeAnnotation (typeResolver ctx)
+                |> TypeI.fromTypeAnnotation (typeResolver ctx)
                 |> Result.mapError (State.error << Error.fromTypeAnnotationError)
-                |> Result.map (Type.closeOver >> Just >> State.pure)
+                |> Result.map (TypeI.closeOver >> Just >> State.pure)
                 |> Result.Extra.merge
 
 
@@ -193,14 +194,14 @@ signatureEquations ctx declId maybeSigNode =
             (Node.value
                 >> .typeAnnotation
                 >> Node.value
-                >> Type.fromTypeAnnotation (typeResolver ctx)
+                >> TypeI.fromTypeAnnotation (typeResolver ctx)
                 >> Result.mapError (State.error << Error.fromTypeAnnotationError)
                 >> Result.map
                     (\annotationType ->
-                        State.do (State.instantiate (Type.closeOver annotationType)) <|
+                        State.do (State.instantiate (TypeI.closeOver annotationType)) <|
                             \freshAnnotationType ->
                                 State.pure
-                                    [ ( Type.id_ declId
+                                    [ ( TypeI.id_ declId
                                       , freshAnnotationType
                                       , "Binding must be consistent with its annotation"
                                       )
@@ -274,7 +275,7 @@ inferExpr ctx exprNode =
             let
                 type_ : MonoType
                 type_ =
-                    Type.id_ exprId
+                    TypeI.id_ exprId
 
                 f : Node Expression -> TIState Inferred
                 f =
@@ -305,8 +306,8 @@ inferExpr ctx exprNode =
                                             finish <|
                                                 fnEqs
                                                     ++ argEqs
-                                                    ++ [ ( type_, Type.id_ resultId, "Application = its result" )
-                                                       , ( Type.id_ fnId
+                                                    ++ [ ( type_, TypeI.id_ resultId, "Application = its result" )
+                                                       , ( TypeI.id_ fnId
                                                          , functionType argIds resultId
                                                          , "Application: first is fn"
                                                          )
@@ -324,7 +325,7 @@ inferExpr ctx exprNode =
                                                     finish <|
                                                         e1Eqs
                                                             ++ e2Eqs
-                                                            ++ [ ( type_, Type.id_ resultId, "Op application = its result" )
+                                                            ++ [ ( type_, TypeI.id_ resultId, "Op application = its result" )
                                                                , ( operatorType, functionType [ e1Id, e2Id ] resultId, "Op application: is a fn" )
                                                                ]
 
@@ -377,9 +378,9 @@ inferExpr ctx exprNode =
                                                 eqs1
                                                     ++ eqs2
                                                     ++ eqs3
-                                                    ++ [ ( Type.id_ id1, Bool, "If: condition = bool" )
-                                                       , ( Type.id_ id2, Type.id_ id3, "If: then = else" )
-                                                       , ( Type.id_ id2, type_, "If: then = result" )
+                                                    ++ [ ( TypeI.id_ id1, Bool, "If: condition = bool" )
+                                                       , ( TypeI.id_ id2, TypeI.id_ id3, "If: then = else" )
+                                                       , ( TypeI.id_ id2, type_, "If: then = result" )
                                                        ]
 
                 PrefixOperator operator ->
@@ -393,12 +394,12 @@ inferExpr ctx exprNode =
                 Integer _ ->
                     State.do State.getNextIdAndTick <|
                         \numberId ->
-                            finish [ ( type_, Type.number_ numberId, "Int" ) ]
+                            finish [ ( type_, TypeI.number_ numberId, "Int" ) ]
 
                 Hex _ ->
                     State.do State.getNextIdAndTick <|
                         \numberId ->
-                            finish [ ( type_, Type.number_ numberId, "Hex" ) ]
+                            finish [ ( type_, TypeI.number_ numberId, "Hex" ) ]
 
                 Floatable _ ->
                     finish [ ( type_, Float, "Float" ) ]
@@ -409,8 +410,8 @@ inferExpr ctx exprNode =
                             State.do (f e1) <|
                                 \( id1, eqs1 ) ->
                                     finish <|
-                                        ( type_, Type.id_ id1, "Negation = inner" )
-                                            :: ( type_, Type.number_ numberId, "Negation = number" )
+                                        ( type_, TypeI.id_ id1, "Negation = inner" )
+                                            :: ( type_, TypeI.number_ numberId, "Negation = number" )
                                             :: eqs1
 
                 Literal _ ->
@@ -427,7 +428,7 @@ inferExpr ctx exprNode =
                                     finish <|
                                         eqs
                                             ++ [ ( type_
-                                                 , Tuple (Type.id_ id1) (Type.id_ id2)
+                                                 , Tuple2 (TypeI.id_ id1) (TypeI.id_ id2)
                                                  , "Tuple: top"
                                                  )
                                                ]
@@ -436,7 +437,7 @@ inferExpr ctx exprNode =
                                     finish <|
                                         eqs
                                             ++ [ ( type_
-                                                 , Tuple3 (Type.id_ id1) (Type.id_ id2) (Type.id_ id3)
+                                                 , Tuple3 (TypeI.id_ id1) (TypeI.id_ id2) (TypeI.id_ id3)
                                                  , "Tuple3: top"
                                                  )
                                                ]
@@ -447,7 +448,7 @@ inferExpr ctx exprNode =
                 ParenthesizedExpression e1 ->
                     State.do (f e1) <|
                         \( id1, eqs1 ) ->
-                            finish <| ( type_, Type.id_ id1, "Parenthesized = inner" ) :: eqs1
+                            finish <| ( type_, TypeI.id_ id1, "Parenthesized = inner" ) :: eqs1
 
                 LetExpression { declarations, expression } ->
                     State.withScopedEnv <|
@@ -456,7 +457,7 @@ inferExpr ctx exprNode =
                                 State.do (f expression) <|
                                     \( bodyId, bodyEqs ) ->
                                         finish <|
-                                            ( type_, Type.id_ bodyId, "Let = its body" )
+                                            ( type_, TypeI.id_ bodyId, "Let = its body" )
                                                 :: bodyEqs
                         )
 
@@ -492,8 +493,8 @@ inferExpr ctx exprNode =
                                             caseIds
                                                 |> List.map
                                                     (\( patternId, _ ) ->
-                                                        ( Type.id_ scrutineeId
-                                                        , Type.id_ patternId
+                                                        ( TypeI.id_ scrutineeId
+                                                        , TypeI.id_ patternId
                                                         , "Case: scrutinee = branch pattern"
                                                         )
                                                     )
@@ -504,7 +505,7 @@ inferExpr ctx exprNode =
                                                 |> List.map
                                                     (\( _, bodyId ) ->
                                                         ( type_
-                                                        , Type.id_ bodyId
+                                                        , TypeI.id_ bodyId
                                                         , "Case: result = branch body"
                                                         )
                                                     )
@@ -534,7 +535,13 @@ inferExpr ctx exprNode =
                 RecordExpr fieldSetters ->
                     State.do (inferRecordSetters ctx fieldSetters) <|
                         \( fields, eqs ) ->
-                            finish <| eqs ++ [ ( type_, Record fields, "Record: is a record" ) ]
+                            finish <|
+                                eqs
+                                    ++ [ ( type_
+                                         , Record { fields = fields }
+                                         , "Record: is a record"
+                                         )
+                                       ]
 
                 ListExpr exprNodes ->
                     State.do (inferMany f exprNodes) <|
@@ -545,13 +552,13 @@ inferExpr ctx exprNode =
                                         eqs
                                             ++ List.map
                                                 (\itemId ->
-                                                    ( Type.id_ itemId
-                                                    , Type.id_ listItemId
+                                                    ( TypeI.id_ itemId
+                                                    , TypeI.id_ listItemId
                                                     , "List: pin list type param to all inner"
                                                     )
                                                 )
                                                 ids
-                                            ++ [ ( type_, List <| Type.id_ listItemId, "List: is a list" ) ]
+                                            ++ [ ( type_, List <| TypeI.id_ listItemId, "List: is a list" ) ]
 
                 RecordAccess recordNode fieldNameNode ->
                     State.do (f recordNode) <|
@@ -565,14 +572,14 @@ inferExpr ctx exprNode =
                                             State.do (State.aliasNodeId (Node.range fieldNameNode) resultId) <|
                                                 \() ->
                                                     finish <|
-                                                        [ ( type_, Type.id_ resultId, "Record access = the field = the result" )
-                                                        , ( Type.id_ recordNodeId
+                                                        [ ( type_, TypeI.id_ resultId, "Record access = the field = the result" )
+                                                        , ( TypeI.id_ recordNodeId
                                                           , ExtensibleRecord
-                                                                { type_ = Type.id_ extensibleRecordId
+                                                                { extensionTypevar = TypeI.id_ extensibleRecordId
                                                                 , fields =
                                                                     Dict.singleton
                                                                         (Node.value fieldNameNode)
-                                                                        (Type.id_ resultId)
+                                                                        (TypeI.id_ resultId)
                                                                 }
                                                           , "Record access: left is a record"
                                                           )
@@ -589,12 +596,12 @@ inferExpr ctx exprNode =
                                           , Function
                                                 { from =
                                                     ExtensibleRecord
-                                                        { type_ = Type.id_ recordId
+                                                        { extensionTypevar = TypeI.id_ recordId
                                                         , fields =
                                                             -- the fieldName is ".a", not "a", so let's sanitize that
-                                                            Dict.singleton (String.dropLeft 1 fieldName) (Type.id_ resultId)
+                                                            Dict.singleton (String.dropLeft 1 fieldName) (TypeI.id_ resultId)
                                                         }
-                                                , to = Type.id_ resultId
+                                                , to = TypeI.id_ resultId
                                                 }
                                           , "Record access fn: is a function"
                                           )
@@ -627,7 +634,7 @@ inferExpr ctx exprNode =
                                                                 asExtensibleRecord : MonoType
                                                                 asExtensibleRecord =
                                                                     ExtensibleRecord
-                                                                        { type_ = Type.id_ recordId
+                                                                        { extensionTypevar = TypeI.id_ recordId
                                                                         , fields = fields
                                                                         }
                                                             in
@@ -635,7 +642,7 @@ inferExpr ctx exprNode =
                                                                 eqs
                                                                     ++ [ ( recordVarType, asExtensibleRecord, "Record update: base record has at least that field" )
                                                                        , ( type_, asExtensibleRecord, "Record update: result has the same shape as the base record" )
-                                                                       , ( Type.id_ recordVarNodeId, recordVarType, "Record update: base variable node" )
+                                                                       , ( TypeI.id_ recordVarNodeId, recordVarType, "Record update: base variable node" )
                                                                        ]
 
                 GLSLExpression code ->
@@ -674,7 +681,7 @@ inferRecordSetters ctx fieldSetters =
                 in
                 State.do (inferExpr ctx fieldExprNode) <|
                     \( fieldId, eqs ) ->
-                        State.pure ( ( Node.value fieldNameNode, Type.id_ fieldId ), eqs )
+                        State.pure ( ( Node.value fieldNameNode, TypeI.id_ fieldId ), eqs )
             )
         |> State.map
             (\fieldsAndEqs ->
@@ -762,8 +769,8 @@ solveLetDeclarations ctx declarations =
                                     let
                                         eqs : List TypeEquation
                                         eqs =
-                                            ( Type.id_ declId, Type.id_ patternId, "Let destructuring: alias" )
-                                                :: ( Type.id_ patternId, Type.id_ exprId, "Let destructuring: pattern = expr" )
+                                            ( TypeI.id_ declId, TypeI.id_ patternId, "Let destructuring: alias" )
+                                                :: ( TypeI.id_ patternId, TypeI.id_ exprId, "Let destructuring: pattern = expr" )
                                                 :: patternEqs
                                                 ++ exprEqs
 
@@ -836,7 +843,7 @@ inferPattern ctx patternNode =
             let
                 type_ : MonoType
                 type_ =
-                    Type.id_ patternId
+                    TypeI.id_ patternId
 
                 p : Node Pattern -> TIState Inferred
                 p =
@@ -862,12 +869,12 @@ inferPattern ctx patternNode =
                 IntPattern _ ->
                     State.do State.getNextIdAndTick <|
                         \numberId ->
-                            finish [ ( type_, Type.number_ numberId, "Int pattern" ) ]
+                            finish [ ( type_, TypeI.number_ numberId, "Int pattern" ) ]
 
                 HexPattern _ ->
                     State.do State.getNextIdAndTick <|
                         \numberId ->
-                            finish [ ( type_, Type.number_ numberId, "Hex pattern" ) ]
+                            finish [ ( type_, TypeI.number_ numberId, "Hex pattern" ) ]
 
                 FloatPattern _ ->
                     finish [ ( type_, Float, "Float pattern" ) ]
@@ -884,7 +891,9 @@ inferPattern ctx patternNode =
                                 [ id1, id2 ] ->
                                     finish <|
                                         ( type_
-                                        , Tuple (Type.id_ id1) (Type.id_ id2)
+                                        , Tuple2
+                                            (TypeI.id_ id1)
+                                            (TypeI.id_ id2)
                                         , "Tuple pattern: top"
                                         )
                                             :: eqs
@@ -892,7 +901,10 @@ inferPattern ctx patternNode =
                                 [ id1, id2, id3 ] ->
                                     finish <|
                                         ( type_
-                                        , Tuple3 (Type.id_ id1) (Type.id_ id2) (Type.id_ id3)
+                                        , Tuple3
+                                            (TypeI.id_ id1)
+                                            (TypeI.id_ id2)
+                                            (TypeI.id_ id3)
                                         , "Tuple3 pattern: top"
                                         )
                                             :: eqs
@@ -912,9 +924,9 @@ inferPattern ctx patternNode =
                                 (\fieldNode ->
                                     State.do (State.idForNode fieldNode) <|
                                         \fieldId ->
-                                            State.do (State.addBinding (Node.value fieldNode) (Type.mono <| Type.id_ fieldId)) <|
+                                            State.do (State.addBinding (Node.value fieldNode) (TypeI.mono <| TypeI.id_ fieldId)) <|
                                                 \() ->
-                                                    State.pure ( Node.value fieldNode, Type.id_ fieldId )
+                                                    State.pure ( Node.value fieldNode, TypeI.id_ fieldId )
                                 )
                         )
                     <|
@@ -924,7 +936,7 @@ inferPattern ctx patternNode =
                                     finish
                                         [ ( type_
                                           , ExtensibleRecord
-                                                { type_ = Type.id_ recordId
+                                                { extensionTypevar = TypeI.id_ recordId
                                                 , fields = Dict.fromList fields_
                                                 }
                                           , "Record pattern"
@@ -941,9 +953,9 @@ inferPattern ctx patternNode =
                                             finish <|
                                                 eqs1
                                                     ++ eqs2
-                                                    ++ [ ( type_, List <| Type.id_ listItemId, "UnCons pattern: result" )
-                                                       , ( type_, Type.id_ id2, "UnCons pattern: result same as tail" )
-                                                       , ( Type.id_ id1, Type.id_ listItemId, "UnCons pattern: head pins list type param" )
+                                                    ++ [ ( type_, List <| TypeI.id_ listItemId, "UnCons pattern: result" )
+                                                       , ( type_, TypeI.id_ id2, "UnCons pattern: result same as tail" )
+                                                       , ( TypeI.id_ id1, TypeI.id_ listItemId, "UnCons pattern: head pins list type param" )
                                                        ]
 
                 ListPattern patterns ->
@@ -955,16 +967,16 @@ inferPattern ctx patternNode =
                                         eqs
                                             ++ List.map
                                                 (\itemId ->
-                                                    ( Type.id_ itemId
-                                                    , Type.id_ listItemId
+                                                    ( TypeI.id_ itemId
+                                                    , TypeI.id_ listItemId
                                                     , "ListPattern: pin list type param to all items"
                                                     )
                                                 )
                                                 ids
-                                            ++ [ ( type_, List <| Type.id_ listItemId, "ListPattern: result" ) ]
+                                            ++ [ ( type_, List <| TypeI.id_ listItemId, "ListPattern: result" ) ]
 
                 VarPattern var ->
-                    State.do (State.addBinding var (Type.mono type_)) <|
+                    State.do (State.addBinding var (TypeI.mono type_)) <|
                         \() ->
                             finish []
 
@@ -987,22 +999,22 @@ inferPattern ctx patternNode =
                                                 \( argIds, eqs ) ->
                                                     finish <|
                                                         ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
-                                                            :: ( type_, Type.id_ resultId, "NamedPattern: result" )
+                                                            :: ( type_, TypeI.id_ resultId, "NamedPattern: result" )
                                                             :: eqs
 
                 AsPattern p1 varNameNode ->
-                    State.do (State.addBinding (Node.value varNameNode) (Type.mono type_)) <|
+                    State.do (State.addBinding (Node.value varNameNode) (TypeI.mono type_)) <|
                         \() ->
                             State.do (State.aliasNodeId (Node.range varNameNode) patternId) <|
                                 \() ->
                                     State.do (p p1) <|
                                         \( id1, eqs1 ) ->
-                                            finish <| ( type_, Type.id_ id1, "AsPattern = inner" ) :: eqs1
+                                            finish <| ( type_, TypeI.id_ id1, "AsPattern = inner" ) :: eqs1
 
                 ParenthesizedPattern p1 ->
                     State.do (p p1) <|
                         \( id1, eqs1 ) ->
-                            finish <| ( type_, Type.id_ id1, "Parenthesized pattern = inner" ) :: eqs1
+                            finish <| ( type_, TypeI.id_ id1, "Parenthesized pattern = inner" ) :: eqs1
 
 
 
@@ -1081,8 +1093,8 @@ insertGlslDeclaration ( storageQualifier, varName, varType ) acc =
 
      "uniform mediump mat4 u_x, u_y"
      -->
-     [ ( "uniform", "u_x", ExternalType.mat4 )
-     , ( "uniform", "u_y", ExternalType.mat4 )
+     [ ( "uniform", "u_x", ExternalTypes.mat4 )
+     , ( "uniform", "u_y", ExternalTypes.mat4 )
      ]
 
 -}
@@ -1133,19 +1145,19 @@ parseGlslVarType : String -> Maybe MonoType
 parseGlslVarType type_ =
     case type_ of
         "vec2" ->
-            Just ExternalType.vec2
+            Just ExternalTypes.vec2
 
         "vec3" ->
-            Just ExternalType.vec3
+            Just ExternalTypes.vec3
 
         "vec4" ->
-            Just ExternalType.vec4
+            Just ExternalTypes.vec4
 
         "mat4" ->
-            Just ExternalType.mat4
+            Just ExternalTypes.mat4
 
         "sampler2D" ->
-            Just ExternalType.texture
+            Just ExternalTypes.texture
 
         "int" ->
             Just Int

@@ -1,6 +1,6 @@
 module Elm.TypeInference.TypeEquation exposing (TypeEquation, dropLabel)
 
-import Elm.TypeInference.Type exposing (MonoType)
+import Elm.TypeInference.Type.Internal exposing (MonoType)
 
 
 {-| Always mono types: schemes (foralls) live in environment and are

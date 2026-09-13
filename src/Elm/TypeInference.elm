@@ -1,6 +1,6 @@
 module Elm.TypeInference exposing
     ( inferAndCheck, inferCorrectCode
-    , DependencyEnv, dependencyEnv, PackageName, Dependency
+    , DependencyEnv, dependencyEnv, Dependency
     , Interface, inferModule, inferProject, interfaceFromAnnotations
     )
 
@@ -11,6 +11,8 @@ Note: Type annotations are trusted, not checked: this library is written with
 elm-review in mind, which runs _after_ Elm compiler has typechecked the code.
 If you would benefit from this library checking annotations, let me know!
 
+TODO: inferAndCheck needs to check the annotations too. inferCorrectCode can trust them.
+
 
 # Whole project at once
 
@@ -19,7 +21,7 @@ If you would benefit from this library checking annotations, let me know!
 
 # Dependencies
 
-@docs DependencyEnv, dependencyEnv, PackageName, Dependency
+@docs DependencyEnv, dependencyEnv, Dependency
 
 
 # One module at a time
@@ -51,7 +53,8 @@ import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (GlobalKey, TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type as Type exposing (MonoType(..), Type, TypeResolver)
+import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeResolver)
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
 import List.ExtraExtra
@@ -136,12 +139,6 @@ type alias Dependency =
     }
 
 
-{-| Sourced from `docs.json` dependencies, eg. "elm/core".
--}
-type alias PackageName =
-    State.PackageName
-
-
 {-| The dependencies' contribution to inference, precomputed.
 
 Dependencies change far less often than source does, so this is worth building
@@ -150,7 +147,7 @@ once and reusing across many `inferModule` / `inferProject` calls.
 -}
 type DependencyEnv
     = DependencyEnv
-        { globalEnv : Dict GlobalKey Type
+        { globalEnv : Dict GlobalKey TypeI.Type
         , typeAliases : Dict GlobalKey TypeAlias
         , index : ModuleLookup.Index
         }
@@ -188,13 +185,8 @@ dependencyEnv { directDependencies, allDependencies } =
                             , index = ModuleLookup.buildIndex directVisibleDeps
                             }
     )
-        |> State.run emptyState
+        |> State.run State.empty
         |> Tuple.first
-
-
-emptyState : State.State
-emptyState =
-    State.init { lexicalEnv = Dict.empty, globalEnv = Dict.empty }
 
 
 
@@ -202,6 +194,9 @@ emptyState =
 
 
 {-| What one module contributes to the modules importing it. Opaque.
+
+TODO: why do we need this for users? Should this be hidden beneath TypeLookupTable somehow?
+
 -}
 type alias Interface =
     Interface.Interface
@@ -402,7 +397,7 @@ type alias ModuleCtx =
     , -- what this module passes on to its own importers
       inheritedAliases : Dict GlobalKey TypeAlias
     , depTypeAliases : Dict GlobalKey TypeAlias
-    , globalEnv : Dict GlobalKey Type
+    , globalEnv : Dict GlobalKey TypeI.Type
     }
 
 
@@ -509,8 +504,13 @@ interfaceFromAnnotations_ depEnv importedInterfaces file =
 moduleResult :
     ModuleCtx
     -> Dict GlobalKey TypeAlias
-    -> TIState { table : TypeLookupTable, interface : Interface }
+    ->
+        TIState
+            { table : TypeLookupTable
+            , interface : Interface
+            }
 moduleResult ctx outgoingAliases =
+    -- TODO translate from TypeI.Type to Type.Type before inserting into the dict
     State.do State.getNodeIds <|
         \nodeIds ->
             State.do State.getSubst <|
@@ -524,15 +524,15 @@ moduleResult ctx outgoingAliases =
                                             (\rangeLike id ( accDict, accSubst ) ->
                                                 let
                                                     ( monoType, accSubst1 ) =
-                                                        SubstitutionMap.substituteMono accSubst (Type.id_ id)
+                                                        SubstitutionMap.substituteMono accSubst (TypeI.id_ id)
                                                 in
-                                                ( Dict.insert rangeLike (Type.mono monoType) accDict
+                                                ( Dict.insert rangeLike (TypeI.toPublicType { alreadyNormalized = False } monoType) accDict
                                                 , accSubst1
                                                 )
                                             )
                                             ( Dict.empty, substitutionMap )
 
-                                exposedValues : Dict VarName Type
+                                exposedValues : Dict VarName TypeI.Type
                                 exposedValues =
                                     ctx.thisIndex.exposedValues
                                         |> Set.foldl
@@ -547,7 +547,7 @@ moduleResult ctx outgoingAliases =
                                             Dict.empty
                             in
                             State.pure
-                                { table = TypeLookupTable.fromDict typesByRange
+                                { table = typesByRange
                                 , interface =
                                     Interface.create
                                         { moduleIndex = ctx.thisIndex
@@ -695,7 +695,7 @@ gatherTypeAliases ctx file =
                             type_ =
                                 typeAlias.typeAnnotation
                                     |> Node.value
-                                    |> Type.fromTypeAnnotation resolver
+                                    |> TypeI.fromTypeAnnotation resolver
                                     |> Result.mapError (State.error << Error.fromTypeAnnotationError)
                                     |> Result.map State.pure
                                     |> Result.Extra.merge
@@ -711,7 +711,7 @@ gatherTypeAliases ctx file =
                                                 (\fieldNode ->
                                                     Tuple.second (Node.value fieldNode)
                                                         |> Node.value
-                                                        |> Type.fromTypeAnnotation resolver
+                                                        |> TypeI.fromTypeAnnotation resolver
                                                         |> Result.mapError (State.error << Error.fromTypeAnnotationError)
                                                         |> Result.map State.pure
                                                         |> Result.Extra.merge
@@ -725,7 +725,7 @@ gatherTypeAliases ctx file =
                                                 (\ctorType ->
                                                     State.addGlobalBinding
                                                         ( "", moduleName, Node.value typeAlias.name )
-                                                        (Type.closeOver ctorType)
+                                                        (TypeI.closeOver ctorType)
                                                 )
 
                                     _ ->
@@ -785,7 +785,7 @@ registerAnnotations ctx file =
                             Just sigNode ->
                                 case
                                     Node.value (Node.value sigNode).typeAnnotation
-                                        |> Type.fromTypeAnnotation ctx.resolver
+                                        |> TypeI.fromTypeAnnotation ctx.resolver
                                 of
                                     Err _ ->
                                         State.pure ()
@@ -793,7 +793,7 @@ registerAnnotations ctx file =
                                     Ok monoType ->
                                         State.addGlobalBinding
                                             ( "", ctx.thisModuleName, Elm.Syntax.Expression.Extra.functionName fn )
-                                            (Type.closeOver monoType)
+                                            (TypeI.closeOver monoType)
 
                     _ ->
                         State.pure ()
@@ -837,10 +837,10 @@ registerCustomType resolver moduleName customType =
                     ctor =
                         Node.value ctorNode
 
-                    argTypes : Result Type.FromTypeAnnotationError (List MonoType)
+                    argTypes : Result TypeI.FromTypeAnnotationError (List MonoType)
                     argTypes =
                         ctor.arguments
-                            |> List.map (Node.value >> Type.fromTypeAnnotation resolver)
+                            |> List.map (Node.value >> TypeI.fromTypeAnnotation resolver)
                             |> Result.Extra.combine
                 in
                 argTypes
@@ -856,7 +856,7 @@ registerCustomType resolver moduleName customType =
                                 ctorType =
                                     List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
                             in
-                            State.addGlobalBinding ( "", moduleName, ctorName ) (Type.closeOver ctorType)
+                            State.addGlobalBinding ( "", moduleName, ctorName ) (TypeI.closeOver ctorType)
                         )
                     |> Result.Extra.merge
             )
@@ -867,12 +867,12 @@ registerPort : TypeResolver -> FullModuleName -> Signature -> TIState ()
 registerPort resolver moduleName sig =
     sig.typeAnnotation
         |> Node.value
-        |> Type.fromTypeAnnotation resolver
+        |> TypeI.fromTypeAnnotation resolver
         |> Result.mapError (State.error << Error.fromTypeAnnotationError)
         |> Result.map
             (\t ->
                 State.addGlobalBinding
                     ( "", moduleName, Node.value sig.name )
-                    (Type.closeOver t)
+                    (TypeI.closeOver t)
             )
         |> Result.Extra.merge

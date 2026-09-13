@@ -1,8 +1,8 @@
 module Elm.TypeInference.ImplicitImports exposing
-    ( package
-    , unaliasModule
+    ( unaliasModule
     , modulesPossiblyExposingValue
     , moduleExposingType
+    , elmCorePackage
     )
 
 {-| Elm compiles every module with these implicit imports:
@@ -45,8 +45,8 @@ type alias ImplicitImport =
     }
 
 
-package : String
-package =
+elmCorePackage : String
+elmCorePackage =
     "elm/core"
 
 

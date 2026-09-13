@@ -1,6 +1,6 @@
-module Elm.TypeInference.Type.External exposing (mat4, texture, vec2, vec3, vec4)
+module Elm.TypeInference.Type.ExternalTypes exposing (mat4, texture, vec2, vec3, vec4)
 
-import Elm.TypeInference.Type as Type exposing (MonoType)
+import Elm.TypeInference.Type.Internal as Type exposing (MonoType)
 
 
 vec2 : MonoType

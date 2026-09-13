@@ -17,8 +17,9 @@ import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
-import Elm.TypeInference.State as State exposing (PackageName, TIState)
-import Elm.TypeInference.Type as Type exposing (TypeResolver)
+import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type.Internal as TypeI exposing (TypeResolver)
 import List.ExtraExtra
 import Result.Extra
 import Result.ExtraExtra
@@ -406,7 +407,7 @@ implicitTypeModule qualifier typeName =
 
     else
         ImplicitImports.moduleExposingType typeName
-            |> Maybe.map (Tuple.pair ImplicitImports.package)
+            |> Maybe.map (Tuple.pair ImplicitImports.elmCorePackage)
 
 
 {-| A qualifier like `Parser.` can mean two different modules at once:
@@ -519,7 +520,7 @@ typeResolverFor ((Index index) as wrappedIndex) modules thisModule qualifier typ
                                 Nothing
                         )
 
-        dependency : ModuleName -> Result Type.ResolverAmbiguity (Maybe ( PackageName, FullModuleName ))
+        dependency : ModuleName -> Result TypeI.ResolverAmbiguity (Maybe ( PackageName, FullModuleName ))
         dependency unaliasedQualifier =
             if List.isEmpty unaliasedQualifier then
                 Ok Nothing

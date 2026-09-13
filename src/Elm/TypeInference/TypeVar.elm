@@ -1,16 +1,13 @@
 module Elm.TypeInference.TypeVar exposing
-    ( TypeVar, TypeVarStyle(..), SuperType(..)
+    ( SuperType(..)
+    , TypeVar
+    , TypeVarStyle(..)
     , parse
-    , toString, superTypeToString
+    , superTypeToString
+    , toString
     )
 
-{-|
-
-@docs TypeVar, TypeVarStyle, SuperType
-@docs parse
-@docs toString, superTypeToString
-
--}
+{-| -}
 
 
 {-|
@@ -26,15 +23,11 @@ type alias TypeVar =
     ( TypeVarStyle, SuperType )
 
 
-{-| TODO docs
--}
 type TypeVarStyle
     = Generated Int
     | Named String
 
 
-{-| TODO docs
--}
 type SuperType
     = Normal
     | {- Int | Float -} Number
@@ -43,8 +36,6 @@ type SuperType
     | {- String | List comparable -} CompAppend
 
 
-{-| TODO docs
--}
 toString : TypeVar -> String
 toString ( style, super ) =
     let
@@ -70,8 +61,6 @@ toString ( style, super ) =
             prefix ++ name
 
 
-{-| TODO docs
--}
 parse : String -> TypeVar
 parse name =
     let
@@ -96,8 +85,6 @@ parse name =
         |> Maybe.withDefault ( Named name, Normal )
 
 
-{-| TODO docs
--}
 superTypeToString : SuperType -> String
 superTypeToString super =
     case super of

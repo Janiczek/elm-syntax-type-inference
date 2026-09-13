@@ -61,7 +61,7 @@ lookup.)
 import Bitwise
 import Dict exposing (Dict)
 import Elm.Syntax.VarName exposing (VarName)
-import Elm.TypeInference.Type as Type
+import Elm.TypeInference.Type.Internal as Type
     exposing
         ( Id
         , MonoType(..)
@@ -316,7 +316,7 @@ adjustLevels target type_ store =
         Unit ->
             store
 
-        Tuple t1 t2 ->
+        Tuple2 t1 t2 ->
             store
                 |> adjustLevels target t1
                 |> adjustLevels target t2
@@ -327,12 +327,12 @@ adjustLevels target type_ store =
                 |> adjustLevels target t2
                 |> adjustLevels target t3
 
-        Record fields ->
+        Record { fields } ->
             inFields fields store
 
         ExtensibleRecord r ->
             store
-                |> adjustLevels target r.type_
+                |> adjustLevels target r.extensionTypevar
                 |> inFields r.fields
 
         UserDefinedType r ->
@@ -511,7 +511,7 @@ substituteMonoTracked store monoType =
         Unit ->
             ( monoType, groundFlag, store )
 
-        Tuple t1 t2 ->
+        Tuple2 t1 t2 ->
             let
                 ( t1_, f1, s1 ) =
                     substituteMonoTracked store t1
@@ -524,7 +524,7 @@ substituteMonoTracked store monoType =
                     both f1 f2
             in
             if isChanged flags then
-                ( Tuple t1_ t2_, flags, s2 )
+                ( Tuple2 t1_ t2_, flags, s2 )
 
             else
                 ( monoType, flags, s2 )
@@ -550,21 +550,21 @@ substituteMonoTracked store monoType =
             else
                 ( monoType, flags, s3 )
 
-        Record fields ->
+        Record { fields } ->
             let
                 ( fields_, flags, s1 ) =
                     substituteFieldsTracked store fields
             in
             if isChanged flags then
-                ( Record fields_, flags, s1 )
+                ( Record { fields = fields_ }, flags, s1 )
 
             else
                 ( monoType, flags, s1 )
 
         ExtensibleRecord r ->
             let
-                ( type__, f1, s1 ) =
-                    substituteMonoTracked store r.type_
+                ( extensionTypevar_, f1, s1 ) =
+                    substituteMonoTracked store r.extensionTypevar
 
                 ( fields_, f2, s2 ) =
                     substituteFieldsTracked s1 r.fields
@@ -573,19 +573,38 @@ substituteMonoTracked store monoType =
                 flags =
                     both f1 f2
             in
-            case type__ of
+            case extensionTypevar_ of
                 Record _ ->
-                    -- The only shape `collapse` does anything to: the base is
-                    -- a concrete record, so it folds into the fields. That's a
-                    -- change even if nothing underneath moved.
-                    ( collapse (ExtensibleRecord { type_ = type__, fields = fields_ })
+                    ( collapse
+                        (ExtensibleRecord
+                            { extensionTypevar = extensionTypevar_
+                            , fields = fields_
+                            }
+                        )
+                    , Bitwise.or flags changedFlag
+                    , s2
+                    )
+
+                ExtensibleRecord _ ->
+                    ( collapse
+                        (ExtensibleRecord
+                            { extensionTypevar = extensionTypevar_
+                            , fields = fields_
+                            }
+                        )
                     , Bitwise.or flags changedFlag
                     , s2
                     )
 
                 _ ->
                     if isChanged flags then
-                        ( ExtensibleRecord { type_ = type__, fields = fields_ }, flags, s2 )
+                        ( ExtensibleRecord
+                            { extensionTypevar = extensionTypevar_
+                            , fields = fields_
+                            }
+                        , flags
+                        , s2
+                        )
 
                     else
                         ( monoType, flags, s2 )

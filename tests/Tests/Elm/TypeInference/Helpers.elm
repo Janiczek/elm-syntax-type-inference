@@ -140,8 +140,9 @@ inferModules directDependencies allDependencies modules =
                                 |> Dict.map
                                     (\moduleName file ->
                                         ( file
-                                        , Dict.get moduleName lookupTables
-                                            |> Maybe.withDefault (TypeLookupTable.fromDict Dict.empty)
+                                        , lookupTables
+                                            |> Dict.get moduleName
+                                            |> Maybe.withDefault Dict.empty
                                         )
                                     )
                         )

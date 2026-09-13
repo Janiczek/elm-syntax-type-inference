@@ -6,7 +6,7 @@ import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type as Type
+import Elm.TypeInference.Type.Internal as Type
     exposing
         ( MonoType(..)
         , PackageName
@@ -203,17 +203,20 @@ substituteAliasArgs argsByName type_ =
         Unit ->
             type_
 
-        Tuple t1 t2 ->
-            Tuple (go t1) (go t2)
+        Tuple2 t1 t2 ->
+            Tuple2 (go t1) (go t2)
 
         Tuple3 t1 t2 t3 ->
             Tuple3 (go t1) (go t2) (go t3)
 
-        Record fields ->
-            Record (Dict.map (\_ v -> go v) fields)
+        Record { fields } ->
+            Record { fields = Dict.map (\_ v -> go v) fields }
 
         ExtensibleRecord r ->
-            ExtensibleRecord { type_ = go r.type_, fields = Dict.map (\_ v -> go v) r.fields }
+            ExtensibleRecord
+                { extensionTypevar = go r.extensionTypevar
+                , fields = Dict.map (\_ v -> go v) r.fields
+                }
 
         UserDefinedType r ->
             UserDefinedType { r | args = List.map go r.args }
@@ -224,59 +227,6 @@ substituteAliasArgs argsByName type_ =
                 , uniforms = Dict.map (\_ v -> go v) r.uniforms
                 , varyings = Dict.map (\_ v -> go v) r.varyings
                 }
-
-
-{-| Collapse a consecutive chain of `ExtensibleRecord`s. Bias towards outer fields.
--}
-flattenExtensible :
-    { type_ : MonoType, fields : Dict VarName MonoType }
-    -> { type_ : MonoType, fields : Dict VarName MonoType }
-flattenExtensible er =
-    case er.type_ of
-        ExtensibleRecord inner ->
-            flattenExtensible { type_ = inner.type_, fields = Dict.union er.fields inner.fields }
-
-        TypeVar _ ->
-            er
-
-        Function _ ->
-            er
-
-        Int ->
-            er
-
-        Float ->
-            er
-
-        Char ->
-            er
-
-        String ->
-            er
-
-        Bool ->
-            er
-
-        List _ ->
-            er
-
-        Unit ->
-            er
-
-        Tuple _ _ ->
-            er
-
-        Tuple3 _ _ _ ->
-            er
-
-        Record _ ->
-            er
-
-        UserDefinedType _ ->
-            er
-
-        WebGLShader _ ->
-            er
 
 
 {-| Pair the two field dicts up _by name_, or `Nothing` if the key sets differ
@@ -361,14 +311,12 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
 
             recordVsExtensible :
                 Dict VarName MonoType
-                -> { type_ : MonoType, fields : Dict VarName MonoType }
+                ->
+                    { extensionTypevar : MonoType
+                    , fields : Dict VarName MonoType
+                    }
                 -> TIState ()
-            recordVsExtensible recordFields rawEr =
-                let
-                    er : { type_ : MonoType, fields : Dict VarName MonoType }
-                    er =
-                        flattenExtensible rawEr
-                in
+            recordVsExtensible recordFields er =
                 if not (List.all (\k -> Dict.member k recordFields) (Dict.keys er.fields)) then
                     typeMismatch
 
@@ -383,7 +331,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                             Dict.filter (\k _ -> Dict.member k er.fields) recordFields
                     in
                     unifyMany cfg
-                        (( er.type_, Record residual )
+                        (( er.extensionTypevar, Record { fields = residual } )
                             :: List.map2 Tuple.pair (Dict.values matched) (Dict.values er.fields)
                         )
         in
@@ -446,14 +394,14 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             ( List _, _ ) ->
                 typeMismatch
 
-            ( Tuple t1e1 t1e2, Tuple t2e1 t2e2 ) ->
+            ( Tuple2 t1e1 t1e2, Tuple2 t2e1 t2e2 ) ->
                 unifyMany
                     cfg
                     [ ( t1e1, t2e1 )
                     , ( t1e2, t2e2 )
                     ]
 
-            ( Tuple _ _, _ ) ->
+            ( Tuple2 _ _, _ ) ->
                 typeMismatch
 
             ( Tuple3 t1e1 t1e2 t1e3, Tuple3 t2e1 t2e2 t2e3 ) ->
@@ -467,16 +415,16 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             ( Tuple3 _ _ _, _ ) ->
                 typeMismatch
 
-            ( Record bindings1, Record bindings2 ) ->
-                recordBindings bindings1 bindings2
+            ( Record r1, Record r2 ) ->
+                recordBindings r1.fields r2.fields
 
             ( Record r, ExtensibleRecord er ) ->
-                recordVsExtensible r er
+                recordVsExtensible r.fields er
 
             ( Record _, _ ) ->
                 typeMismatch
 
-            ( ExtensibleRecord rawR1, ExtensibleRecord rawR2 ) ->
+            ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
                 {- Fields that only one side mentions must be added to the other
                    side's required fields.
                    Both sides' extensible record typevars (the r in { r | ... })
@@ -488,18 +436,13 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                    - sum r = getX r + getY r
                    Use them both on the same record and you get
                    - sum : { commonVar | x : Float, y : Float } -> Float
+
+                   Both `r1` and `r2` are already flattened here: `substituteEquation`
+                   dereferenced `t1`/`t2` via `SubstitutionMap.substituteMonoTracked`
+                   before this branch ever ran, and that already collapses a chain of
+                   extensible records into one (see `Type.collapseExtensible`).
                 -}
                 let
-                    -- We flatten to be able to correctly find overlaps.
-                    -- (There was a bug with an infinite loop in the past.)
-                    r1 : { type_ : MonoType, fields : Dict VarName MonoType }
-                    r1 =
-                        flattenExtensible rawR1
-
-                    r2 : { type_ : MonoType, fields : Dict VarName MonoType }
-                    r2 =
-                        flattenExtensible rawR2
-
                     onlyIn1 : Dict VarName MonoType
                     onlyIn1 =
                         Dict.filter (\k _ -> not (Dict.member k r2.fields)) r1.fields
@@ -518,7 +461,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     {- Same field set on both sides -> the `r` in `{r | ...}`
                        must be the same for both sides.
                     -}
-                    unifyMany cfg (( r1.type_, r2.type_ ) :: sharedEqs)
+                    unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                 else
                     State.do State.getNextIdAndTick <|
@@ -530,13 +473,23 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                             in
                             unifyMany
                                 cfg
-                                (( r1.type_, ExtensibleRecord { type_ = tail, fields = onlyIn2 } )
-                                    :: ( r2.type_, ExtensibleRecord { type_ = tail, fields = onlyIn1 } )
+                                (( r1.extensionTypevar
+                                 , ExtensibleRecord
+                                    { extensionTypevar = tail
+                                    , fields = onlyIn2
+                                    }
+                                 )
+                                    :: ( r2.extensionTypevar
+                                       , ExtensibleRecord
+                                            { extensionTypevar = tail
+                                            , fields = onlyIn1
+                                            }
+                                       )
                                     :: sharedEqs
                                 )
 
             ( ExtensibleRecord er, Record r ) ->
-                recordVsExtensible r er
+                recordVsExtensible r.fields er
 
             ( ExtensibleRecord _, _ ) ->
                 typeMismatch
@@ -560,9 +513,9 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             ( WebGLShader webgl1, WebGLShader webgl2 ) ->
                 unifyMany
                     cfg
-                    [ ( Record webgl1.attributes, Record webgl2.attributes )
-                    , ( Record webgl1.uniforms, Record webgl2.uniforms )
-                    , ( Record webgl1.varyings, Record webgl2.varyings )
+                    [ ( Record { fields = webgl1.attributes }, Record { fields = webgl2.attributes } )
+                    , ( Record { fields = webgl1.uniforms }, Record { fields = webgl2.uniforms } )
+                    , ( Record { fields = webgl1.varyings }, Record { fields = webgl2.varyings } )
                     ]
 
             ( WebGLShader _, _ ) ->
@@ -769,7 +722,7 @@ isComparable typeAliases type_ =
         List inner ->
             isComparable typeAliases inner
 
-        Tuple a b ->
+        Tuple2 a b ->
             isComparable typeAliases a && isComparable typeAliases b
 
         Tuple3 a b c ->
@@ -821,7 +774,7 @@ isAppendable typeAliases type_ =
         Char ->
             False
 
-        Tuple _ _ ->
+        Tuple2 _ _ ->
             False
 
         Tuple3 _ _ _ ->
@@ -886,7 +839,7 @@ occursCheck typeVar type_ =
         Unit ->
             False
 
-        Tuple t1 t2 ->
+        Tuple2 t1 t2 ->
             occursCheck typeVar t1 || occursCheck typeVar t2
 
         Tuple3 t1 t2 t3 ->
@@ -894,11 +847,11 @@ occursCheck typeVar type_ =
                 || occursCheck typeVar t2
                 || occursCheck typeVar t3
 
-        Record fields ->
+        Record { fields } ->
             inFields fields
 
         ExtensibleRecord r ->
-            occursCheck typeVar r.type_ || inFields r.fields
+            occursCheck typeVar r.extensionTypevar || inFields r.fields
 
         UserDefinedType r ->
             List.any (occursCheck typeVar) r.args

@@ -1,5 +1,5 @@
 module Elm.TypeInference.State exposing
-    ( TIState, State, PackageName, GlobalKey, init
+    ( TIState, State, GlobalKey, init, empty
     , pure, error, fromResult, run
     , map, map2, mapError
     , do, andThen, foldl, traverse
@@ -16,7 +16,7 @@ module Elm.TypeInference.State exposing
 
 # General
 
-@docs TIState, State, PackageName, GlobalKey, init
+@docs TIState, State, GlobalKey, init, empty
 
 
 # Utilities
@@ -64,7 +64,7 @@ import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error(..))
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
-import Elm.TypeInference.Type as Type exposing (Id, MonoType, Type(..))
+import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, PackageName, Type(..))
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.VarSet as VarSet
 import RangeLike exposing (RangeLike)
@@ -72,13 +72,6 @@ import RangeLike exposing (RangeLike)
 
 
 -- GENERAL
-
-
-{-| `""` for the first-party project being inferred,
-package name ("foo/bar") for deps from `docs.json`
--}
-type alias PackageName =
-    String
 
 
 {-| Key into `globalEnv`: we need to qualify by package as well because of
@@ -281,11 +274,23 @@ modify fn =
 -- OUR API
 
 
+empty : State
+empty =
+    init
+        { lexicalEnv = Dict.empty
+        , globalEnv = Dict.empty
+        }
+
+
 {-| `lexicalEnv` is a test hook: you can populate it with types without having
 actual definitions present. `globalEnv` is how a module's inference is seeded
 with the dependencies and with the interfaces of the modules it imports.
 -}
-init : { lexicalEnv : Dict VarName Type, globalEnv : Dict GlobalKey Type } -> State
+init :
+    { lexicalEnv : Dict VarName Type
+    , globalEnv : Dict GlobalKey Type
+    }
+    -> State
 init env =
     { nextId = 0
     , nodeIds = Dict.empty

@@ -8,8 +8,6 @@
         "Elm.TypeInference",
         "Elm.TypeInference.Error",
         "Elm.TypeInference.Type",
-        "Elm.TypeInference.TypeVar",
-        "Elm.Syntax.FullModuleName",
         "Elm.TypeInference.VarSet",
         "Elm.Syntax.VarName",
         "TypeLookupTable"

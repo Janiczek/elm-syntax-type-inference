@@ -14,7 +14,7 @@ import Elm.Syntax.Range as Range exposing (Range)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
-import Elm.TypeInference.Type as Type exposing (FromTypeAnnotationError(..), MonoType)
+import Elm.TypeInference.Type.Internal as Type exposing (FromTypeAnnotationError(..), MonoType)
 import Elm.TypeInference.TypeVar as TypeVar exposing (SuperType, TypeVar)
 import Elm.Writer
 
