@@ -1,6 +1,11 @@
 module Tests.Elm.TypeInference.Fixture.ElmCore exposing (core)
 
 {-| Believable `elm/core` docs.json contents.
+
+Only functions, values and types we exercise in the tests, there could be more.
+
+Maybe it would be worth it to put a real docs.json here and parse it from JSON...
+
 -}
 
 import Elm.Docs
@@ -12,7 +17,14 @@ core : DependencyPackage
 core =
     { name = "elm/core"
     , dependencies = []
-    , modules = [ basics, maybe, list, platformCmd, char ]
+    , modules =
+        [ basics
+        , maybe
+        , list
+        , platformCmd
+        , char
+        , dict
+        ]
     }
 
 
@@ -154,5 +166,39 @@ char =
         ]
     , aliases = []
     , values = []
+    , binops = []
+    }
+
+
+dict : Elm.Docs.Module
+dict =
+    { name = "Dict"
+    , comment = ""
+    , unions =
+        [ { name = "Dict"
+          , comment = ""
+          , args = [ "k", "v" ]
+          , tags = [] -- opaque, matching real elm/core docs.json
+          }
+        ]
+    , aliases = []
+    , values =
+        [ { name = "map"
+          , comment = ""
+          , tipe =
+                Lambda
+                    (Lambda
+                        (Var "k")
+                        (Lambda
+                            (Var "v1")
+                            (Var "v2")
+                        )
+                    )
+                    (Lambda
+                        (Type "Dict" [ Var "k", Var "v1" ])
+                        (Type "Dict" [ Var "k", Var "v2" ])
+                    )
+          }
+        ]
     , binops = []
     }

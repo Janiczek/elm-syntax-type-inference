@@ -1,8 +1,16 @@
 module String.ExtraExtra exposing (indent, multilineInput)
 
+{-| -}
+
 import String.Extra
 
 
+{-|
+
+    indent 3 "a" -> "   a"
+    indent 3 "a\nb" -> "   a\n   b"
+
+-}
 indent : Int -> String -> String
 indent n string =
     let
@@ -25,6 +33,8 @@ multilineInput string =
         |> removeNewlinesAtEnds
 
 
+{-| Basically String.trim but only handles newlines, not spaces.
+-}
 removeNewlinesAtEnds : String -> String
 removeNewlinesAtEnds string =
     if String.startsWith "\n" string then

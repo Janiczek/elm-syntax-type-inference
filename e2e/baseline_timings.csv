@@ -1,13 +1,13 @@
 test,seconds
-core-extra,0.170
-elm-charts,0.262
-elm-geometry,0.860
-elm-review,0.468
-elm-review-unused,0.226
-elm-ui,0.201
-elm-units,0.049
-elm-visualization,0.285
-evg,0.150
-histogram-force-comparable,0.003
-set-import-resolution,0.003
-toy-beam-os,0.033
+core-extra,0.180
+elm-charts,0.288
+elm-geometry,0.933
+elm-review,0.511
+elm-review-unused,0.247
+elm-ui,0.208
+elm-units,0.053
+elm-visualization,0.285 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+evg,0.164
+histogram-force-comparable,0.004
+set-import-resolution,0.004
+toy-beam-os,0.035

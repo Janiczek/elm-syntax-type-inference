@@ -22,6 +22,7 @@ import Elm.TypeInference.Type exposing (Type)
 import List.Extra
 import String.ExtraExtra
 import TypeLookupTable exposing (TypeLookupTable)
+import TypeLookupTable.Internal
 
 
 type TestError
@@ -101,10 +102,8 @@ main =
             )
 
 
-{-| Lets a test say which of `dependencies`
-are actually direct (root) dependencies of the project being analyzed, vs.
-only transitively required (a dependency of a dependency) -- the latter
-can't be `import`ed by our own source, same as with real `elm make`.
+{-| Some tests need to know which deps are direct: user code can't import
+modules from a non-direct dependency.
 -}
 inferModules :
     List String
@@ -142,7 +141,7 @@ inferModules directDependencies allDependencies modules =
                                         ( file
                                         , lookupTables
                                             |> Dict.get moduleName
-                                            |> Maybe.withDefault Dict.empty
+                                            |> Maybe.withDefault (TypeLookupTable.Internal.TLT Dict.empty)
                                         )
                                     )
                         )

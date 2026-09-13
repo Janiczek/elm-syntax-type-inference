@@ -1,4 +1,4 @@
-module SCCTest exposing (suite)
+module SCCTests exposing (suite)
 
 import Dict exposing (Dict)
 import Elm.TypeInference.SCC as SCC
@@ -40,7 +40,10 @@ graphFuzzer =
                             (List.range 0 (nodeCount - 1))
                             |> List.filter (\( from, to ) -> from /= to)
                 in
-                Fuzz.listOfLengthBetween 0 (List.length possibleEdges) (Fuzz.oneOfValues possibleEdges)
+                Fuzz.listOfLengthBetween
+                    0
+                    (List.length possibleEdges)
+                    (Fuzz.oneOfValues possibleEdges)
                     |> Fuzz.map
                         (\edgeList ->
                             { nodeCount = nodeCount
@@ -113,7 +116,9 @@ namedGraphNodes graph =
 
 sccOf : NamedGraph -> List (List String)
 sccOf graph =
-    SCC.stronglyConnectedComponents (namedGraphNodes graph) (namedGraphEdges graph)
+    SCC.stronglyConnectedComponents
+        (namedGraphNodes graph)
+        (namedGraphEdges graph)
 
 
 suite : Test
@@ -238,7 +243,9 @@ suite =
                 let
                     sccs : List (List Int)
                     sccs =
-                        SCC.stronglyConnectedComponents (nodesOf graph) (edgesOf graph)
+                        SCC.stronglyConnectedComponents
+                            (nodesOf graph)
+                            (edgesOf graph)
 
                     allReturned : List Int
                     allReturned =
@@ -252,7 +259,9 @@ suite =
                 let
                     sccs : List (List Int)
                     sccs =
-                        SCC.stronglyConnectedComponents (nodesOf graph) (edgesOf graph)
+                        SCC.stronglyConnectedComponents
+                            (nodesOf graph)
+                            (edgesOf graph)
 
                     groupIndex : Dict Int Int
                     groupIndex =
@@ -288,7 +297,9 @@ suite =
                 let
                     sccs : List (List Int)
                     sccs =
-                        SCC.stronglyConnectedComponents (nodesOf graph) (edgesOf graph)
+                        SCC.stronglyConnectedComponents
+                            (nodesOf graph)
+                            (edgesOf graph)
 
                     notStronglyConnected : List Int -> Bool
                     notStronglyConnected group =
@@ -319,7 +330,9 @@ suite =
                 let
                     sccs : List (List Int)
                     sccs =
-                        SCC.stronglyConnectedComponents (nodesOf graph) (edgesOf graph)
+                        SCC.stronglyConnectedComponents
+                            (nodesOf graph)
+                            (edgesOf graph)
 
                     groupIndex : Dict Int Int
                     groupIndex =

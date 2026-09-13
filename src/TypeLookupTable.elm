@@ -1,25 +1,32 @@
-module TypeLookupTable exposing (TypeLookupTable, get)
+module TypeLookupTable exposing (TypeLookupTable, fromList, get)
 
-{-| Types inferred for source ranges in one Elm module.
+{-| Types inferred for source ranges in a given Elm module (its name is not tracked here).
 
-@docs TypeLookupTable, get
+@docs TypeLookupTable, fromList, get
 
 -}
 
-import Dict exposing (Dict)
+import Dict
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Type exposing (Type)
 import RangeLike exposing (RangeLike)
+import TypeLookupTable.Internal as Internal
 
 
-{-| The inferred type associated with each source range in one module.
--}
 type alias TypeLookupTable =
-    Dict RangeLike Type
+    Internal.TypeLookupTable
+
+
+fromList : List ( Range, Type ) -> TypeLookupTable
+fromList list =
+    list
+        |> List.map (\( range, type_ ) -> ( RangeLike.fromRange range, type_ ))
+        |> Dict.fromList
+        |> Internal.TLT
 
 
 {-| Look up the inferred type for a source range.
 -}
 get : Range -> TypeLookupTable -> Maybe Type
-get range tlt =
+get range (Internal.TLT tlt) =
     Dict.get (RangeLike.fromRange range) tlt

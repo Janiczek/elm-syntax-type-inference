@@ -1,5 +1,7 @@
 module RangeLike exposing (RangeLike, fromRange)
 
+{-| -}
+
 import Bitwise
 import Elm.Syntax.Range exposing (Range)
 

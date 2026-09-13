@@ -6,7 +6,7 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, Type)
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
-import Elm.TypeInference.Unify as Unify exposing (UnifyCfg)
+import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
 
 
 {-| One binding in the binding group.
@@ -25,7 +25,7 @@ type alias Member =
     }
 
 
-solveGroup : UnifyCfg -> List Member -> TIState ()
+solveGroup : UnifyConfig -> List Member -> TIState ()
 solveGroup cfg members =
     State.do State.enterLevel <|
         \() ->

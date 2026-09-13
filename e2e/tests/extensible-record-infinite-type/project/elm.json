@@ -1,0 +1,16 @@
+{
+    "type": "package",
+    "name": "gampleman/elm-visualization",
+    "summary": "A data visualization package for Elm",
+    "license": "MIT",
+    "version": "2.4.3",
+    "exposed-modules": [
+        "Force"
+    ],
+    "elm-version": "0.19.0 <= v < 0.20.0",
+    "dependencies": {
+        "elm/core": "1.0.0 <= v < 2.0.0"
+    },
+    "test-dependencies": {
+    }
+}

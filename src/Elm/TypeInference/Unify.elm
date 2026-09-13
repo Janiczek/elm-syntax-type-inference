@@ -1,4 +1,4 @@
-module Elm.TypeInference.Unify exposing (TypeAlias, UnifyCfg, unifyMany)
+module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
@@ -38,7 +38,7 @@ keeps the fast path for production inference while turning a violated
 returning an incorrect type.
 
 -}
-type alias UnifyCfg =
+type alias UnifyConfig =
     { typeAliases : TypeAliases
     , checks : Bool
     , internalChecks : Bool
@@ -54,7 +54,7 @@ structural cases below recurse into -- is solved against everything learned so
 far.
 
 -}
-unifyMany : UnifyCfg -> List ( MonoType, MonoType ) -> TIState ()
+unifyMany : UnifyConfig -> List ( MonoType, MonoType ) -> TIState ()
 unifyMany cfg eqs =
     State.foldl
         (\( t1, t2 ) () ->
@@ -256,7 +256,7 @@ call (`optimizations-plan.md` Step 1's groundness tracking) -- don't recompute
 them here with `Type.isParametricMono`, that would cost the same O(size) walk
 this is meant to save.
 -}
-unifyMono : UnifyCfg -> Bool -> MonoType -> Bool -> MonoType -> TIState ()
+unifyMono : UnifyConfig -> Bool -> MonoType -> Bool -> MonoType -> TIState ()
 unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
     if rawT1 == rawT2 then
         -- Always on, sound without the invariant: `_Utils_eq` starts
@@ -529,16 +529,12 @@ and unbound -- exactly what union-find needs to link or bind without creating a
 cycle.
 
 -}
-bind : UnifyCfg -> TypeVar -> MonoType -> TIState ()
+bind : UnifyConfig -> TypeVar -> MonoType -> TIState ()
 bind cfg typeVar type_ =
     if type_ == TypeVar typeVar then
         State.pure ()
 
     else if occursCheck typeVar type_ then
-        -- Unconditional, even when `cfg.checks` is off: a cyclic binding like
-        -- `a := List a` is what keeps the store acyclic, and without it
-        -- `substituteMonoTracked` would recurse into the binding forever.
-        -- It's O(size) on a type we just substituted anyway.
         State.error <| InfiniteType typeVar type_
 
     else

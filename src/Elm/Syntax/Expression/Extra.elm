@@ -18,7 +18,7 @@ functionName function =
 
 
 {-| Collects value names (not patterns).
-Useful for binding-group SCC later.
+Useful for binding-group SCC logic later.
 -}
 referencedNames : Expression -> List ( Maybe ModuleName, VarName )
 referencedNames expression =
@@ -26,9 +26,11 @@ referencedNames expression =
 
 
 {-| Like `referencedNames`, but excludes unqualified names bound by an enclosing
-lambda, pattern, or nested `let`. This is important to the binding-group SCC
-builder: a locally shadowed name must not create a dependency on an outer
-declaration with the same spelling.
+lambda, pattern or nested `let`.
+
+This is important for binding-group logic: a locally shadowed name must not
+create a dependency on outer declaration of the same name.
+
 -}
 referencedNamesIn : Set VarName -> Expression -> List ( Maybe ModuleName, VarName )
 referencedNamesIn bound expression =

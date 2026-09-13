@@ -137,7 +137,7 @@ toString t =
                         |> Dict.toList
                         |> List.map (\( name, fieldType ) -> name ++ " : " ++ toString fieldType)
             in
-            "{" ++ String.join ", " fieldStrings ++ ", .." ++ extensionTypevar ++ "}"
+            "{ " ++ extensionTypevar ++ " | " ++ String.join ", " fieldStrings ++ " }"
 
         Named { moduleName, name, arguments } ->
             let

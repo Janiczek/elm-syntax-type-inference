@@ -62,6 +62,7 @@ import Maybe.Extra
 import Result.Extra
 import Set exposing (Set)
 import TypeLookupTable exposing (TypeLookupTable)
+import TypeLookupTable.Internal
 
 
 
@@ -547,7 +548,7 @@ moduleResult ctx outgoingAliases =
                                             Dict.empty
                             in
                             State.pure
-                                { table = typesByRange
+                                { table = TypeLookupTable.Internal.TLT typesByRange
                                 , interface =
                                     Interface.create
                                         { moduleIndex = ctx.thisIndex

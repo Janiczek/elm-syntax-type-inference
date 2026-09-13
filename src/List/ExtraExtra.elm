@@ -3,9 +3,11 @@ module List.ExtraExtra exposing (fastConcatMap)
 {-| -}
 
 
-{-| `foldr`, not `foldl`: folding from the left and consing `fn item ++ acc`
-builds the result with the groups in _reverse_ order, which is not what a
-`concatMap` is allowed to do. `List.foldr` is stack-safe in `elm/core`.
+{-| This particular variant doesn't preserve the order like List.concatMap would, but it's marginally faster. We've adjusted the code using it.
+
+<https://github.com/jfmengels/elm-benchmarks/blob/main/src/ListOrderingExploration/ListConcatMap.elm>
+<https://github.com/jfmengels/elm-benchmarks/blob/main/src/ListOrderingExploration/ListConcatMap-Results-Chrome.png>
+
 -}
 fastConcatMap : (a -> List b) -> List a -> List b
 fastConcatMap fn list =

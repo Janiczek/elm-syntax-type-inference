@@ -1,4 +1,4 @@
-module Tests exposing (suite)
+module TypeInferenceTests exposing (suite)
 
 import Dict exposing (Dict)
 import Elm.Docs
@@ -53,6 +53,7 @@ suite =
         , unexposedUnionConstructorIsntFound
         , importWithSpecificExposes
         , duplicateImportAliasRegression
+        , extensibleRecordRegression
         ]
 
 
@@ -343,6 +344,16 @@ goodExprs =
       ( "let f x = x in let g y = f y in (g 1, g ())", isTuple isNumber (is Unit) )
     , -- Self-recursion doesn't block generalization
       ( "let loop x = loop x in (loop 1, loop ())", isTuple isVar isVar )
+    , -- elm-visualization Force example
+      ( "let ent = {x=1,y=2} in { ent | x = ent.x, y = ent.y }", isRecord [ ( "x", isNumber ), ( "y", isNumber ) ] )
+    , ( "\\ent -> { ent | x = ent.x, y = ent.y }"
+      , isFunction
+            (isExtensibleRecordWithFields [ ( "x", isVar ), ( "y", isVar ) ])
+            (isExtensibleRecordWithFields [ ( "x", isVar ), ( "y", isVar ) ])
+      )
+    , ( "(\\ent -> { ent | x = ent.x, y = ent.y }) {x = 1, y = 2}"
+      , isRecord [ ( "x", isNumber ), ( "y", isNumber ) ]
+      )
     , -- Annotations are trusted, not checked. We assume `elm make` passes.
       -- This allows having eg. `Float` instead of `number` literals.
       ( """
@@ -2286,3 +2297,33 @@ importWithSpecificExposes =
             getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
                 |> Result.map Type.toString
                 |> Expect.equal (Ok "( String, String ) -> String")
+
+
+extensibleRecordRegression : Test
+extensibleRecordRegression =
+    Test.test "extensible record nesting" <|
+        \() ->
+            let
+                modules : Dict ModuleName String
+                modules =
+                    Dict.singleton [ "Main" ] <|
+                        String.ExtraExtra.multilineInput """
+                        module Force exposing ( Entity, applyForce )
+
+                        import Dict exposing (Dict)
+
+                        type alias Entity comparable a =
+                            { a
+                                | x : Float
+                                , y : Float
+                                , id : comparable
+                            }
+
+                        applyForce : Dict comparable (Entity comparable a) -> Dict comparable (Entity comparable a)
+                        applyForce entities =
+                            Dict.map (\\_ ent -> { ent | x = ent.x, y = ent.y }) entities
+                        """
+            in
+            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Force" ] "applyForce"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "Dict comparable (Entity comparable a) -> Dict comparable (Entity comparable a)")

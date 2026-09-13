@@ -4,6 +4,8 @@ module NoSlowConcat exposing (rule)
 
 To be used with <https://package.elm-lang.org/packages/jfmengels/elm-review/latest/>
 
+TODO: add an auto-fix
+
 
 # Rule
 

@@ -1,0 +1,4 @@
+{
+  "expect": "pass",
+  "note": "SSCCE made from gampleman/elm-visualization, related to extensible records"
+}

@@ -3,8 +3,11 @@ module Elm.TypeInference.TypeEquation exposing (TypeEquation, dropLabel)
 import Elm.TypeInference.Type.Internal exposing (MonoType)
 
 
-{-| Always mono types: schemes (foralls) live in environment and are
-instantiated to mono types before equation is generated.
+{-| Equations are always between mono types, never between schemes (foralls).
+If schemes are involved, they get instantiated to mono types first.
+
+The third element (String) is a debugging crutch.
+
 -}
 type alias TypeEquation =
     ( MonoType, MonoType, String )

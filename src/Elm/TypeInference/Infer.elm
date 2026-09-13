@@ -60,8 +60,8 @@ type alias Ctx =
 
 {-| Bundle `Ctx`'s pieces `Unify` needs into its own config record.
 -}
-unifyCfg : Ctx -> Unify.UnifyCfg
-unifyCfg ctx =
+unifyConfig : Ctx -> Unify.UnifyConfig
+unifyConfig ctx =
     { typeAliases = ctx.typeAliases
     , checks = ctx.checks
     , internalChecks = not ctx.checks
@@ -778,7 +778,7 @@ solveLetDeclarations ctx declarations =
                                         droppedEqs =
                                             List.map (\( t1, t2, _ ) -> ( t1, t2 )) eqs
                                     in
-                                    Unify.unifyMany (unifyCfg ctx) droppedEqs
+                                    Unify.unifyMany (unifyConfig ctx) droppedEqs
 
         solveGroup : List Int -> TIState ()
         solveGroup groupIndices =
@@ -816,7 +816,7 @@ solveLetDeclarations ctx declarations =
             State.do
                 (functions
                     |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
-                    |> State.andThen (BindingGroup.solveGroup (unifyCfg ctx))
+                    |> State.andThen (BindingGroup.solveGroup (unifyConfig ctx))
                 )
             <|
                 \() ->

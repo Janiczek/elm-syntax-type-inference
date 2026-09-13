@@ -3,8 +3,7 @@ module Result.ExtraExtra exposing (combineFilter, firstJustLazy)
 {-| -}
 
 
-{-| Try each thunk in order, stopping at the first Ok Just or Err.
-Otherwise return Ok Nothing.
+{-| Try thunks until we find something other than Ok Nothing.
 -}
 firstJustLazy : List (() -> Result e (Maybe a)) -> Result e (Maybe a)
 firstJustLazy lookups =
@@ -21,7 +20,7 @@ firstJustLazy lookups =
                     found
 
 
-{-| Like `List.filter`, but the predicate can fail and short-circuit.
+{-| Like `List.filter`, but the predicate can fail and short-circuit the whole filter traversal.
 -}
 combineFilter : (a -> Result e Bool) -> List a -> Result e (List a)
 combineFilter predicate list =
@@ -30,16 +29,17 @@ combineFilter predicate list =
             Ok []
 
         x :: rest ->
-            Result.andThen
-                (\keep ->
+            case predicate x of
+                Err err ->
+                    Err err
+
+                Ok ok ->
                     combineFilter predicate rest
                         |> Result.map
                             (\restFiltered ->
-                                if keep then
+                                if ok then
                                     x :: restFiltered
 
                                 else
                                     restFiltered
                             )
-                )
-                (predicate x)

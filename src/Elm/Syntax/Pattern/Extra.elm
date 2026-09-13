@@ -6,9 +6,15 @@ import Elm.Syntax.VarName exposing (VarName)
 import List.ExtraExtra
 
 
+{-| Collect vars from a pattern
+-}
 varNames : Pattern -> List VarName
 varNames pattern =
     case pattern of
+        VarPattern var ->
+            [ var ]
+
+        --
         AllPattern ->
             []
 
@@ -41,9 +47,6 @@ varNames pattern =
 
         ListPattern patterns ->
             List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns
-
-        VarPattern var ->
-            [ var ]
 
         NamedPattern _ patterns ->
             List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns

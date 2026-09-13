@@ -9,6 +9,8 @@ module Elm.TypeInference.TypeVar exposing
 
 {-| -}
 
+import List.Extra
+
 
 {-|
 
@@ -36,6 +38,8 @@ type SuperType
     | {- String | List comparable -} CompAppend
 
 
+{-| TODO: test that the published API surface never gives a Generated typevar (#0, number#1 etc.)
+-}
 toString : TypeVar -> String
 toString ( style, super ) =
     let
@@ -73,18 +77,22 @@ parse name =
             ]
     in
     prefixes
-        |> List.filterMap
+        |> List.Extra.findMap
             (\( prefix, super ) ->
                 if String.startsWith prefix name then
-                    Just ( Named (String.dropLeft (String.length prefix) name), super )
+                    Just
+                        ( Named (String.dropLeft (String.length prefix) name)
+                        , super
+                        )
 
                 else
                     Nothing
             )
-        |> List.head
         |> Maybe.withDefault ( Named name, Normal )
 
 
+{-| TODO: test that the exposed API surface doesn't show "any type" anywhere.
+-}
 superTypeToString : SuperType -> String
 superTypeToString super =
     case super of
