@@ -1,8 +1,12 @@
-module Elm.TypeInference.Error exposing (Error(..), fromTypeAnnotationError, toString, withDeclarations)
+module Elm.TypeInference.Error exposing
+    ( Error, ErrorDetails(..)
+    , fromTypeAnnotationError, toString
+    )
 
 {-| Errors reported while resolving or inferring a module.
 
-@docs Error, fromTypeAnnotationError, toString, withDeclarations
+@docs Error, ErrorDetails
+@docs fromTypeAnnotationError, toString
 
 -}
 
@@ -19,9 +23,18 @@ import Elm.TypeInference.TypeVar as TypeVar exposing (SuperType, TypeVar)
 import Elm.Writer
 
 
-{-| Failures encountered while resolving or inferring a module.
+{-| A type inference error + location info.
 -}
-type Error
+type alias Error =
+    { moduleName : FullModuleName
+    , declarationNames : List VarName
+    , details : ErrorDetails
+    }
+
+
+{-| Types of errors.
+-}
+type ErrorDetails
     = -- Syntax errors
       ImpossibleExpr (Node Expression)
     | ImpossiblePattern (Node Pattern)
@@ -37,37 +50,11 @@ type Error
     | InfiniteType TypeVar MonoType
     | SuperTypeMismatch SuperType MonoType
     | InternalInconsistency MonoType MonoType
-      {- Location for the three type errors above, which carry none of their
-         own -- without it a failure is essentially undebuggable.
-      -}
-    | InDeclarations { moduleName : FullModuleName, declarationNames : List VarName } Error
-
-
-{-| Attach the binding group an error came from -- but only to the errors that
-don't already say where they happened.
-
-TODO: put the location on the error variants themselves, remove InDeclarations
-
--}
-withDeclarations : { moduleName : FullModuleName, declarationNames : List VarName } -> Error -> Error
-withDeclarations where_ error =
-    case error of
-        TypeMismatchMono _ _ ->
-            InDeclarations where_ error
-
-        InfiniteType _ _ ->
-            InDeclarations where_ error
-
-        SuperTypeMismatch _ _ ->
-            InDeclarations where_ error
-
-        _ ->
-            error
 
 
 {-| Convert a type-annotation conversion failure into an inference error.
 -}
-fromTypeAnnotationError : FromTypeAnnotationError -> Error
+fromTypeAnnotationError : FromTypeAnnotationError -> ErrorDetails
 fromTypeAnnotationError err =
     case err of
         ImpossibleAnnotation typeAnnotation ->
@@ -81,7 +68,21 @@ fromTypeAnnotationError err =
 -}
 toString : Error -> String
 toString error =
-    case error of
+    detailsToString error.details
+        ++ " (in "
+        ++ FullModuleName.toString error.moduleName
+        ++ (if List.isEmpty error.declarationNames then
+                ""
+
+            else
+                "." ++ String.join "/" error.declarationNames
+           )
+        ++ ")"
+
+
+detailsToString : ErrorDetails -> String
+detailsToString details =
+    case details of
         ImpossibleExpr exprNode ->
             String.join " "
                 [ "ImpossibleExpr"
@@ -144,14 +145,6 @@ toString error =
                 , parenIfHasSpace (TypeVar.toString typeVar)
                 , parenIfHasSpace (Type.monoTypeToString type_)
                 ]
-
-        InDeclarations r inner ->
-            toString inner
-                ++ " (in "
-                ++ FullModuleName.toString r.moduleName
-                ++ "."
-                ++ String.join "/" r.declarationNames
-                ++ ")"
 
         SuperTypeMismatch super type_ ->
             String.join " "

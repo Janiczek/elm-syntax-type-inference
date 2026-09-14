@@ -26,7 +26,7 @@ import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
-import Elm.TypeInference.Error as Error exposing (Error(..))
+import Elm.TypeInference.Error as Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
@@ -65,12 +65,26 @@ unifyConfig ctx =
     { typeAliases = ctx.typeAliases
     , checks = ctx.checks
     , internalChecks = not ctx.checks
+    , moduleName = ctx.thisModuleName
+    , declarationNames = []
     }
 
 
 typeResolver : Ctx -> TypeResolver
 typeResolver ctx =
     ModuleLookup.typeResolverFor ctx.index ctx.modules ctx.thisModule
+
+
+{-| Wrap details with the current module's location.
+Binding-group type errors get their group via `UnifyConfig`;
+everything else carries the module with an empty group.
+-}
+toError : Ctx -> ErrorDetails -> Error
+toError ctx details =
+    { moduleName = ctx.thisModuleName
+    , declarationNames = []
+    , details = details
+    }
 
 
 type alias Inferred =
@@ -172,7 +186,7 @@ annotationScheme ctx maybeSigNode =
                 |> .typeAnnotation
                 |> Node.value
                 |> TypeI.fromTypeAnnotation (typeResolver ctx)
-                |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                |> Result.mapError (State.error << toError ctx << Error.fromTypeAnnotationError)
                 |> Result.map (TypeI.closeOver >> Just >> State.pure)
                 |> Result.Extra.merge
 
@@ -195,7 +209,7 @@ signatureEquations ctx declId maybeSigNode =
                 >> .typeAnnotation
                 >> Node.value
                 >> TypeI.fromTypeAnnotation (typeResolver ctx)
-                >> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                >> Result.mapError (State.error << toError ctx << Error.fromTypeAnnotationError)
                 >> Result.map
                     (\annotationType ->
                         State.do (State.instantiate (TypeI.closeOver annotationType)) <|
@@ -287,7 +301,7 @@ inferExpr ctx exprNode =
 
                 impossibleExpr : TIState Inferred
                 impossibleExpr =
-                    State.error <| ImpossibleExpr exprNode
+                    State.error (toError ctx (ImpossibleExpr exprNode))
             in
             case Node.value exprNode of
                 UnitExpr ->
@@ -364,8 +378,8 @@ inferExpr ctx exprNode =
                                             \varType ->
                                                 finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
 
-                                    Err err ->
-                                        State.error err
+                                    Err details ->
+                                        State.error (toError ctx details)
 
                 IfBlock e1 e2 e3 ->
                     State.do (f e1) <|
@@ -883,7 +897,7 @@ inferPattern ctx patternNode =
                     let
                         impossiblePattern : TIState Inferred
                         impossiblePattern =
-                            State.error <| ImpossiblePattern patternNode
+                            State.error (toError ctx (ImpossiblePattern patternNode))
                     in
                     State.do (inferMany p patterns) <|
                         \( ids, eqs ) ->

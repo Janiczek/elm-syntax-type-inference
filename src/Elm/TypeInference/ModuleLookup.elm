@@ -14,7 +14,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
-import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
 import Elm.TypeInference.State as State exposing (TIState)
@@ -122,7 +122,7 @@ moduleOfVar :
     -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> Result Error (Maybe ( PackageName, FullModuleName ))
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
 moduleOfVar index modules thisModule maybeModuleName varName =
     Result.ExtraExtra.firstJustLazy
         [ \() -> unqualifiedVarInThisModule thisModule maybeModuleName varName
@@ -146,15 +146,23 @@ findModuleOfVar :
     -> TIState ( PackageName, FullModuleName )
 findModuleOfVar index modules thisModule maybeModuleName varName =
     case moduleOfVar index modules thisModule maybeModuleName varName of
-        Err err ->
-            State.error err
+        Err details ->
+            State.error
+                { moduleName = thisModule.moduleName
+                , declarationNames = []
+                , details = details
+                }
 
         Ok Nothing ->
-            State.error <|
-                VarNotFound
-                    { varName = varName
-                    , usedIn = thisModule.moduleName
-                    }
+            State.error
+                { moduleName = thisModule.moduleName
+                , declarationNames = []
+                , details =
+                    VarNotFound
+                        { varName = varName
+                        , usedIn = thisModule.moduleName
+                        }
+                }
 
         Ok (Just result) ->
             State.pure result
@@ -169,7 +177,7 @@ resolveOperatorFunction :
     Dict FullModuleName ModuleIndex
     -> FullModuleName
     -> VarName
-    -> Result Error (Maybe ( FullModuleName, VarName ))
+    -> Result ErrorDetails (Maybe ( FullModuleName, VarName ))
 resolveOperatorFunction modules operatorModuleName operator =
     case Dict.get operatorModuleName modules of
         Nothing ->
@@ -189,7 +197,7 @@ unqualifiedVarInThisModule :
     ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> Result Error (Maybe ( PackageName, FullModuleName ))
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
 unqualifiedVarInThisModule thisModule maybeModuleName varName =
     Ok <|
         if maybeModuleName == Nothing && Set.member varName thisModule.declaredValues then
@@ -205,7 +213,7 @@ unqualifiedVarInImportedModule :
     -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> Result Error (Maybe ( PackageName, FullModuleName ))
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
 unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName =
     if maybeModuleName /= Nothing then
         -- we don't care about qualified vars in this function
@@ -213,7 +221,7 @@ unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName 
 
     else
         let
-            importDefinesValue : ImportIndex -> Result Error Bool
+            importDefinesValue : ImportIndex -> Result ErrorDetails Bool
             importDefinesValue import_ =
                 case Dict.get import_.moduleName modules of
                     Just importedModule ->
@@ -223,7 +231,7 @@ unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName 
                         dependencyModuleDefines index import_.dottedModuleName varName
                             |> Result.map ((/=) Nothing)
 
-            acceptableImports : Result Error (List ImportIndex)
+            acceptableImports : Result ErrorDetails (List ImportIndex)
             acceptableImports =
                 thisModule.imports
                     |> List.filter (\import_ -> ModuleIndex.importCouldExposeValue import_ varName)
@@ -261,7 +269,7 @@ qualifiedVarInImportedModule :
     -> Dict FullModuleName ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> Result Error (Maybe ( PackageName, FullModuleName ))
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
 qualifiedVarInImportedModule index modules maybeModuleName varName =
     case maybeModuleName of
         Nothing ->
@@ -288,7 +296,7 @@ qualifiedVarInAliasedModule :
     -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> Result Error (Maybe ( PackageName, FullModuleName ))
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
 qualifiedVarInAliasedModule index modules thisModule maybeModuleName varName =
     let
         {- The same alias can be given to more than one import (e.g.
@@ -333,7 +341,7 @@ implicitUnqualifiedValue :
     -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> Result Error (Maybe ( PackageName, FullModuleName ))
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
 implicitUnqualifiedValue index thisModule maybeModuleName varName =
     if maybeModuleName /= Nothing then
         Ok Nothing
@@ -365,7 +373,7 @@ implicitUnqualifiedValue index thisModule maybeModuleName varName =
                 )
 
 
-dependencyModuleDefines : Index -> String -> VarName -> Result Error (Maybe PackageName)
+dependencyModuleDefines : Index -> String -> VarName -> Result ErrorDetails (Maybe PackageName)
 dependencyModuleDefines (Index index) moduleNameStr varName =
     let
         matches : List PackageName

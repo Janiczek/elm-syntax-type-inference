@@ -45,7 +45,7 @@ import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
-import Elm.TypeInference.Error as Error exposing (Error(..))
+import Elm.TypeInference.Error as Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.Infer as Infer
 import Elm.TypeInference.Interface as Interface
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
@@ -297,7 +297,12 @@ inferProject checks depEnv files =
     in
     if missingModuleName then
         { tables = Dict.empty
-        , errors = Dict.singleton [] MissingModuleName
+        , errors =
+            Dict.singleton []
+                { moduleName = FullModuleName.fromModuleName_ []
+                , declarationNames = []
+                , details = MissingModuleName
+                }
         }
 
     else
@@ -645,7 +650,7 @@ solveModule { checks } ctx typeAliases file =
     sccs
         |> State.traverse
             (\group ->
-                (group
+                group
                     |> List.filterMap (\key -> Dict.get key byKey)
                     |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember inferCtx declNode fn)
                     |> State.andThen
@@ -653,19 +658,9 @@ solveModule { checks } ctx typeAliases file =
                             { typeAliases = typeAliases
                             , checks = checks
                             , internalChecks = not checks
+                            , moduleName = ctx.thisModuleName
+                            , declarationNames = group
                             }
-                        )
-                )
-                    |> -- `TypeMismatchMono` and friends carry no location of
-                       -- their own, which makes a failure essentially
-                       -- undebuggable. Say at least which binding group it
-                       -- came from.
-                       State.mapError
-                        (\_ ->
-                            Error.withDeclarations
-                                { moduleName = ctx.thisModuleName
-                                , declarationNames = group
-                                }
                         )
             )
         |> State.map (always ())
@@ -692,12 +687,19 @@ gatherTypeAliases ctx file =
                 case Node.value declarationNode of
                     Declaration.AliasDeclaration typeAlias ->
                         let
+                            toError : ErrorDetails -> Error
+                            toError details =
+                                { moduleName = moduleName
+                                , declarationNames = [ Node.value typeAlias.name ]
+                                , details = details
+                                }
+
                             type_ : TIState MonoType
                             type_ =
                                 typeAlias.typeAnnotation
                                     |> Node.value
                                     |> TypeI.fromTypeAnnotation resolver
-                                    |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                                    |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
                                     |> Result.map State.pure
                                     |> Result.Extra.merge
 
@@ -713,7 +715,7 @@ gatherTypeAliases ctx file =
                                                     Tuple.second (Node.value fieldNode)
                                                         |> Node.value
                                                         |> TypeI.fromTypeAnnotation resolver
-                                                        |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                                                        |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
                                                         |> Result.map State.pure
                                                         |> Result.Extra.merge
                                                 )
@@ -813,6 +815,13 @@ registerCustomType resolver moduleName customType =
         typeName =
             Node.value customType.name
 
+        toError : ErrorDetails -> Error
+        toError details =
+            { moduleName = moduleName
+            , declarationNames = [ typeName ]
+            , details = details
+            }
+
         resultType : MonoType
         resultType =
             UserDefinedType
@@ -845,7 +854,7 @@ registerCustomType resolver moduleName customType =
                             |> Result.Extra.combine
                 in
                 argTypes
-                    |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+                    |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
                     |> Result.map
                         (\args ->
                             let
@@ -866,10 +875,18 @@ registerCustomType resolver moduleName customType =
 
 registerPort : TypeResolver -> FullModuleName -> Signature -> TIState ()
 registerPort resolver moduleName sig =
+    let
+        toError : ErrorDetails -> Error
+        toError details =
+            { moduleName = moduleName
+            , declarationNames = [ Node.value sig.name ]
+            , details = details
+            }
+    in
     sig.typeAnnotation
         |> Node.value
         |> TypeI.fromTypeAnnotation resolver
-        |> Result.mapError (State.error << Error.fromTypeAnnotationError)
+        |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
         |> Result.map
             (\t ->
                 State.addGlobalBinding

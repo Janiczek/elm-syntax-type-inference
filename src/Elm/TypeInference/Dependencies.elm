@@ -14,7 +14,7 @@ import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
-import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type exposing (PackageName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
@@ -44,7 +44,7 @@ fromList packages =
 {-| Resolves a module name from docs.json to its package.
 -}
 type alias Resolver =
-    String -> Result Error ( PackageName, FullModuleName )
+    String -> Result ErrorDetails ( PackageName, FullModuleName )
 
 
 resolverFor : Dependencies -> PackageName -> Resolver
@@ -113,7 +113,7 @@ splitLastDot qualifiedName =
             ( rest |> List.reverse |> String.join ".", last )
 
 
-fromDocsType : Resolver -> Elm.Type.Type -> Result Error MonoType
+fromDocsType : Resolver -> Elm.Type.Type -> Result ErrorDetails MonoType
 fromDocsType resolver type_ =
     case type_ of
         Elm.Type.Var name ->
@@ -179,7 +179,7 @@ fromDocsType resolver type_ =
                     )
 
 
-fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result Error (List ( String, MonoType ))
+fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ErrorDetails (List ( String, MonoType ))
 fromDocsFields resolver fields =
     Result.Extra.combineMap
         (\( name, t ) -> fromDocsType resolver t |> Result.map (Tuple.pair name))
@@ -224,9 +224,16 @@ registerModule pkgName resolver mod =
         fullModuleName =
             FullModuleName.fromDotted mod.name
 
+        toError : ErrorDetails -> Error
+        toError details =
+            { moduleName = fullModuleName
+            , declarationNames = []
+            , details = details
+            }
+
         addBinding : VarName -> Elm.Type.Type -> TIState ()
         addBinding name tipe =
-            State.do (State.fromResult (fromDocsType resolver tipe)) <|
+            State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <|
                 \monoType ->
                     State.addGlobalBinding ( pkgName, fullModuleName, name ) (TypeI.closeOver monoType)
     in
@@ -244,6 +251,13 @@ registerModule pkgName resolver mod =
 registerUnion : PackageName -> FullModuleName -> Resolver -> Elm.Docs.Union -> TIState ()
 registerUnion pkgName fullModuleName resolver union =
     let
+        toError : ErrorDetails -> Error
+        toError details =
+            { moduleName = fullModuleName
+            , declarationNames = []
+            , details = details
+            }
+
         args : List MonoType
         args =
             union.args |> List.map (\argName -> TypeVar (TypeVar.parse argName))
@@ -265,7 +279,7 @@ registerUnion pkgName fullModuleName resolver union =
     union.tags
         |> State.traverse
             (\( ctorName, argTypeStrings ) ->
-                State.do (State.fromResult (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings)) <|
+                State.do (State.fromResult (Result.mapError toError (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings))) <|
                     \argTypes ->
                         let
                             ctorType : MonoType
@@ -287,14 +301,22 @@ registerAlias :
     -> Elm.Docs.Alias
     -> TIState (Maybe ( ( PackageName, FullModuleName, VarName ), TypeAlias ))
 registerAlias pkgName fullModuleName resolver alias_ =
-    State.do (State.fromResult (fromDocsType resolver alias_.tipe)) <|
+    let
+        toError : ErrorDetails -> Error
+        toError details =
+            { moduleName = fullModuleName
+            , declarationNames = []
+            , details = details
+            }
+    in
+    State.do (State.fromResult (Result.mapError toError (fromDocsType resolver alias_.tipe))) <|
         \aliasMono ->
             let
                 registerConstructor : TIState ()
                 registerConstructor =
                     case alias_.tipe of
                         Elm.Type.Record fields Nothing ->
-                            State.do (State.fromResult (fromDocsFields resolver fields)) <|
+                            State.do (State.fromResult (Result.mapError toError (fromDocsFields resolver fields))) <|
                                 \resolvedFields ->
                                     let
                                         ctorType : MonoType

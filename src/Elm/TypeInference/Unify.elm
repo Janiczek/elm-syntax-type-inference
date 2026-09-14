@@ -3,7 +3,7 @@ module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
-import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type.Internal as Type
@@ -42,6 +42,8 @@ type alias UnifyConfig =
     { typeAliases : TypeAliases
     , checks : Bool
     , internalChecks : Bool
+    , moduleName : FullModuleName
+    , declarationNames : List VarName
     }
 
 
@@ -274,7 +276,11 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
         -- to something non-ground, since an alias's only free vars
         -- are its args).
         if cfg.internalChecks then
-            State.error (InternalInconsistency rawT1 rawT2)
+            State.error
+                { moduleName = cfg.moduleName
+                , declarationNames = cfg.declarationNames
+                , details = InternalInconsistency rawT1 rawT2
+                }
 
         else
             State.pure ()
@@ -295,7 +301,11 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
 
             typeMismatch : TIState ()
             typeMismatch =
-                State.error <| TypeMismatchMono t1 t2
+                State.error
+                    { moduleName = cfg.moduleName
+                    , declarationNames = cfg.declarationNames
+                    , details = TypeMismatchMono t1 t2
+                    }
 
             recordBindings : Dict VarName MonoType -> Dict VarName MonoType -> TIState ()
             recordBindings bindings1 bindings2 =
@@ -531,7 +541,11 @@ bind cfg typeVar type_ =
         State.pure ()
 
     else if occursCheck typeVar type_ then
-        State.error <| InfiniteType typeVar type_
+        State.error
+            { moduleName = cfg.moduleName
+            , declarationNames = cfg.declarationNames
+            , details = InfiniteType typeVar type_
+            }
 
     else
         let
@@ -542,7 +556,11 @@ bind cfg typeVar type_ =
             TypeVar (( _, otherSuper ) as otherVar) ->
                 case meet super otherSuper of
                     Nothing ->
-                        State.error <| SuperTypeMismatch super type_
+                        State.error
+                            { moduleName = cfg.moduleName
+                            , declarationNames = cfg.declarationNames
+                            , details = SuperTypeMismatch super type_
+                            }
 
                     Just m ->
                         if m == super && m == otherSuper then
@@ -596,7 +614,11 @@ bind cfg typeVar type_ =
                     State.modifySubst (SubstitutionMap.bindRoot typeVar type_)
 
                 else
-                    State.error <| SuperTypeMismatch super type_
+                    State.error
+                        { moduleName = cfg.moduleName
+                        , declarationNames = cfg.declarationNames
+                        , details = SuperTypeMismatch super type_
+                        }
 
 
 {-| The most specific supertype that satisfies both constraints, if any.

@@ -6,7 +6,7 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)
-import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.State as State
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type exposing (PackageName, Type(..))
@@ -917,12 +917,17 @@ main = 1
 """
                 in
                 case getDeclTypeWithDeps [ elmUi, styleElements, elmUiWithContext ] modules [ "Main" ] "main" of
-                    Err (CouldntInfer (AmbiguousModuleOwner { moduleName, possiblePackages })) ->
-                        Expect.all
-                            [ \_ -> moduleName |> Expect.equal "Element"
-                            , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
-                            ]
-                            ()
+                    Err (CouldntInfer err) ->
+                        case err.details of
+                            AmbiguousModuleOwner { moduleName, possiblePackages } ->
+                                Expect.all
+                                    [ \_ -> moduleName |> Expect.equal "Element"
+                                    , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                                    ]
+                                    ()
+
+                            otherDetails ->
+                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherDetails)
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
@@ -987,12 +992,17 @@ main = Element.text "hi"
 """
                 in
                 case getDeclTypeWithDeps [ elmUi, styleElements ] modules [ "Main" ] "main" of
-                    Err (CouldntInfer (AmbiguousModuleOwner { moduleName, possiblePackages })) ->
-                        Expect.all
-                            [ \_ -> moduleName |> Expect.equal "Element"
-                            , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
-                            ]
-                            ()
+                    Err (CouldntInfer err) ->
+                        case err.details of
+                            AmbiguousModuleOwner { moduleName, possiblePackages } ->
+                                Expect.all
+                                    [ \_ -> moduleName |> Expect.equal "Element"
+                                    , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                                    ]
+                                    ()
+
+                            otherDetails ->
+                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherDetails)
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
@@ -1052,12 +1062,17 @@ main = 1
 """
                 in
                 case getDeclTypeWithDeps [ elmUi, styleElements ] modules [ "Main" ] "thing" of
-                    Err (CouldntInfer (AmbiguousModuleOwner { moduleName, possiblePackages })) ->
-                        Expect.all
-                            [ \_ -> moduleName |> Expect.equal "Element"
-                            , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
-                            ]
-                            ()
+                    Err (CouldntInfer err) ->
+                        case err.details of
+                            AmbiguousModuleOwner { moduleName, possiblePackages } ->
+                                Expect.all
+                                    [ \_ -> moduleName |> Expect.equal "Element"
+                                    , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                                    ]
+                                    ()
+
+                            otherDetails ->
+                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherDetails)
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
@@ -1722,7 +1737,7 @@ generatedVar n =
 
 runUnify : Dict ( PackageName, FullModuleName, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
-    (State.do (Unify.unifyMany { typeAliases = typeAliases, checks = True, internalChecks = False } eqs) <|
+    (State.do (Unify.unifyMany { typeAliases = typeAliases, checks = True, internalChecks = False, moduleName = mainModule, declarationNames = [] } eqs) <|
         \() ->
             State.getSubst
     )
@@ -2187,11 +2202,14 @@ unexposedUnionConstructorIsntFound =
                 |> Expect.equal
                     (Err
                         (CouldntInfer
-                            (VarNotFound
-                                { usedIn = FullModuleName.fromModuleName_ [ "Main" ]
-                                , varName = "Foo"
-                                }
-                            )
+                            { moduleName = FullModuleName.fromModuleName_ [ "Main" ]
+                            , declarationNames = []
+                            , details =
+                                VarNotFound
+                                    { usedIn = FullModuleName.fromModuleName_ [ "Main" ]
+                                    , varName = "Foo"
+                                    }
+                            }
                         )
                     )
 

@@ -62,7 +62,7 @@ import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.VarName exposing (VarName)
-import Elm.TypeInference.Error exposing (Error(..))
+import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
 import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, PackageName, Type(..))
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
@@ -504,11 +504,15 @@ lookupEnv thisModule var =
         \env ->
             case Dict.get var env of
                 Nothing ->
-                    error <|
-                        VarNotFound
-                            { usedIn = thisModule
-                            , varName = var
-                            }
+                    error
+                        { moduleName = thisModule
+                        , declarationNames = []
+                        , details =
+                            VarNotFound
+                                { usedIn = thisModule
+                                , varName = var
+                                }
+                        }
 
                 Just type_ ->
                     do (substitute type_) <|
@@ -549,11 +553,15 @@ lookupGlobalEnv package moduleName var =
         \env ->
             case Dict.get ( package, moduleName, var ) env of
                 Nothing ->
-                    error <|
-                        VarNotFound
-                            { usedIn = moduleName
-                            , varName = var
-                            }
+                    error
+                        { moduleName = moduleName
+                        , declarationNames = []
+                        , details =
+                            VarNotFound
+                                { usedIn = moduleName
+                                , varName = var
+                                }
+                        }
 
                 Just type_ ->
                     instantiate type_
