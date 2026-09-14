@@ -303,8 +303,8 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             noSubstitutionNeeded =
                 State.pure ()
 
-            typeMismatch : TIState ()
-            typeMismatch =
+            typeMismatch : () -> TIState ()
+            typeMismatch () =
                 let
                     ( pubT1, pubT2 ) =
                         Type.toPublicPair t1 t2
@@ -318,12 +318,12 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             recordBindings : Dict VarName MonoType -> Dict VarName MonoType -> TIState ()
             recordBindings bindings1 bindings2 =
                 if Dict.size bindings1 /= Dict.size bindings2 then
-                    typeMismatch
+                    typeMismatch ()
 
                 else
                     case zipRecordFields bindings1 bindings2 of
                         Nothing ->
-                            typeMismatch
+                            typeMismatch ()
 
                         Just eqs ->
                             unifyMany cfg eqs
@@ -337,7 +337,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                 -> TIState ()
             recordVsExtensible recordFields er =
                 if not (List.all (\k -> Dict.member k recordFields) (Dict.keys er.fields)) then
-                    typeMismatch
+                    typeMismatch ()
 
                 else
                     let
@@ -365,37 +365,37 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                 noSubstitutionNeeded
 
             ( Int, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Float, Float ) ->
                 noSubstitutionNeeded
 
             ( Float, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( String, String ) ->
                 noSubstitutionNeeded
 
             ( String, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Char, Char ) ->
                 noSubstitutionNeeded
 
             ( Char, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Bool, Bool ) ->
                 noSubstitutionNeeded
 
             ( Bool, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Unit, Unit ) ->
                 noSubstitutionNeeded
 
             ( Unit, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Function a, Function b ) ->
                 unifyMany
@@ -405,13 +405,13 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     ]
 
             ( Function _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( List list1, List list2 ) ->
                 unifyMany cfg [ ( list1, list2 ) ]
 
             ( List _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Tuple2 t1e1 t1e2, Tuple2 t2e1 t2e2 ) ->
                 unifyMany
@@ -421,7 +421,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     ]
 
             ( Tuple2 _ _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Tuple3 t1e1 t1e2 t1e3, Tuple3 t2e1 t2e2 t2e3 ) ->
                 unifyMany
@@ -432,7 +432,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     ]
 
             ( Tuple3 _ _ _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( Record r1, Record r2 ) ->
                 recordBindings r1.fields r2.fields
@@ -441,7 +441,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                 recordVsExtensible r.fields er
 
             ( Record _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
                 {- Fields that only one side mentions must be added to the other
@@ -506,7 +506,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                 recordVsExtensible r.fields er
 
             ( ExtensibleRecord _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( UserDefinedType ut1, UserDefinedType ut2 ) ->
                 if
@@ -515,14 +515,14 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                         || (ut1.name /= ut2.name)
                         || (List.length ut1.args /= List.length ut2.args)
                 then
-                    typeMismatch
+                    typeMismatch ()
 
                 else
                     List.map2 Tuple.pair ut1.args ut2.args
                         |> unifyMany cfg
 
             ( UserDefinedType _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
             ( WebGLShader webgl1, WebGLShader webgl2 ) ->
                 unifyMany
@@ -533,7 +533,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     ]
 
             ( WebGLShader _, _ ) ->
-                typeMismatch
+                typeMismatch ()
 
 
 {-| Merge `typeVar`'s equivalence class with `type_`.
