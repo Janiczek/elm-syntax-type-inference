@@ -1,7 +1,7 @@
 module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 
 import Dict exposing (Dict)
-import Elm.Syntax.FullModuleName exposing (FullModuleName)
+import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (TIState)
@@ -276,10 +276,14 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
         -- to something non-ground, since an alias's only free vars
         -- are its args).
         if cfg.internalChecks then
+            let
+                ( pubT1, pubT2 ) =
+                    Type.toPublicPair rawT1 rawT2
+            in
             State.error
-                { moduleName = cfg.moduleName
+                { moduleName = FullModuleName.toModuleName cfg.moduleName
                 , declarationNames = cfg.declarationNames
-                , details = InternalInconsistency rawT1 rawT2
+                , details = InternalInconsistency pubT1 pubT2
                 }
 
         else
@@ -301,10 +305,14 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
 
             typeMismatch : TIState ()
             typeMismatch =
+                let
+                    ( pubT1, pubT2 ) =
+                        Type.toPublicPair t1 t2
+                in
                 State.error
-                    { moduleName = cfg.moduleName
+                    { moduleName = FullModuleName.toModuleName cfg.moduleName
                     , declarationNames = cfg.declarationNames
-                    , details = TypeMismatchMono t1 t2
+                    , details = TypeMismatch pubT1 pubT2
                     }
 
             recordBindings : Dict VarName MonoType -> Dict VarName MonoType -> TIState ()
@@ -541,10 +549,14 @@ bind cfg typeVar type_ =
         State.pure ()
 
     else if occursCheck typeVar type_ then
+        let
+            ( pubVar, pubType ) =
+                Type.toPublicPair (TypeVar typeVar) type_
+        in
         State.error
-            { moduleName = cfg.moduleName
+            { moduleName = FullModuleName.toModuleName cfg.moduleName
             , declarationNames = cfg.declarationNames
-            , details = InfiniteType typeVar type_
+            , details = InfiniteType pubVar pubType
             }
 
     else
@@ -556,10 +568,14 @@ bind cfg typeVar type_ =
             TypeVar (( _, otherSuper ) as otherVar) ->
                 case meet super otherSuper of
                     Nothing ->
+                        let
+                            ( pubVar, pubOther ) =
+                                Type.toPublicPair (TypeVar typeVar) type_
+                        in
                         State.error
-                            { moduleName = cfg.moduleName
+                            { moduleName = FullModuleName.toModuleName cfg.moduleName
                             , declarationNames = cfg.declarationNames
-                            , details = SuperTypeMismatch super type_
+                            , details = ConstraintMismatch pubVar pubOther
                             }
 
                     Just m ->
@@ -614,10 +630,14 @@ bind cfg typeVar type_ =
                     State.modifySubst (SubstitutionMap.bindRoot typeVar type_)
 
                 else
+                    let
+                        ( pubVar, pubType ) =
+                            Type.toPublicPair (TypeVar typeVar) type_
+                    in
                     State.error
-                        { moduleName = cfg.moduleName
+                        { moduleName = FullModuleName.toModuleName cfg.moduleName
                         , declarationNames = cfg.declarationNames
-                        , details = SuperTypeMismatch super type_
+                        , details = ConstraintMismatch pubVar pubType
                         }
 
 

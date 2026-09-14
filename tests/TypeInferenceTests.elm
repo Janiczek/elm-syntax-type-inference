@@ -2202,11 +2202,11 @@ unexposedUnionConstructorIsntFound =
                 |> Expect.equal
                     (Err
                         (CouldntInfer
-                            { moduleName = FullModuleName.fromModuleName_ [ "Main" ]
+                            { moduleName = [ "Main" ]
                             , declarationNames = []
                             , details =
                                 VarNotFound
-                                    { usedIn = FullModuleName.fromModuleName_ [ "Main" ]
+                                    { usedIn = [ "Main" ]
                                     , varName = "Foo"
                                     }
                             }

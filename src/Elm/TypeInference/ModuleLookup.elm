@@ -15,11 +15,12 @@ import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
+import Elm.TypeInference.Error.Internal exposing (ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.Type exposing (PackageName)
-import Elm.TypeInference.Type.Internal as TypeI exposing (TypeResolver)
+import Elm.TypeInference.Type.Internal exposing (TypeResolver)
 import List.ExtraExtra
 import Result.Extra
 import Result.ExtraExtra
@@ -148,19 +149,24 @@ findModuleOfVar index modules thisModule maybeModuleName varName =
     case moduleOfVar index modules thisModule maybeModuleName varName of
         Err details ->
             State.error
-                { moduleName = thisModule.moduleName
+                { moduleName = FullModuleName.toModuleName thisModule.moduleName
                 , declarationNames = []
                 , details = details
                 }
 
         Ok Nothing ->
+            let
+                moduleName : ModuleName
+                moduleName =
+                    FullModuleName.toModuleName thisModule.moduleName
+            in
             State.error
-                { moduleName = thisModule.moduleName
+                { moduleName = moduleName
                 , declarationNames = []
                 , details =
                     VarNotFound
                         { varName = varName
-                        , usedIn = thisModule.moduleName
+                        , usedIn = moduleName
                         }
                 }
 
@@ -256,8 +262,8 @@ unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName 
                             Err <|
                                 AmbiguousName
                                     { varName = varName
-                                    , usedIn = thisModule.moduleName
-                                    , possibleModules = List.map .moduleName imports
+                                    , usedIn = FullModuleName.toModuleName thisModule.moduleName
+                                    , possibleModules = List.map (.moduleName >> FullModuleName.toModuleName) imports
                                     }
                 )
 
@@ -365,9 +371,9 @@ implicitUnqualifiedValue index thisModule maybeModuleName varName =
                         many ->
                             Err
                                 (AmbiguousName
-                                    { usedIn = thisModule.moduleName
+                                    { usedIn = FullModuleName.toModuleName thisModule.moduleName
                                     , varName = varName
-                                    , possibleModules = List.map Tuple.second many
+                                    , possibleModules = List.map (Tuple.second >> FullModuleName.toModuleName) many
                                     }
                                 )
                 )
@@ -528,7 +534,7 @@ typeResolverFor ((Index index) as wrappedIndex) modules thisModule qualifier typ
                                 Nothing
                         )
 
-        dependency : ModuleName -> Result TypeI.ResolverAmbiguity (Maybe ( PackageName, FullModuleName ))
+        dependency : ModuleName -> Result ResolverAmbiguity (Maybe ( PackageName, FullModuleName ))
         dependency unaliasedQualifier =
             if List.isEmpty unaliasedQualifier then
                 Ok Nothing

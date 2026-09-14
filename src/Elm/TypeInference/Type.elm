@@ -125,6 +125,7 @@ toString t =
 
         Record { fields } ->
             let
+                fieldStrings : List String
                 fieldStrings =
                     fields
                         |> Dict.toList
@@ -134,6 +135,7 @@ toString t =
 
         ExtensibleRecord { fields, extensionTypevar } ->
             let
+                fieldStrings : List String
                 fieldStrings =
                     fields
                         |> Dict.toList

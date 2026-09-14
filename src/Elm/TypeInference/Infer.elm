@@ -26,7 +26,7 @@ import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
-import Elm.TypeInference.Error as Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
@@ -81,7 +81,7 @@ everything else carries the module with an empty group.
 -}
 toError : Ctx -> ErrorDetails -> Error
 toError ctx details =
-    { moduleName = ctx.thisModuleName
+    { moduleName = FullModuleName.toModuleName ctx.thisModuleName
     , declarationNames = []
     , details = details
     }
@@ -186,7 +186,7 @@ annotationScheme ctx maybeSigNode =
                 |> .typeAnnotation
                 |> Node.value
                 |> TypeI.fromTypeAnnotation (typeResolver ctx)
-                |> Result.mapError (State.error << toError ctx << Error.fromTypeAnnotationError)
+                |> Result.mapError (State.error << toError ctx << TypeI.fromTypeAnnotationError)
                 |> Result.map (TypeI.closeOver >> Just >> State.pure)
                 |> Result.Extra.merge
 
@@ -209,7 +209,7 @@ signatureEquations ctx declId maybeSigNode =
                 >> .typeAnnotation
                 >> Node.value
                 >> TypeI.fromTypeAnnotation (typeResolver ctx)
-                >> Result.mapError (State.error << toError ctx << Error.fromTypeAnnotationError)
+                >> Result.mapError (State.error << toError ctx << TypeI.fromTypeAnnotationError)
                 >> Result.map
                     (\annotationType ->
                         State.do (State.instantiate (TypeI.closeOver annotationType)) <|

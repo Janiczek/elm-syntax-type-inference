@@ -1,9 +1,7 @@
 module Elm.TypeInference.Type.Internal exposing
-    ( FromTypeAnnotationError(..)
-    , Id
+    ( Id
     , MonoType(..)
     , PackageName
-    , ResolverAmbiguity
     , Type(..)
     , TypeResolver
     , closeOver
@@ -12,15 +10,13 @@ module Elm.TypeInference.Type.Internal exposing
     , external
     , freeVarsMono
     , fromTypeAnnotation
+    , fromTypeAnnotationError
     , id_
     , mapVarsMono
     , mono
-    , monoTypeToString
-    , normalize
     , number_
+    , toPublicPair
     , toPublicType
-    , toString
-    , toTypeAnnotation
     )
 
 import Dict exposing (Dict)
@@ -28,6 +24,8 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
+import Elm.TypeInference.Error exposing (ErrorDetails(..))
+import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.Type as Public
 import Elm.TypeInference.TypeVar as TypeVar
@@ -57,21 +55,8 @@ type alias PackageName =
     String
 
 
-{-| Type/module collision
--}
-type alias ResolverAmbiguity =
-    { moduleName : String
-    , possiblePackages : List PackageName
-    }
-
-
 type alias TypeResolver =
     List String -> String -> Result ResolverAmbiguity ( PackageName, FullModuleName )
-
-
-type FromTypeAnnotationError
-    = ImpossibleAnnotation TypeAnnotation
-    | AmbiguousModuleName ResolverAmbiguity
 
 
 id_ : Id -> MonoType
@@ -365,120 +350,6 @@ generalize envFreeVars monoType =
     Forall boundIds monoType
 
 
-toString : Type -> String
-toString (Forall boundVars monoType) =
-    let
-        preamble : String
-        preamble =
-            boundVars
-                |> List.map (\var -> "forall " ++ TypeVar.toString var)
-                |> String.join " "
-                |> (\str ->
-                        if String.isEmpty str then
-                            str
-
-                        else
-                            str ++ ". "
-                   )
-    in
-    preamble ++ monoTypeToString monoType
-
-
-monoTypeToString : MonoType -> String
-monoTypeToString type_ =
-    let
-        f : MonoType -> String
-        f =
-            monoTypeToString
-
-        recordBindings : Dict VarName MonoType -> String
-        recordBindings bindings =
-            bindings
-                |> Dict.toList
-                |> List.map (\( fieldName, fieldType ) -> fieldName ++ " : " ++ f fieldType)
-                |> String.join ", "
-
-        {- Wraps a type in parentheses when it wouldn't parse back unambiguously
-           in argument position (of `->` or of a type constructor application).
-        -}
-        wrapped : MonoType -> String
-        wrapped t =
-            case t of
-                Function _ ->
-                    "(" ++ f t ++ ")"
-
-                UserDefinedType r ->
-                    if List.isEmpty r.args then
-                        f t
-
-                    else
-                        "(" ++ f t ++ ")"
-
-                _ ->
-                    f t
-    in
-    case type_ of
-        TypeVar var ->
-            TypeVar.toString var
-
-        Function { from, to } ->
-            -- `->` is right-associative, so only the left side is ambiguous
-            wrapped from ++ " -> " ++ f to
-
-        Int ->
-            "Int"
-
-        Float ->
-            "Float"
-
-        Char ->
-            "Char"
-
-        String ->
-            "String"
-
-        Bool ->
-            "Bool"
-
-        List inner ->
-            "List " ++ wrapped inner
-
-        Unit ->
-            "()"
-
-        Tuple2 t1 t2 ->
-            "( " ++ f t1 ++ ", " ++ f t2 ++ " )"
-
-        Tuple3 t1 t2 t3 ->
-            "( " ++ f t1 ++ ", " ++ f t2 ++ ", " ++ f t3 ++ " )"
-
-        Record { fields } ->
-            let
-                fieldsStr : String
-                fieldsStr =
-                    (" " ++ recordBindings fields ++ " ")
-                        |> String.trim
-            in
-            "{" ++ fieldsStr ++ "}"
-
-        ExtensibleRecord r ->
-            "{ " ++ f r.extensionTypevar ++ " | " ++ recordBindings r.fields ++ " }"
-
-        UserDefinedType r ->
-            ((FullModuleName.toString r.moduleName ++ "." ++ r.name)
-                :: List.map wrapped r.args
-            )
-                |> String.join " "
-
-        WebGLShader r ->
-            "Shader "
-                ++ String.join " "
-                    [ f (Record { fields = r.attributes })
-                    , f (Record { fields = r.uniforms })
-                    , f (Record { fields = r.varyings })
-                    ]
-
-
 normalize : Type -> Type
 normalize ((Forall boundVars monoType) as type_) =
     let
@@ -636,11 +507,6 @@ ordToName n =
                 go (i // radix) ++ (String.fromChar <| charFromInt (modBy radix i))
     in
     go n
-
-
-toTypeAnnotation : Type -> TypeAnnotation
-toTypeAnnotation (Forall _ mono_) =
-    toTypeAnnotationMono mono_
 
 
 toTypeAnnotationMono : MonoType -> TypeAnnotation
@@ -882,9 +748,22 @@ fromTypeAnnotation resolver typeAnnotation =
                 (f (Node.value to))
 
 
+{-| Convert a type-annotation conversion failure into an inference error.
+-}
+fromTypeAnnotationError : FromTypeAnnotationError -> ErrorDetails
+fromTypeAnnotationError err =
+    case err of
+        ImpossibleAnnotation typeAnnotation ->
+            ImpossibleType typeAnnotation
+
+        AmbiguousModuleName ambiguity ->
+            AmbiguousModuleOwner ambiguity
+
+
 toPublicType : { alreadyNormalized : Bool } -> MonoType -> Public.Type
 toPublicType { alreadyNormalized } origMono =
     let
+        mono_ : MonoType
         mono_ =
             if alreadyNormalized then
                 origMono
@@ -899,9 +778,39 @@ toPublicType { alreadyNormalized } origMono =
     toPublicTypeAux mono_
 
 
+{-| Convert two `MonoType`s to public `Type`s with a shared normalization.
+
+Normalizing each side independently would name distinct variables identically
+(`a` on both sides) and suggest sharing where there is none -- or rename a
+shared variable differently on each side. Normalizing `Tuple2 t1 t2` once and
+splitting keeps one naming scope for both, so equal vars stay equal and
+distinct vars stay distinct across the pair.
+
+Used for type-error payloads, which always come in pairs.
+
+-}
+toPublicPair : MonoType -> MonoType -> ( Public.Type, Public.Type )
+toPublicPair t1 t2 =
+    let
+        (Forall _ normalizedCombined) =
+            normalize (Forall [] (Tuple2 t1 t2))
+    in
+    case normalizedCombined of
+        Tuple2 nt1 nt2 ->
+            ( toPublicType { alreadyNormalized = True } nt1
+            , toPublicType { alreadyNormalized = True } nt2
+            )
+
+        _ ->
+            ( toPublicType { alreadyNormalized = False } t1
+            , toPublicType { alreadyNormalized = False } t2
+            )
+
+
 toPublicTypeAux : MonoType -> Public.Type
 toPublicTypeAux mono_ =
     let
+        f : MonoType -> Public.Type
         f =
             toPublicType { alreadyNormalized = True }
     in

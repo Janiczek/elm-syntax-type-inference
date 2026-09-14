@@ -226,7 +226,7 @@ registerModule pkgName resolver mod =
 
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = fullModuleName
+            { moduleName = FullModuleName.toModuleName fullModuleName
             , declarationNames = []
             , details = details
             }
@@ -253,7 +253,7 @@ registerUnion pkgName fullModuleName resolver union =
     let
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = fullModuleName
+            { moduleName = FullModuleName.toModuleName fullModuleName
             , declarationNames = []
             , details = details
             }
@@ -304,7 +304,7 @@ registerAlias pkgName fullModuleName resolver alias_ =
     let
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = fullModuleName
+            { moduleName = FullModuleName.toModuleName fullModuleName
             , declarationNames = []
             , details = details
             }

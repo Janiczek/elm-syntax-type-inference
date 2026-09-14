@@ -1,7 +1,7 @@
 module Elm.TypeInference.State exposing
     ( TIState, State, GlobalKey, init, empty
     , pure, error, fromResult, run
-    , map, map2, mapError
+    , map, map2
     , do, andThen, foldl, traverse
     , getNextIdAndTick
     , getNodeIds, idForNode, aliasNodeId
@@ -22,7 +22,7 @@ module Elm.TypeInference.State exposing
 # Utilities
 
 @docs pure, error, fromResult, run
-@docs map, map2, mapError
+@docs map, map2
 @docs do, andThen, foldl, traverse
 
 
@@ -58,7 +58,7 @@ module Elm.TypeInference.State exposing
 -}
 
 import Dict exposing (Dict)
-import Elm.Syntax.FullModuleName exposing (FullModuleName)
+import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.VarName exposing (VarName)
@@ -150,18 +150,6 @@ map userFn stateFn =
     \state ->
         stateFn state
             |> Tuple.mapFirst (Result.map userFn)
-
-
-mapError : (State -> Error -> Error) -> TIState a -> TIState a
-mapError fn stateFn =
-    \state ->
-        let
-            ( result, newState ) =
-                stateFn state
-        in
-        ( Result.mapError (fn newState) result
-        , newState
-        )
 
 
 andMap : TIState a -> TIState (a -> b) -> TIState b
@@ -505,11 +493,11 @@ lookupEnv thisModule var =
             case Dict.get var env of
                 Nothing ->
                     error
-                        { moduleName = thisModule
+                        { moduleName = FullModuleName.toModuleName thisModule
                         , declarationNames = []
                         , details =
                             VarNotFound
-                                { usedIn = thisModule
+                                { usedIn = FullModuleName.toModuleName thisModule
                                 , varName = var
                                 }
                         }
@@ -554,11 +542,11 @@ lookupGlobalEnv package moduleName var =
             case Dict.get ( package, moduleName, var ) env of
                 Nothing ->
                     error
-                        { moduleName = moduleName
+                        { moduleName = FullModuleName.toModuleName moduleName
                         , declarationNames = []
                         , details =
                             VarNotFound
-                                { usedIn = moduleName
+                                { usedIn = FullModuleName.toModuleName moduleName
                                 , varName = var
                                 }
                         }

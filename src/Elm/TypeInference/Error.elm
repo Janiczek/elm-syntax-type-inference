@@ -1,38 +1,54 @@
 module Elm.TypeInference.Error exposing
     ( Error, ErrorDetails(..)
-    , fromTypeAnnotationError, toString
+    , toString
     )
 
 {-| Errors reported while resolving or inferring a module.
 
 @docs Error, ErrorDetails
-@docs fromTypeAnnotationError, toString
+@docs toString
 
 -}
 
 import Elm.Syntax.Expression exposing (Expression)
-import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.ModuleName.Extra
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.Range as Range exposing (Range)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
-import Elm.TypeInference.Type.Internal as Type exposing (FromTypeAnnotationError(..), MonoType)
-import Elm.TypeInference.TypeVar as TypeVar exposing (SuperType, TypeVar)
+import Elm.TypeInference.Type as Type exposing (Type)
 import Elm.Writer
 
 
 {-| A type inference error + location info.
 -}
 type alias Error =
-    { moduleName : FullModuleName
+    { moduleName : ModuleName
     , declarationNames : List VarName
     , details : ErrorDetails
     }
 
 
 {-| Types of errors.
+
+Type errors carry the public [`Elm.TypeInference.Type`](../Elm-TypeInference-Type)
+representation: normalized display types, never internal inference state.
+The variable names inside them are only meaningful within a single error --
+`a` on the left and `a` on the right of one `TypeMismatch` are the same
+variable, but `a` in two different errors need not be.
+
+  - `TypeMismatch` is two structural types that cannot unify.
+  - `InfiniteType` is a variable and a type containing that same variable
+    (the first type is always a variable).
+  - `ConstraintMismatch` is a constrained variable (its name encodes the
+    constraint: `number`, `comparable`, `appendable`, `compappend`, with an
+    optional numeric suffix) and the type violating it.
+  - `InternalInconsistency` is an invariant violation on already-checked code,
+    not a user type error.
+
 -}
 type ErrorDetails
     = -- Syntax errors
@@ -42,26 +58,14 @@ type ErrorDetails
     | ImpossibleDocsType Elm.Type.Type
     | MissingModuleName
       -- Var qualification errors
-    | VarNotFound { usedIn : FullModuleName, varName : VarName }
-    | AmbiguousName { usedIn : FullModuleName, varName : VarName, possibleModules : List FullModuleName }
+    | VarNotFound { usedIn : ModuleName, varName : VarName }
+    | AmbiguousName { usedIn : ModuleName, varName : VarName, possibleModules : List ModuleName }
     | AmbiguousModuleOwner { moduleName : String, possiblePackages : List String }
       -- Type errors
-    | TypeMismatchMono MonoType MonoType
-    | InfiniteType TypeVar MonoType
-    | SuperTypeMismatch SuperType MonoType
-    | InternalInconsistency MonoType MonoType
-
-
-{-| Convert a type-annotation conversion failure into an inference error.
--}
-fromTypeAnnotationError : FromTypeAnnotationError -> ErrorDetails
-fromTypeAnnotationError err =
-    case err of
-        ImpossibleAnnotation typeAnnotation ->
-            ImpossibleType typeAnnotation
-
-        AmbiguousModuleName ambiguity ->
-            AmbiguousModuleOwner ambiguity
+    | TypeMismatch Type Type
+    | InfiniteType Type Type
+    | ConstraintMismatch Type Type
+    | InternalInconsistency Type Type
 
 
 {-| Render an error for diagnostic output.
@@ -70,7 +74,7 @@ toString : Error -> String
 toString error =
     detailsToString error.details
         ++ " (in "
-        ++ FullModuleName.toString error.moduleName
+        ++ Elm.Syntax.ModuleName.Extra.toString error.moduleName
         ++ (if List.isEmpty error.declarationNames then
                 ""
 
@@ -113,16 +117,16 @@ detailsToString details =
         VarNotFound r ->
             "VarNotFound "
                 ++ record
-                    [ ( "usedIn", FullModuleName.toString r.usedIn )
+                    [ ( "usedIn", Elm.Syntax.ModuleName.Extra.toString r.usedIn )
                     , ( "varName", r.varName )
                     ]
 
         AmbiguousName r ->
             "AmbiguousName "
                 ++ record
-                    [ ( "usedIn", FullModuleName.toString r.usedIn )
+                    [ ( "usedIn", Elm.Syntax.ModuleName.Extra.toString r.usedIn )
                     , ( "varName", r.varName )
-                    , ( "possibleModules", list (List.map FullModuleName.toString r.possibleModules) )
+                    , ( "possibleModules", list (List.map Elm.Syntax.ModuleName.Extra.toString r.possibleModules) )
                     ]
 
         AmbiguousModuleOwner r ->
@@ -132,32 +136,32 @@ detailsToString details =
                     , ( "possiblePackages", list r.possiblePackages )
                     ]
 
-        TypeMismatchMono t1 t2 ->
+        TypeMismatch t1 t2 ->
             String.join " "
-                [ "TypeMismatchMono"
-                , parenIfHasSpace (Type.monoTypeToString t1)
-                , parenIfHasSpace (Type.monoTypeToString t2)
+                [ "TypeMismatch"
+                , parenIfHasSpace (Type.toString t1)
+                , parenIfHasSpace (Type.toString t2)
                 ]
 
-        InfiniteType typeVar type_ ->
+        InfiniteType varType type_ ->
             String.join " "
                 [ "InfiniteType"
-                , parenIfHasSpace (TypeVar.toString typeVar)
-                , parenIfHasSpace (Type.monoTypeToString type_)
+                , parenIfHasSpace (Type.toString varType)
+                , parenIfHasSpace (Type.toString type_)
                 ]
 
-        SuperTypeMismatch super type_ ->
+        ConstraintMismatch varType type_ ->
             String.join " "
-                [ "SuperTypeMismatch"
-                , parenIfHasSpace (TypeVar.superTypeToString super)
-                , parenIfHasSpace (Type.monoTypeToString type_)
+                [ "ConstraintMismatch"
+                , parenIfHasSpace (Type.toString varType)
+                , parenIfHasSpace (Type.toString type_)
                 ]
 
         InternalInconsistency t1 t2 ->
             String.join " "
                 [ "InternalInconsistency"
-                , parenIfHasSpace (Type.monoTypeToString t1)
-                , parenIfHasSpace (Type.monoTypeToString t2)
+                , parenIfHasSpace (Type.toString t1)
+                , parenIfHasSpace (Type.toString t2)
                 ]
 
 
@@ -166,7 +170,7 @@ detailsToString details =
 
 
 {-| Adds (...) if the string has spaces.
-Handy for types: eg. `TypeMismatchMono Int (List String)`
+Handy for types: eg. `TypeMismatch Int (List String)`
 -}
 parenIfHasSpace : String -> String
 parenIfHasSpace str =

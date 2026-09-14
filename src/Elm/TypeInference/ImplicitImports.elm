@@ -1,8 +1,8 @@
 module Elm.TypeInference.ImplicitImports exposing
-    ( unaliasModule
+    ( elmCorePackage
+    , unaliasModule
     , modulesPossiblyExposingValue
     , moduleExposingType
-    , elmCorePackage
     )
 
 {-| Elm compiles every module with these implicit imports:
@@ -21,7 +21,10 @@ module Elm.TypeInference.ImplicitImports exposing
     import Platform.Cmd as Cmd exposing ( Cmd )
     import Platform.Sub as Sub exposing ( Sub )
 
-@docs package
+Here we define them as data. We don't need to know/list all the functions; the
+read docs.json will supply that.
+
+@docs elmCorePackage
 @docs unaliasModule
 @docs modulesPossiblyExposingValue
 @docs moduleExposingType
@@ -50,8 +53,8 @@ elmCorePackage =
     "elm/core"
 
 
-list : List ImplicitImport
-list =
+implicitImports : List ImplicitImport
+implicitImports =
     [ { moduleName = "Basics"
       , alias_ = Nothing
       , values = All
@@ -117,29 +120,39 @@ This only comes into play if we know there's no `import My.Cmd as Cmd`
 -}
 unaliasModule : String -> Maybe FullModuleName
 unaliasModule singleSegmentAlias =
-    list
+    implicitImports
         |> List.filter (\import_ -> import_.alias_ == Just singleSegmentAlias)
         |> List.head
         |> Maybe.map (.moduleName >> FullModuleName.fromDotted)
 
 
+{-|
+
+    identity --> ["Basics"]
+    map --> ["Basics"]
+    foobar --> ["Basics"]
+    :: -> ["Basics", "List"]
+
+-}
 modulesPossiblyExposingValue : VarName -> List String
 modulesPossiblyExposingValue varName =
-    list
-        |> List.filter (\import_ -> exposes varName import_.values)
+    implicitImports
+        |> List.filter (\import_ -> couldExposeName varName import_.values)
         |> List.map .moduleName
 
 
+{-| TODO weird: it looks at values too, not just at types?
+-}
 moduleExposingType : String -> Maybe FullModuleName
 moduleExposingType typeName =
-    list
-        |> List.filter (\import_ -> exposes typeName import_.types)
+    implicitImports
+        |> List.filter (\import_ -> couldExposeName typeName import_.types)
         |> List.head
         |> Maybe.map (.moduleName >> FullModuleName.fromDotted)
 
 
-exposes : String -> Exposed -> Bool
-exposes name exposed =
+couldExposeName : String -> Exposed -> Bool
+couldExposeName name exposed =
     case exposed of
         All ->
             True

@@ -45,7 +45,8 @@ import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
-import Elm.TypeInference.Error as Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError)
 import Elm.TypeInference.Infer as Infer
 import Elm.TypeInference.Interface as Interface
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
@@ -299,7 +300,7 @@ inferProject checks depEnv files =
         { tables = Dict.empty
         , errors =
             Dict.singleton []
-                { moduleName = FullModuleName.fromModuleName_ []
+                { moduleName = [ "<Missing>" ]
                 , declarationNames = []
                 , details = MissingModuleName
                 }
@@ -689,7 +690,7 @@ gatherTypeAliases ctx file =
                         let
                             toError : ErrorDetails -> Error
                             toError details =
-                                { moduleName = moduleName
+                                { moduleName = FullModuleName.toModuleName moduleName
                                 , declarationNames = [ Node.value typeAlias.name ]
                                 , details = details
                                 }
@@ -699,7 +700,7 @@ gatherTypeAliases ctx file =
                                 typeAlias.typeAnnotation
                                     |> Node.value
                                     |> TypeI.fromTypeAnnotation resolver
-                                    |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
+                                    |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
                                     |> Result.map State.pure
                                     |> Result.Extra.merge
 
@@ -715,7 +716,7 @@ gatherTypeAliases ctx file =
                                                     Tuple.second (Node.value fieldNode)
                                                         |> Node.value
                                                         |> TypeI.fromTypeAnnotation resolver
-                                                        |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
+                                                        |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
                                                         |> Result.map State.pure
                                                         |> Result.Extra.merge
                                                 )
@@ -817,7 +818,7 @@ registerCustomType resolver moduleName customType =
 
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = moduleName
+            { moduleName = FullModuleName.toModuleName moduleName
             , declarationNames = [ typeName ]
             , details = details
             }
@@ -847,14 +848,14 @@ registerCustomType resolver moduleName customType =
                     ctor =
                         Node.value ctorNode
 
-                    argTypes : Result TypeI.FromTypeAnnotationError (List MonoType)
+                    argTypes : Result FromTypeAnnotationError (List MonoType)
                     argTypes =
                         ctor.arguments
                             |> List.map (Node.value >> TypeI.fromTypeAnnotation resolver)
                             |> Result.Extra.combine
                 in
                 argTypes
-                    |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
+                    |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
                     |> Result.map
                         (\args ->
                             let
@@ -878,7 +879,7 @@ registerPort resolver moduleName sig =
     let
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = moduleName
+            { moduleName = FullModuleName.toModuleName moduleName
             , declarationNames = [ Node.value sig.name ]
             , details = details
             }
@@ -886,7 +887,7 @@ registerPort resolver moduleName sig =
     sig.typeAnnotation
         |> Node.value
         |> TypeI.fromTypeAnnotation resolver
-        |> Result.mapError (State.error << toError << Error.fromTypeAnnotationError)
+        |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
         |> Result.map
             (\t ->
                 State.addGlobalBinding
