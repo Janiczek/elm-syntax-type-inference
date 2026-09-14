@@ -575,18 +575,7 @@ substituteMonoTracked store monoType =
             in
             case extensionTypevar_ of
                 Record _ ->
-                    ( collapse
-                        (ExtensibleRecord
-                            { extensionTypevar = extensionTypevar_
-                            , fields = fields_
-                            }
-                        )
-                    , Bitwise.or flags changedFlag
-                    , s2
-                    )
-
-                ExtensibleRecord _ ->
-                    ( collapse
+                    ( Type.collapseExtensibleAndClosedRecord
                         (ExtensibleRecord
                             { extensionTypevar = extensionTypevar_
                             , fields = fields_
@@ -770,8 +759,3 @@ substituteArgsTracked store args =
 
     else
         ( args, flags, store1 )
-
-
-collapse : MonoType -> MonoType
-collapse =
-    Type.collapseExtensible

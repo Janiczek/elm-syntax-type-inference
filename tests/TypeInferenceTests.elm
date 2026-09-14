@@ -2308,7 +2308,7 @@ extensibleRecordRegression =
                 modules =
                     Dict.singleton [ "Main" ] <|
                         String.ExtraExtra.multilineInput """
-                        module Force exposing ( Entity, applyForce )
+                        module Main exposing ( Entity, applyForce )
 
                         import Dict exposing (Dict)
 
@@ -2324,6 +2324,6 @@ extensibleRecordRegression =
                             Dict.map (\\_ ent -> { ent | x = ent.x, y = ent.y }) entities
                         """
             in
-            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Force" ] "applyForce"
+            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "applyForce"
                 |> Result.map Type.toString
-                |> Expect.equal (Ok "Dict comparable (Entity comparable a) -> Dict comparable (Entity comparable a)")
+                |> Expect.equal (Ok "(Dict.Dict comparable (Main.Entity comparable a)) -> Dict.Dict comparable (Main.Entity comparable a)")

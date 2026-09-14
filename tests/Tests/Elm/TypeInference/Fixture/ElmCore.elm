@@ -195,8 +195,8 @@ dict =
                         )
                     )
                     (Lambda
-                        (Type "Dict" [ Var "k", Var "v1" ])
-                        (Type "Dict" [ Var "k", Var "v2" ])
+                        (Type "Dict.Dict" [ Var "k", Var "v1" ])
+                        (Type "Dict.Dict" [ Var "k", Var "v2" ])
                     )
           }
         ]

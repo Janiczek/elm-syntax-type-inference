@@ -85,6 +85,8 @@ wrapped t =
             toString t
 
 
+{-| TODO docs
+-}
 toString : Type -> String
 toString t =
     case t of
@@ -110,7 +112,7 @@ toString t =
             "Bool"
 
         List inner ->
-            "List " ++ toString inner
+            "List " ++ wrapped inner
 
         Unit ->
             "()"
@@ -144,7 +146,7 @@ toString t =
                 argStrings : List String
                 argStrings =
                     arguments
-                        |> List.map toString
+                        |> List.map wrapped
 
                 qualifiedName : String
                 qualifiedName =

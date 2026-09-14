@@ -9,14 +9,18 @@ module TypeLookupTable exposing (TypeLookupTable, fromList, get)
 import Dict
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Type exposing (Type)
-import RangeLike exposing (RangeLike)
+import RangeLike
 import TypeLookupTable.Internal as Internal
 
 
+{-| TODO docs
+-}
 type alias TypeLookupTable =
     Internal.TypeLookupTable
 
 
+{-| TODO docs
+-}
 fromList : List ( Range, Type ) -> TypeLookupTable
 fromList list =
     list

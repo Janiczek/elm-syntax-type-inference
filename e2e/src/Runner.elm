@@ -21,7 +21,6 @@ import Json.Encode as Encode
 import List.Extra exposing (Step(..))
 import Parser
 
-
 port result : Encode.Value -> Cmd msg
 
 

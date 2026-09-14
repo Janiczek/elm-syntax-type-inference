@@ -7,7 +7,8 @@ module Elm.TypeInference.Type.Internal exposing
     , Type(..)
     , TypeResolver
     , closeOver
-    , collapseExtensible
+    , collapseExtensibleAndClosedRecord
+    , collapseExtensibleAndExtensibleRecord
     , collapsePrimitive
     , external
     , freeVarsMono
@@ -140,29 +141,49 @@ mono =
 
 {-| Extensible record on top of a closed record is a closed record:
 `{ r | a : Float }` with `r = { b : Char }` is `{ a : Float, b : Char }`
-`{ r | a : Float }` with `r = { s | b : Char }` is `{ s | a : Float, b : Char }`
 
 Bias towards the outer fields.
 
 -}
-collapseExtensible : MonoType -> MonoType
-collapseExtensible type_ =
+collapseExtensibleAndClosedRecord : MonoType -> MonoType
+collapseExtensibleAndClosedRecord type_ =
     case type_ of
         ExtensibleRecord r ->
             case r.extensionTypevar of
                 Record r2 ->
                     Record { fields = Dict.union r.fields r2.fields }
 
-                ExtensibleRecord r2 ->
-                    collapseExtensible
-                        (ExtensibleRecord
-                            { extensionTypevar = r2.extensionTypevar
-                            , fields = Dict.union r.fields r2.fields
-                            }
-                        )
-
                 _ ->
                     type_
+
+        _ ->
+            type_
+
+
+{-| Extensible record on top of an extensible record is an extensible record:
+`{ r | a : Float }` with `r = { s | b : Char }` is `{ s | a : Float, b : Char }`
+
+Bias towards the outer fields.
+
+-}
+collapseExtensibleAndExtensibleRecord : MonoType -> MonoType
+collapseExtensibleAndExtensibleRecord type_ =
+    case type_ of
+        ExtensibleRecord r1 ->
+            if Dict.isEmpty r1.fields then
+                r1.extensionTypevar
+
+            else
+                case r1.extensionTypevar of
+                    ExtensibleRecord r2 ->
+                        collapseExtensibleAndExtensibleRecord <|
+                            ExtensibleRecord
+                                { extensionTypevar = r2.extensionTypevar
+                                , fields = Dict.union r1.fields r2.fields
+                                }
+
+                    _ ->
+                        type_
 
         _ ->
             type_
@@ -704,7 +725,7 @@ toTypeAnnotationMono mono_ =
                             -- Should be impossible for compiling code;
                             -- could happen for manually created MonoType values
                             -- TODO should we be more explicit in the type definition? ie. TypeVar instead of MonoType in the extensible record thingy
-                            "<elm-syntax-type-inference bug: non-var as extensible record base>"
+                            "<elm-syntax-type-inference bug: non-var as extensible record base [1]>"
                     )
                 )
                 (Node.empty (recordFieldsToRecordDefinition r.fields))
@@ -895,8 +916,12 @@ toPublicType { alreadyNormalized } origMono =
 
 
 toPublicTypeAux : MonoType -> Public.Type
-toPublicTypeAux mono_ =
+toPublicTypeAux monoUncollapsed =
     let
+        mono_ =
+            monoUncollapsed
+                |> collapseExtensibleAndExtensibleRecord
+
         f =
             toPublicType { alreadyNormalized = True }
     in
@@ -958,7 +983,7 @@ toPublicTypeAux mono_ =
                             -- Should be impossible for compiling code;
                             -- could happen for manually created MonoType values
                             -- TODO should we be more explicit in the type definition? ie. TypeVar instead of MonoType in the extensible record thingy
-                            "<elm-syntax-type-inference bug: non-var as extensible record base>"
+                            "<elm-syntax-type-inference bug: non-var as extensible record base [2]>"
                 , fields = fields |> Dict.map (\_ v -> f v)
                 }
 
