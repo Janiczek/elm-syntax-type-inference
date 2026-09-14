@@ -2,12 +2,11 @@ module Elm.TypeInference.SCC exposing (stronglyConnectedComponents)
 
 {-| Strongly Connected Components (Tarjan's algorithm)
 
-Gives a list of components (lists of nodes) where each node is reachable from
-every other node.
+Gathers graph nodes into groups based on dependencies. In each group, each node
+is reachable from every other node.
 
-Used to find which bindings can be type-checked together and in what order -
-important for mutual recursion (eg. isEven and isOdd defined in terms of each
-other, either in top-level decls or in let bindings).
+Used eg. for let-in bindings or mutually recursive declarations (isEven and
+isOdd defined in terms of each other).
 
 Each inner group can then be solved in isolation (with access to previously
 solved groups).
@@ -22,23 +21,47 @@ import Dict exposing (Dict)
 import Set exposing (Set)
 
 
-type alias Frame comparable =
-    { node : comparable
-    , remaining : List comparable
-    }
+{-| Examples:
 
+Independent declarations each get their own group:
 
-type alias Acc comparable =
-    { index : Dict comparable Int
-    , lowlink : Dict comparable Int
-    , onStack : Set comparable
-    , nodeStack : List comparable
-    , sccs : List (List comparable)
-    , counter : Int
-    }
+    stronglyConnectedComponents [ "x", "y", "z" ] (\_ -> [])
+    --> [ [ "x" ], [ "y" ], [ "z" ] ]
 
+A dependency chain comes back dependencies-first:
 
-stronglyConnectedComponents : List comparable -> (comparable -> List comparable) -> List (List comparable)
+    -- main = double x
+    -- double x = x + x
+    -- x = 1
+    edges node =
+        case node of
+            "main" -> ["double"]
+            "double" -> ["x"]
+            "x" -> []
+            _ -> []
+
+    stronglyConnectedComponents [ "main", "double", "x" ] edges
+    --> [ [ "x" ], [ "double" ], [ "main" ] ]
+
+Mutually recursive bindings must be solved together:
+
+    -- isEven n = if n == 0 then True else isOdd n
+    -- isOdd n = if n == 0 then False else isEven n
+    edges node =
+        case node of
+            "isEven" ->  ["isOdd"]
+            "isOdd" -> ["isEven"]
+            _ -> []
+
+    stronglyConnectedComponents [ "isEven", "isOdd" ] edges
+
+--> [ [ "isOdd", "isEven" ] ]
+
+-}
+stronglyConnectedComponents :
+    List comparable
+    -> (comparable -> List comparable)
+    -> List (List comparable)
 stronglyConnectedComponents nodes edges =
     let
         initAcc : Acc comparable
@@ -56,6 +79,22 @@ stronglyConnectedComponents nodes edges =
             List.foldl (visit edges) initAcc nodes
     in
     List.reverse finalAcc.sccs
+
+
+type alias Frame comparable =
+    { node : comparable
+    , remaining : List comparable
+    }
+
+
+type alias Acc comparable =
+    { index : Dict comparable Int
+    , lowlink : Dict comparable Int
+    , onStack : Set comparable
+    , nodeStack : List comparable
+    , sccs : List (List comparable)
+    , counter : Int
+    }
 
 
 visit : (comparable -> List comparable) -> comparable -> Acc comparable -> Acc comparable
