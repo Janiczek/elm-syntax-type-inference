@@ -5,17 +5,7 @@ module Elm.TypeInference.ModuleIndex exposing
     , modulesWithAlias, isImportedUnaliased
     )
 
-{-| A precomputed summary of everything name resolution needs to know about a
-`File`.
-
-`ModuleLookup` used to re-derive all of this from the AST on _every_ name
-occurrence: `containsValueDeclaration` is a `List.any` over all declarations,
-`exposesValue` rescans declarations per opened union type, and so on. With D
-declarations and N name occurrences in a module that's O(N\*D) -- measured at
-roughly O(n^1.7) on generated modules, and it's paid twice per name (once to
-build the SCC graph, once during inference).
-
-Building this index costs O(D) once per file; every lookup then costs O(log D).
+{-| Precomputed index for name resolution.
 
 @docs ModuleIndex, ImportIndex
 @docs fromFile
@@ -40,10 +30,6 @@ import Elm.Syntax.VarName exposing (VarName)
 import Set exposing (Set)
 
 
-{-| `declared*` is what the module defines, `exposed*` what it lets out -- with
-`Bar(..)` already resolved against the declarations, so no guessing is left for
-lookup time.
--}
 type alias ModuleIndex =
     { moduleName : FullModuleName
     , dottedModuleName : String
@@ -56,10 +42,6 @@ type alias ModuleIndex =
     }
 
 
-{-| `exposing_` is the import's _own_ `exposing` clause, which only tells us
-what this import could bring into unqualified scope; whether the target module
-actually has that name is a separate question (`exposedValues` over there).
--}
 type alias ImportIndex =
     { moduleName : FullModuleName
     , dottedModuleName : String
@@ -69,18 +51,13 @@ type alias ImportIndex =
 
 
 type ExposingIndex
-    = -- `import Foo` -- brings nothing into unqualified scope
-      ExposesNothing
-    | ExposesAll
+    = ExposesNothing -- import Foo
+    | ExposesAll -- import Foo exposing (..)
     | ExposesExplicit
-        { -- `FunctionExpose` + `InfixExpose`
-          values : Set VarName
-        , -- `TypeOrAliasExpose` + `TypeExpose`
-          types : Set VarName
-        , -- `TypeExpose` with `(..)`
-          hasOpenedUnion : Bool
-        , -- `TypeOrAliasExpose`: could be a record alias's constructor function
-          opaqueTypes : Set VarName
+        { values : Set VarName -- import Foo exposing (foo, bar)
+        , types : Set VarName -- import Foo exposing (Foo, Bar(..))
+        , hasOpenedUnion : Bool -- at least one of the exposed types has (..). Used to pre-filter in importCouldExposeValue.
+        , opaqueTypes : Set VarName -- import Foo exposing (Foo)
         }
 
 
@@ -102,7 +79,10 @@ fromFile file =
 
         decls : Declarations
         decls =
-            List.foldl (Node.value >> addDeclaration) emptyDeclarations file.declarations
+            List.foldl
+                (Node.value >> addDeclaration)
+                emptyDeclarations
+                file.declarations
     in
     { moduleName = moduleName
     , dottedModuleName = FullModuleName.toString moduleName
@@ -190,8 +170,6 @@ addDeclaration decl acc =
                 | values = List.foldl Set.insert acc.values ctorNames
                 , types = Set.insert typeName acc.types
                 , unionConstructors =
-                    -- `List.head`-like: the first declaration of a name wins,
-                    -- matching the old `unionConstructorNames`.
                     if Dict.member typeName acc.unionConstructors then
                         acc.unionConstructors
 
