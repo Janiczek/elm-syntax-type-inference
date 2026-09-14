@@ -66,7 +66,7 @@ unifyMany cfg eqs =
         eqs
 
 
-{-| Expand alias (substitute its args) recursively.
+{-| Expand alias (substitute its args) recursively, then collapse extensible records.
 
 Valid Elm aliases can't form an infinite cycle, but `inferAndCheck` is by
 definition for code that might not be valid, so the recursion is bounded by
@@ -78,6 +78,7 @@ would take down the whole elm-review run.
 expandAlias : TypeAliases -> MonoType -> MonoType
 expandAlias typeAliases type_ =
     expandAliasHelp maxAliasDepth typeAliases type_
+        |> Type.collapseExtensible
 
 
 {-| Deeper than any real alias chain; a type nesting aliases 1000 deep would
@@ -436,11 +437,6 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                    - sum r = getX r + getY r
                    Use them both on the same record and you get
                    - sum : { commonVar | x : Float, y : Float } -> Float
-
-                   Both `r1` and `r2` are already flattened here: `substituteEquation`
-                   dereferenced `t1`/`t2` via `SubstitutionMap.substituteMonoTracked`
-                   before this branch ever ran, and that already collapses a chain of
-                   extensible records into one (see `Type.collapseExtensible`).
                 -}
                 let
                     onlyIn1 : Dict VarName MonoType

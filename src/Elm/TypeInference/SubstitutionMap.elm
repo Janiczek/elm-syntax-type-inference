@@ -572,31 +572,43 @@ substituteMonoTracked store monoType =
                 flags : Flags
                 flags =
                     both f1 f2
+
+                needsCollapse : Bool
+                needsCollapse =
+                    Dict.isEmpty fields_
+                        || (case extensionTypevar_ of
+                                Record _ ->
+                                    True
+
+                                ExtensibleRecord _ ->
+                                    True
+
+                                _ ->
+                                    False
+                           )
             in
-            case extensionTypevar_ of
-                Record _ ->
-                    ( Type.collapseExtensibleAndClosedRecord
-                        (ExtensibleRecord
-                            { extensionTypevar = extensionTypevar_
-                            , fields = fields_
-                            }
-                        )
-                    , Bitwise.or flags changedFlag
-                    , s2
+            if needsCollapse then
+                ( Type.collapseExtensible
+                    (ExtensibleRecord
+                        { extensionTypevar = extensionTypevar_
+                        , fields = fields_
+                        }
                     )
+                , Bitwise.or flags changedFlag
+                , s2
+                )
 
-                _ ->
-                    if isChanged flags then
-                        ( ExtensibleRecord
-                            { extensionTypevar = extensionTypevar_
-                            , fields = fields_
-                            }
-                        , flags
-                        , s2
-                        )
+            else if isChanged flags then
+                ( ExtensibleRecord
+                    { extensionTypevar = extensionTypevar_
+                    , fields = fields_
+                    }
+                , flags
+                , s2
+                )
 
-                    else
-                        ( monoType, flags, s2 )
+            else
+                ( monoType, flags, s2 )
 
         UserDefinedType r ->
             let

@@ -7,8 +7,7 @@ module Elm.TypeInference.Type.Internal exposing
     , Type(..)
     , TypeResolver
     , closeOver
-    , collapseExtensibleAndClosedRecord
-    , collapseExtensibleAndExtensibleRecord
+    , collapseExtensible
     , collapsePrimitive
     , external
     , freeVarsMono
@@ -139,44 +138,29 @@ mono =
     Forall []
 
 
-{-| Extensible record on top of a closed record is a closed record:
-`{ r | a : Float }` with `r = { b : Char }` is `{ a : Float, b : Char }`
+{-| Canonicalize an extensible-record chain:
+
+  - `{ r | }` (no fields) is just `r`
+  - `{ { b : Char } | a : Float }` is `{ a : Float, b : Char }`
+  - `{ { s | b : Char } | a : Float }` is `{ s | a : Float, b : Char }`
 
 Bias towards the outer fields.
 
 -}
-collapseExtensibleAndClosedRecord : MonoType -> MonoType
-collapseExtensibleAndClosedRecord type_ =
-    case type_ of
-        ExtensibleRecord r ->
-            case r.extensionTypevar of
-                Record r2 ->
-                    Record { fields = Dict.union r.fields r2.fields }
-
-                _ ->
-                    type_
-
-        _ ->
-            type_
-
-
-{-| Extensible record on top of an extensible record is an extensible record:
-`{ r | a : Float }` with `r = { s | b : Char }` is `{ s | a : Float, b : Char }`
-
-Bias towards the outer fields.
-
--}
-collapseExtensibleAndExtensibleRecord : MonoType -> MonoType
-collapseExtensibleAndExtensibleRecord type_ =
+collapseExtensible : MonoType -> MonoType
+collapseExtensible type_ =
     case type_ of
         ExtensibleRecord r1 ->
             if Dict.isEmpty r1.fields then
-                r1.extensionTypevar
+                collapseExtensible r1.extensionTypevar
 
             else
                 case r1.extensionTypevar of
+                    Record r2 ->
+                        Record { fields = Dict.union r1.fields r2.fields }
+
                     ExtensibleRecord r2 ->
-                        collapseExtensibleAndExtensibleRecord <|
+                        collapseExtensible <|
                             ExtensibleRecord
                                 { extensionTypevar = r2.extensionTypevar
                                 , fields = Dict.union r1.fields r2.fields
@@ -916,12 +900,8 @@ toPublicType { alreadyNormalized } origMono =
 
 
 toPublicTypeAux : MonoType -> Public.Type
-toPublicTypeAux monoUncollapsed =
+toPublicTypeAux mono_ =
     let
-        mono_ =
-            monoUncollapsed
-                |> collapseExtensibleAndExtensibleRecord
-
         f =
             toPublicType { alreadyNormalized = True }
     in
