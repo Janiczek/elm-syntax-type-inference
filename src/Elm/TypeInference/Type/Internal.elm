@@ -1,7 +1,6 @@
 module Elm.TypeInference.Type.Internal exposing
     ( Id
     , MonoType(..)
-    , PackageName
     , Type(..)
     , TypeResolver
     , closeOver
@@ -48,11 +47,8 @@ type alias Id =
     Int
 
 
-{-| "" for the first-party project being inferred,
-"foo/bar" for dependencies from docs.json
--}
 type alias PackageName =
-    String
+    Public.PackageName
 
 
 type alias TypeResolver =

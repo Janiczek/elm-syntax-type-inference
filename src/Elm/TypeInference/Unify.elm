@@ -6,11 +6,8 @@ import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type.Internal as Type
-    exposing
-        ( MonoType(..)
-        , PackageName
-        )
+import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type.Internal as Type exposing (MonoType(..))
 import Elm.TypeInference.TypeVar as TypeVar
     exposing
         ( SuperType(..)

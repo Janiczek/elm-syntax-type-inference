@@ -24,11 +24,10 @@ Comes from elm.json dependency keys.
 Empty string for the user's project.
 -}
 type alias PackageName =
-    -- We could re-expose Elm.TypeInference.Type.Internal.PackageName, but then the docs wouldn't be as nice.
     String
 
 
-{-| TODO docs
+{-| The inferred type.
 -}
 type Type
     = TypeVar String
@@ -64,12 +63,9 @@ type Type
         }
 
 
-
-{- Wraps a type in parentheses when it wouldn't parse back unambiguously
-   in argument position (of `->` or of a type constructor application).
+{-| Wraps a type in parentheses when it wouldn't parse back unambiguously
+in argument position (of `->` or of a type constructor application).
 -}
-
-
 wrapped : Type -> String
 wrapped t =
     case t of
@@ -87,7 +83,11 @@ wrapped t =
             toString t
 
 
-{-| TODO docs
+{-| Display a type.
+
+    Function { from = Int, to = TypeVar "a" }
+    --> "Int -> a"
+
 -}
 toString : Type -> String
 toString t =
