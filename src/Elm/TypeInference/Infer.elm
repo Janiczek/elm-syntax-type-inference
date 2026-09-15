@@ -227,7 +227,7 @@ topLevelMember : Ctx -> Node Declaration -> Expression.Function -> StateM Bindin
 topLevelMember ctx declNode fn =
     State.do (State.idForNode declNode) <| \declId ->
     State.do (aliasImplementation declId fn.declaration) <| \impl ->
-    State.do (annotationScheme ctx fn.signature) <| \maybeAnnotation ->
+    State.do (annotationScheme ctx fn.signature) <| \annotation ->
     let
         varName : VarName
         varName =
@@ -235,7 +235,7 @@ topLevelMember ctx declNode fn =
     in
     State.pure
         { id = declId
-        , maybeAnnotation = maybeAnnotation
+        , annotation = annotation
         , install = State.addGlobalBinding ( "", ctx.thisModuleName, varName )
         , equations =
             State.map2 (++)
@@ -250,7 +250,7 @@ letFunctionMember : Ctx -> Node LetDeclaration -> Expression.Function -> StateM 
 letFunctionMember ctx declNode fn =
     State.do (State.idForNode declNode) <| \declId ->
     State.do (aliasImplementation declId fn.declaration) <| \impl ->
-    State.do (annotationScheme ctx fn.signature) <| \maybeAnnotation ->
+    State.do (annotationScheme ctx fn.signature) <| \annotation ->
     let
         varName : VarName
         varName =
@@ -258,7 +258,7 @@ letFunctionMember ctx declNode fn =
     in
     State.pure
         { id = declId
-        , maybeAnnotation = maybeAnnotation
+        , annotation = annotation
         , install = State.addBinding varName
         , equations =
             State.map2 (++)

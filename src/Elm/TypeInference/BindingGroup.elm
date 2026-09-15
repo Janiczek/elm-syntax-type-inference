@@ -12,9 +12,9 @@ import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
 {-| One binding in the binding group.
 -}
 type alias Member =
-    { -- fresh type ID, registered against the declaration range
+    { -- fresh type ID, registered against the declaration Range
       id : Id
-    , maybeAnnotation : Maybe Type
+    , annotation : Maybe Type
     , -- top-level decls get installed into `globalEnv`
       -- let..in bindings get installed into `lexicalEnv`
       install : Type -> StateM ()
@@ -33,8 +33,9 @@ solveGroup cfg members =
                 (State.traverse
                     (\member ->
                         State.do (State.setIdToCurrentLetRank member.id) <| \() ->
-                        case member.maybeAnnotation of
+                        case member.annotation of
                             Just scheme ->
+                                -- Trust the annotation
                                 member.install scheme
 
                             Nothing ->
@@ -44,21 +45,17 @@ solveGroup cfg members =
                 )
              <| \_ ->
              State.do (State.traverse .equations members) <| \eqLists ->
-             let
-                 droppedEqs : List ( MonoType, MonoType )
-                 droppedEqs =
-                     eqLists
-                         |> List.concat
-                         |> List.map TypeEquation.dropLabel
-             in
-             Unify.unifyMany cfg droppedEqs
+             eqLists
+                 |> List.concat
+                 |> List.map TypeEquation.dropLabel
+                 |> Unify.unifyMany cfg
             )
         )
     <| \() ->
     State.do
         (State.traverse
             (\member ->
-                case member.maybeAnnotation of
+                case member.annotation of
                     Just _ ->
                         State.pure ()
 
