@@ -33,22 +33,6 @@ type alias Error =
 
 
 {-| Types of errors.
-
-Type errors carry the public [`Elm.TypeInference.Type`](../Elm-TypeInference-Type)
-representation: normalized display types, never internal inference state.
-The variable names inside them are only meaningful within a single error --
-`a` on the left and `a` on the right of one `TypeMismatch` are the same
-variable, but `a` in two different errors need not be.
-
-  - `TypeMismatch` is two structural types that cannot unify.
-  - `InfiniteType` is a variable and a type containing that same variable
-    (the first type is always a variable).
-  - `ConstraintMismatch` is a constrained variable (its name encodes the
-    constraint: `number`, `comparable`, `appendable`, `compappend`, with an
-    optional numeric suffix) and the type violating it.
-  - `InternalInconsistency` is an invariant violation on already-checked code,
-    not a user type error.
-
 -}
 type ErrorDetails
     = -- Syntax errors
