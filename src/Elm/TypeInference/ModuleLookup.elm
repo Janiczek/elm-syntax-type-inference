@@ -248,6 +248,7 @@ unqualifiedVarOutsideThisModule index modules thisModule maybeModuleName varName
             |> Result.andThen
                 (\explicitMatches ->
                     let
+                        home : FullModuleName
                         home =
                             ImplicitImports.implicitValueHome varName
                     in

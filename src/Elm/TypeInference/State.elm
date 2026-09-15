@@ -2,10 +2,10 @@ module Elm.TypeInference.State exposing
     ( TIState, State, GlobalKey, init, empty
     , pure, error, fromResult, run
     , map, map2
-    , do, andThen, foldl, traverse
+    , do, andThen, traverse
     , getNextIdAndTick
     , getNodeIds, idForNode, aliasNodeId
-    , getSubst, modifySubst, substituteEquation
+    , getSubst, modifySubst
     , addBinding, existsInEnv, lookupEnv, withScopedEnv
     , addGlobalBinding, lookupGlobalEnv, getGlobalEnv
     , withDeeperLetRank, setIdToCurrentLetRank, generalizeWith, instantiate
@@ -23,7 +23,7 @@ module Elm.TypeInference.State exposing
 
 @docs pure, error, fromResult, run
 @docs map, map2
-@docs do, andThen, foldl, traverse
+@docs do, andThen, traverse
 
 
 # Next ID
@@ -38,7 +38,7 @@ module Elm.TypeInference.State exposing
 
 # The accumulated solution
 
-@docs getSubst, modifySubst, substituteEquation
+@docs getSubst, modifySubst
 
 
 # Lexical env: scoping (lambda args, let..in, case branches)
@@ -198,33 +198,7 @@ do m fn =
     andThen fn m
 
 
-{-| Tail-recursive left fold.
-
-Needed because a naive list recursion with continuations would blow up the stack
-on realistic code. This will provide constant stack instead.
-
--}
-foldl : (a -> b -> TIState b) -> b -> List a -> TIState b
-foldl fn init_ list =
-    \state -> foldlHelp fn init_ list state
-
-
-foldlHelp : (a -> b -> TIState b) -> b -> List a -> State -> ( Result Error b, State )
-foldlHelp fn acc list state =
-    case list of
-        [] ->
-            ( Ok acc, state )
-
-        x :: rest ->
-            case fn x acc state of
-                ( Err err, newState ) ->
-                    ( Err err, newState )
-
-                ( Ok newAcc, newState ) ->
-                    foldlHelp fn newAcc rest newState
-
-
-{-| Tail-recursive, for the same reason as [`foldl`](#foldl): the naive
+{-| Tail-recursive: the naive
 `List.foldr (map2 (::)) (pure [])` recurses once per element when the composed
 action is _run_, which blows the stack on large projects.
 -}
@@ -412,20 +386,6 @@ modifySubst fn =
         )
 
 
-setSubst : SubstitutionMap -> TIState ()
-setSubst subst =
-    modify
-        (\state ->
-            { nextId = state.nextId
-            , nodeIds = state.nodeIds
-            , lexicalEnv = state.lexicalEnv
-            , globalEnv = state.globalEnv
-            , subst = subst
-            , letRank = state.letRank
-            }
-        )
-
-
 {-| Substitute a `MonoType`, writing back any newly-discovered ground
 resolutions / path-compressed chains into `state.subst` so later lookups
 benefit too.
@@ -443,39 +403,6 @@ substituteMono monoType =
           , lexicalEnv = state.lexicalEnv
           , globalEnv = state.globalEnv
           , subst = subst1
-          , letRank = state.letRank
-          }
-        )
-
-
-{-| Substitute both sides of one equation, reporting for each whether it came
-out ground (var-free) -- which `Unify` uses to skip the structural walk
-entirely.
-
-Both sides in one action on purpose: `Unify.unifyMany` runs this per equation,
-and threading the store through the monad twice instead of once is pure
-allocation on the hottest path in the whole library.
-
--}
-substituteEquation : MonoType -> MonoType -> TIState ( ( MonoType, Bool ), ( MonoType, Bool ) )
-substituteEquation t1 t2 =
-    \state ->
-        let
-            ( st1, flags1, subst1 ) =
-                SubstitutionMap.substituteMonoTracked state.subst t1
-
-            ( st2, flags2, subst2 ) =
-                SubstitutionMap.substituteMonoTracked subst1 t2
-        in
-        ( Ok
-            ( ( st1, SubstitutionMap.resultIsGround flags1 )
-            , ( st2, SubstitutionMap.resultIsGround flags2 )
-            )
-        , { nextId = state.nextId
-          , nodeIds = state.nodeIds
-          , lexicalEnv = state.lexicalEnv
-          , globalEnv = state.globalEnv
-          , subst = subst2
           , letRank = state.letRank
           }
         )

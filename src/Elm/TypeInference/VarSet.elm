@@ -1,9 +1,16 @@
-module Elm.TypeInference.VarSet exposing (VarKey, VarSet, diff, empty, fromList, insert, toList, union, varKey)
+module Elm.TypeInference.VarSet exposing
+    ( VarKey
+    , VarSet
+    , diff
+    , empty
+    , fromList
+    , insert
+    , toList
+    , union
+    , varKey
+    )
 
 {-| An ordered set of `TypeVar`s, and the `TypeVar` identity it's keyed on.
-
-@docs VarKey, VarSet, diff, empty, fromList, insert, toList, union, varKey
-
 -}
 
 import Elm.TypeInference.TypeVar
@@ -15,7 +22,7 @@ import Elm.TypeInference.TypeVar
 import Set exposing (Set)
 
 
-{-| `comparable` encoding of `TypeVar` (for Dicts): (id, superTypeTag, name)
+{-| `comparable` encoding of `TypeVar` to be able to use Dict: (id, superTypeTag, name)
 -}
 type alias VarKey =
     ( Int, Int, String )
@@ -23,8 +30,11 @@ type alias VarKey =
 
 {-|
 
-     varKey (Generated 5, Number) --> (5, 1 {- Number -}, "")
-     varKey (Named "hello", Comparable) --> (-1, 2 {- Comparable -}, "hello")
+    varKey (Generated 5, Number)
+    --> (5, 1 {- Number -}, "")
+
+    varKey (Named "hello", Comparable)
+    --> (-1, 2 {- Comparable -}, "hello")
 
 -}
 varKey : TypeVar -> VarKey
@@ -64,15 +74,11 @@ type alias VarSet =
     }
 
 
-{-| TODO docs
--}
 empty : VarSet
 empty =
     { order = [], members = Set.empty }
 
 
-{-| TODO docs
--}
 insert : TypeVar -> VarSet -> VarSet
 insert var s =
     { order = var :: s.order
@@ -80,8 +86,6 @@ insert var s =
     }
 
 
-{-| TODO docs
--}
 toList : VarSet -> List TypeVar
 toList s =
     let
@@ -106,8 +110,6 @@ toList s =
     go Set.empty s.order []
 
 
-{-| TODO docs
--}
 union : VarSet -> VarSet -> VarSet
 union l r =
     { order = l.order ++ r.order
@@ -115,8 +117,6 @@ union l r =
     }
 
 
-{-| TODO docs
--}
 diff : VarSet -> VarSet -> VarSet
 diff l r =
     { order = List.filter (\var -> not (Set.member (varKey var) r.members)) l.order
@@ -124,8 +124,6 @@ diff l r =
     }
 
 
-{-| TODO docs
--}
 fromList : List TypeVar -> VarSet
 fromList vars =
     { order = List.reverse vars

@@ -725,14 +725,6 @@ resolveBound store k bound =
     let
         ( resolved, flags, store1 ) =
             substituteMonoTracked store bound
-
-        slot : Slot
-        slot =
-            if isGround flags then
-                Ground resolved
-
-            else
-                Bound resolved
     in
     if resolved == bound then
         -- Skip work, nothing to update.
@@ -742,6 +734,15 @@ resolveBound store k bound =
         )
 
     else
+        let
+            slot : Slot
+            slot =
+                if isGround flags then
+                    Ground resolved
+
+                else
+                    Bound resolved
+        in
         ( resolved
         , -- Resolving a var to what it's bound to is always a change.
           Bitwise.or flags changedFlag

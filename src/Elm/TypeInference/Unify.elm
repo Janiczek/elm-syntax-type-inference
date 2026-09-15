@@ -296,10 +296,10 @@ zipArgs args1 args2 =
                 Nothing ->
                     Nothing
 
-        ( a1 :: _, [] ) ->
+        ( _ :: _, [] ) ->
             Nothing
 
-        ( [], a2 :: _ ) ->
+        ( [], _ :: _ ) ->
             Nothing
 
 
@@ -547,7 +547,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                                 , eqs
                                 )
                             )
-                            (\k v1 v2 ( o1, o2, eqs ) ->
+                            (\_ v1 v2 ( o1, o2, eqs ) ->
                                 ( o1
                                 , o2
                                 , ( v1, v2 ) :: eqs
@@ -574,28 +574,29 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                 else
-                    State.do State.getNextIdAndTick <| \tailId ->
-                    let
-                        tail : MonoType
-                        tail =
-                            Type.id_ tailId
-                    in
-                    unifyMany
-                        cfg
-                        (( r1.extensionTypevar
-                         , ExtensibleRecord
-                            { extensionTypevar = tail
-                            , fields = onlyIn2
-                            }
-                         )
-                            :: ( r2.extensionTypevar
-                               , ExtensibleRecord
+                    State.do State.getNextIdAndTick <|
+                        \tailId ->
+                            let
+                                tail : MonoType
+                                tail =
+                                    Type.id_ tailId
+                            in
+                            unifyMany
+                                cfg
+                                (( r1.extensionTypevar
+                                 , ExtensibleRecord
                                     { extensionTypevar = tail
-                                    , fields = onlyIn1
+                                    , fields = onlyIn2
                                     }
-                               )
-                            :: sharedEqs
-                        )
+                                 )
+                                    :: ( r2.extensionTypevar
+                                       , ExtensibleRecord
+                                            { extensionTypevar = tail
+                                            , fields = onlyIn1
+                                            }
+                                       )
+                                    :: sharedEqs
+                                )
 
             ( ExtensibleRecord er, Record r ) ->
                 recordVsExtensible r.fields er
@@ -711,16 +712,17 @@ bind cfg typeVar type_ =
                             -- eg. Comparable and Appendable
                             -- introduce fresh var with combined constraint
                             -- point both at it
-                            State.do State.getNextIdAndTick <| \freshId ->
-                            let
-                                fresh : TypeVar
-                                fresh =
-                                    ( Generated freshId, m )
-                            in
-                            State.modifySubst
-                                (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                    >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
-                                )
+                            State.do State.getNextIdAndTick <|
+                                \freshId ->
+                                    let
+                                        fresh : TypeVar
+                                        fresh =
+                                            ( Generated freshId, m )
+                                    in
+                                    State.modifySubst
+                                        (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                            >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                                        )
 
             _ ->
                 if not cfg.checks || accepts cfg.typeAliases super type_ then

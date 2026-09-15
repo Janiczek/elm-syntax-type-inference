@@ -54,7 +54,7 @@ import Elm.TypeInference.Unify exposing (TypeAlias)
 import List.ExtraExtra
 import Maybe.Extra
 import Result.Extra
-import Set exposing (Set)
+import Set
 import TypeLookupTable exposing (TypeLookupTable)
 import TypeLookupTable.Internal
 
@@ -218,34 +218,6 @@ type alias ModuleInterface =
     }
 
 
-{-| Infer a single module, given the interfaces of the modules it imports.
-
-Feed modules in topological order (or use `inferProject`, which does that for you).
-
--}
-inferModule :
-    { checks : Bool }
-    -> DependencyEnv
-    -> Dict ModuleName ModuleInterface
-    -> File
-    -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
-inferModule checks depEnv importedInterfaces file =
-    inferModule_ checks depEnv (fullModuleNameKeys importedInterfaces) file
-
-
-{-| An interface built from explicit type annotations alone, with no inference
-at all: unannotated exposed values simply aren't in it.
-
-This is the degradation path. A module whose inference failed can still give
-its dependents _something_ instead of cascading the failure through the whole
-import graph.
-
--}
-interfaceFromAnnotations : DependencyEnv -> Dict ModuleName ModuleInterface -> File -> ModuleInterface
-interfaceFromAnnotations depEnv importedInterfaces file =
-    interfaceFromAnnotations_ depEnv (fullModuleNameKeys importedInterfaces) file
-
-
 {-| Infer every module of a project, in dependency order.
 
 Unlike `inferCorrectCode` this reports failures **per
@@ -387,18 +359,6 @@ inferOne checks depEnv m acc =
                         (interfaceFromAnnotations_ depEnv imported m.file)
                         acc.interfaces
             }
-
-
-fullModuleNameKeys : Dict ModuleName a -> Dict FullModuleName a
-fullModuleNameKeys dict =
-    dict
-        |> Dict.toList
-        |> List.filterMap
-            (\( moduleName, value ) ->
-                FullModuleName.fromModuleName moduleName
-                    |> Maybe.map (\fullModuleName -> ( fullModuleName, value ))
-            )
-        |> Dict.fromList
 
 
 
