@@ -6,7 +6,7 @@ import Elm.TypeInference.Type.Internal exposing (MonoType)
 {-| Equations are always between mono types, never between schemes (foralls).
 If schemes are involved, they get instantiated to mono types first.
 
-The third element (String) is a debugging crutch.
+The third element (String) is a debugging label.
 
 -}
 type alias TypeEquation =
