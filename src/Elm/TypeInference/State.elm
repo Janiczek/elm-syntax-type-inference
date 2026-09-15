@@ -585,9 +585,6 @@ lookupEnv thisModule var =
 -- GLOBAL ENV
 
 
-{-| The whole global env, for extracting a module's `Interface` once it's
-inferred.
--}
 getGlobalEnv : TIState (Dict GlobalKey Type)
 getGlobalEnv =
     get

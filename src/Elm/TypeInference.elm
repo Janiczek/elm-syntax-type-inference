@@ -191,7 +191,7 @@ dependencyEnv { directDependencies, allDependencies } =
 {-| What one module contributes to the modules that import it.
 
 Inference runs one module at a time (Elm forbids import cycles, so a module can
-always be inferred once its imports are done). An `Interface` is everything the
+always be inferred once its imports are done). A `ModuleInterface` is everything the
 importing module needs: it replaces having the imported `File`s around.
 
 The types in here are id-space independent: `State.generalizeWith` substitutes
@@ -211,12 +211,11 @@ interface stays valid no matter which `State` consumes it.
     anyway.)
 
 -}
-type Interface
-    = Interface
-        { moduleIndex : ModuleIndex
-        , values : Dict VarName TypeI.Type
-        , typeAliases : Dict GlobalKey TypeAlias
-        }
+type alias ModuleInterface =
+    { moduleIndex : ModuleIndex
+    , values : Dict VarName TypeI.Type
+    , typeAliases : Dict GlobalKey TypeAlias
+    }
 
 
 {-| Infer a single module, given the interfaces of the modules it imports.
@@ -227,9 +226,9 @@ Feed modules in topological order (or use `inferProject`, which does that for yo
 inferModule :
     { checks : Bool }
     -> DependencyEnv
-    -> Dict ModuleName Interface
+    -> Dict ModuleName ModuleInterface
     -> File
-    -> Result Error { table : TypeLookupTable, interface : Interface }
+    -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
 inferModule checks depEnv importedInterfaces file =
     inferModule_ checks depEnv (fullModuleNameKeys importedInterfaces) file
 
@@ -242,7 +241,7 @@ its dependents _something_ instead of cascading the failure through the whole
 import graph.
 
 -}
-interfaceFromAnnotations : DependencyEnv -> Dict ModuleName Interface -> File -> Interface
+interfaceFromAnnotations : DependencyEnv -> Dict ModuleName ModuleInterface -> File -> ModuleInterface
 interfaceFromAnnotations depEnv importedInterfaces file =
     interfaceFromAnnotations_ depEnv (fullModuleNameKeys importedInterfaces) file
 
@@ -352,14 +351,14 @@ type alias ProjectModule =
 type alias ProjectAcc =
     { tables : Dict ModuleName TypeLookupTable
     , errors : Dict ModuleName Error
-    , interfaces : Dict FullModuleName Interface
+    , interfaces : Dict FullModuleName ModuleInterface
     }
 
 
 inferOne : { checks : Bool } -> DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
 inferOne checks depEnv m acc =
     let
-        imported : Dict FullModuleName Interface
+        imported : Dict FullModuleName ModuleInterface
         imported =
             m.index.imports
                 |> List.foldl
@@ -422,7 +421,7 @@ type alias ModuleCtx =
     }
 
 
-moduleCtx : DependencyEnv -> Dict FullModuleName Interface -> File -> ModuleCtx
+moduleCtx : DependencyEnv -> Dict FullModuleName ModuleInterface -> File -> ModuleCtx
 moduleCtx (DependencyEnv depEnv) importedInterfaces file =
     let
         thisIndex : ModuleIndex
@@ -432,7 +431,7 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
         modules : Dict FullModuleName ModuleIndex
         modules =
             importedInterfaces
-                |> Dict.map (\_ (Interface interface) -> interface.moduleIndex)
+                |> Dict.map (\_ interface -> interface.moduleIndex)
                 |> Dict.insert thisIndex.moduleName thisIndex
 
         imported :
@@ -441,7 +440,7 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
             }
         imported =
             Dict.foldl
-                (\moduleName (Interface interface) acc ->
+                (\moduleName interface acc ->
                     { inheritedAliases = Dict.union interface.typeAliases acc.inheritedAliases
                     , globalEnv =
                         Dict.foldl
@@ -469,9 +468,9 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
 inferModule_ :
     { checks : Bool }
     -> DependencyEnv
-    -> Dict FullModuleName Interface
+    -> Dict FullModuleName ModuleInterface
     -> File
-    -> Result Error { table : TypeLookupTable, interface : Interface }
+    -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
 inferModule_ { checks } depEnv importedInterfaces file =
     let
         ctx : ModuleCtx
@@ -501,7 +500,7 @@ inferModule_ { checks } depEnv importedInterfaces file =
         |> Tuple.first
 
 
-interfaceFromAnnotations_ : DependencyEnv -> Dict FullModuleName Interface -> File -> Interface
+interfaceFromAnnotations_ : DependencyEnv -> Dict FullModuleName ModuleInterface -> File -> ModuleInterface
 interfaceFromAnnotations_ depEnv importedInterfaces file =
     let
         ctx : ModuleCtx
@@ -521,12 +520,10 @@ interfaceFromAnnotations_ depEnv importedInterfaces file =
         |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = ctx.globalEnv })
         |> Tuple.first
         |> Result.withDefault
-            (Interface
-                { moduleIndex = ctx.thisIndex
-                , values = Dict.empty
-                , typeAliases = ctx.inheritedAliases
-                }
-            )
+            { moduleIndex = ctx.thisIndex
+            , values = Dict.empty
+            , typeAliases = ctx.inheritedAliases
+            }
 
 
 moduleResult :
@@ -535,7 +532,7 @@ moduleResult :
     ->
         TIState
             { table : TypeLookupTable
-            , interface : Interface
+            , interface : ModuleInterface
             }
 moduleResult ctx outgoingAliases =
     -- TODO translate from TypeI.Type to Type.Type before inserting into the dict
@@ -577,11 +574,10 @@ moduleResult ctx outgoingAliases =
                             State.pure
                                 { table = TypeLookupTable.Internal.TLT typesByRange
                                 , interface =
-                                    Interface
-                                        { moduleIndex = ctx.thisIndex
-                                        , values = exposedValues
-                                        , typeAliases = outgoingAliases
-                                        }
+                                    { moduleIndex = ctx.thisIndex
+                                    , values = exposedValues
+                                    , typeAliases = outgoingAliases
+                                    }
                                 }
 
 
