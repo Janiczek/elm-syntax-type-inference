@@ -151,16 +151,21 @@ findHelp store path var =
             findHelp store (var :: path) next
 
         _ ->
-            ( var
-            , { slots =
-                    List.foldl
-                        (\pathVar acc -> Dict.insert (key pathVar) (Link var) acc)
-                        store.slots
-                        path
-              , ranks = store.ranks
-              , levels = store.levels
-              }
-            )
+            if List.isEmpty path then
+                -- No chain walked; skip work
+                ( var, store )
+
+            else
+                ( var
+                , { slots =
+                        List.foldl
+                            (\pathVar acc -> Dict.insert (key pathVar) (Link var) acc)
+                            store.slots
+                            path
+                  , ranks = store.ranks
+                  , levels = store.levels
+                  }
+                )
 
 
 {-| Bind a root variable to a non-variable type.
@@ -387,23 +392,32 @@ substituteTracked store (Forall boundVars monoType) =
             ( Forall [] monoType_, store1 )
 
         _ ->
-            let
-                restricted : SubstitutionMap
-                restricted =
-                    List.foldl
-                        (\var acc ->
-                            { slots = Dict.remove (key var) acc.slots
-                            , ranks = acc.ranks
-                            , levels = acc.levels
-                            }
-                        )
-                        store
-                        boundVars
+            -- Only exclude slots when they actually intersect with bound vars (skip work)
+            if List.any (\var -> Dict.member (key var) store.slots) boundVars then
+                let
+                    restricted : SubstitutionMap
+                    restricted =
+                        List.foldl
+                            (\var acc ->
+                                { slots = Dict.remove (key var) acc.slots
+                                , ranks = acc.ranks
+                                , levels = acc.levels
+                                }
+                            )
+                            store
+                            boundVars
 
-                ( monoType_, _ ) =
-                    substituteMono restricted monoType
-            in
-            ( Forall boundVars monoType_, store )
+                    ( monoType_, _ ) =
+                        substituteMono restricted monoType
+                in
+                ( Forall boundVars monoType_, store )
+
+            else
+                let
+                    ( monoType_, store1 ) =
+                        substituteMono store monoType
+                in
+                ( Forall boundVars monoType_, store1 )
 
 
 {-| `Tuple.first << substituteMono`, for the one-shot renaming maps
@@ -704,14 +718,22 @@ resolveBound store k bound =
             else
                 Bound resolved
     in
-    ( resolved
-    , -- Resolving a var to what it's bound to is always a change.
-      Bitwise.or flags changedFlag
-    , { slots = Dict.insert k slot store1.slots
-      , ranks = store1.ranks
-      , levels = store1.levels
-      }
-    )
+    if resolved == bound then
+        -- Skip work, nothing to update.
+        ( resolved
+        , Bitwise.or flags changedFlag
+        , store1
+        )
+
+    else
+        ( resolved
+        , -- Resolving a var to what it's bound to is always a change.
+          Bitwise.or flags changedFlag
+        , { slots = Dict.insert k slot store1.slots
+          , ranks = store1.ranks
+          , levels = store1.levels
+          }
+        )
 
 
 {-| `isGround` and `isChanged` packed into one `Int`.
