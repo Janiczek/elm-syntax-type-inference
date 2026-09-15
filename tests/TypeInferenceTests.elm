@@ -1882,7 +1882,7 @@ substitutionMapCompressionSuite =
         -- a -> b -> Int, a chain that would otherwise compress straight to Int.
         subst : SubstitutionMap.SubstitutionMap
         subst =
-            SubstitutionMap.fromList
+            SubstitutionMap.test_fromList
                 [ ( a, TypeI.TypeVar b )
                 , ( b, TypeI.Int )
                 ]

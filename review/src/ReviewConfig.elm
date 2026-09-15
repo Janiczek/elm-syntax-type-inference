@@ -20,6 +20,7 @@ import NoUnused.CustomTypeConstructors
 import NoUnused.Dependencies
 import NoUnused.Exports
 import NoUnused.Parameters
+import NoTestValuesInProductionCode
 import NoUnused.Patterns
 import NoUnused.Variables
 import Review.Rule as Rule exposing (Rule)
@@ -53,6 +54,8 @@ config =
     , NoUnused.Parameters.rule
     , NoUnused.Patterns.rule
     , NoUnused.Variables.rule
+    , NoTestValuesInProductionCode.rule
+        (NoTestValuesInProductionCode.startsWith "test_")
     , Simplify.rule Simplify.defaults
 
     -- custom

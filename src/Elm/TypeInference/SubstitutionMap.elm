@@ -4,7 +4,6 @@ module Elm.TypeInference.SubstitutionMap exposing
     , SubstitutionMap
     , bindRoot
     , empty
-    , fromList
     , letRankOf
     , linkTo
     , resultIsGround
@@ -14,6 +13,7 @@ module Elm.TypeInference.SubstitutionMap exposing
     , substituteMonoPure
     , substituteMonoTracked
     , substituteTracked
+    , test_fromList
     , union
     )
 
@@ -33,42 +33,19 @@ import Elm.TypeInference.Type.Internal as Type
         , Type(..)
         )
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
-import Elm.TypeInference.VarSet as VarSet
-
-
-{-| How deeply nested inside `let`/binding groups a type variable was created.
-Thet let-rank of newly created vars is remembered into SubstitutionMap.letRanks.
-Generalization only touches vars above the current rank.
--}
-type alias LetRank =
-    Int
+import Elm.TypeInference.VarSet as VarSet exposing (VarKey)
 
 
 type alias SubstitutionMap =
-    { slots : Dict Key Slot
-    , -- Union by rank, to keep `find` chains short.
-      ranks : Dict Key Int
-    , -- Let-rank of each generated id at the moment it was created. Lowered
-      -- to the min of the two sides on unify, so generalization can quantify
-      -- "vars younger than the enclosing let" without scanning the lexical
-      -- environment.
+    { -- Each var's data
+      slots : Dict VarKey Slot
+    , -- Union-find rank per root (missing = 0): approx tree height,
+      -- bumped on equal-rank merge to keep `find` chains short.
+      ranks : Dict VarKey Int
+    , -- Let-rank of each generated id at the moment it was created.
+      -- Lowered to min(side1,side2) on unify.
       letRanks : Dict Id LetRank
     }
-
-
-type Slot
-    = Link TypeVar -- same type as the other variable (step in the right direction)
-    | Bound MonoType -- resolves to mono-type but that one could still mention unresolved vars
-    | Ground MonoType -- var-free, as specific as can be.
-
-
-type alias Key =
-    VarSet.VarKey
-
-
-key : TypeVar -> Key
-key =
-    VarSet.varKey
 
 
 empty : SubstitutionMap
@@ -79,34 +56,74 @@ empty =
     }
 
 
-{-| Build a store directly from var/type pairs, for tests that want to pin down
-resolution behavior on a hand-written chain.
+{-| How deeply nested inside `let`/binding groups a type variable was created.
+Thet let-rank of newly created vars is remembered into SubstitutionMap.letRanks.
+Generalization only touches vars above the current rank.
+-}
+type alias LetRank =
+    Int
 
-The caller guarantees the result is acyclic. The solver never builds a store
-this way -- it goes through [`linkTo`](#linkTo) / [`union`](#union) /
-[`bindRoot`](#bindRoot), which can't create a cycle by construction.
+
+type Slot
+    = Link TypeVar -- same type as the other variable (step in the right direction)
+    | Bound MonoType -- resolves to mono-type but that one could still mention unresolved vars
+    | Ground MonoType -- var-free, as specific as can be.
+
+
+
+-- FLAGS
+
+
+{-| `isGround` and `isChanged` as an Int.
+
+This is on the hottest path in the whole library, so ... integers are worth it.
 
 -}
-fromList : List ( TypeVar, MonoType ) -> SubstitutionMap
-fromList list =
-    { slots =
-        List.foldl
-            (\( var, type_ ) acc -> Dict.insert (key var) (slotFor type_) acc)
-            Dict.empty
-            list
-    , ranks = Dict.empty
-    , letRanks = Dict.empty
-    }
+type alias Flags =
+    Int
 
 
-slotFor : MonoType -> Slot
-slotFor type_ =
-    case type_ of
-        TypeVar other ->
-            Link other
+noFlags : Flags
+noFlags =
+    0
 
-        _ ->
-            Bound type_
+
+groundFlag : Flags
+groundFlag =
+    1
+
+
+changedFlag : Flags
+changedFlag =
+    2
+
+
+groundAndChanged : Flags
+groundAndChanged =
+    3
+
+
+isGround : Flags -> Bool
+isGround flags =
+    Bitwise.and flags groundFlag /= 0
+
+
+isChanged : Flags -> Bool
+isChanged flags =
+    Bitwise.and flags changedFlag /= 0
+
+
+{-| Node built from two children:
+
+  - ground if both are
+  - changed if either is
+
+-}
+both : Flags -> Flags -> Flags
+both a b =
+    Bitwise.or
+        (Bitwise.and groundFlag (Bitwise.and a b))
+        (Bitwise.and changedFlag (Bitwise.or a b))
 
 
 
@@ -115,7 +132,7 @@ slotFor type_ =
 
 findHelp : SubstitutionMap -> List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
 findHelp store path var =
-    case Dict.get (key var) store.slots of
+    case Dict.get (VarSet.varKey var) store.slots of
         Just (Link next) ->
             findHelp store (var :: path) next
 
@@ -128,7 +145,7 @@ findHelp store path var =
                 ( var
                 , { slots =
                         List.foldl
-                            (\pathVar acc -> Dict.insert (key pathVar) (Link var) acc)
+                            (\pathVar acc -> Dict.insert (VarSet.varKey pathVar) (Link var) acc)
                             store.slots
                             path
                   , ranks = store.ranks
@@ -144,7 +161,7 @@ The caller must have run the occurs check first (`Unify.bind` does).
 -}
 bindRoot : TypeVar -> MonoType -> SubstitutionMap -> SubstitutionMap
 bindRoot var type_ store =
-    { slots = Dict.insert (key var) (Bound type_) store.slots
+    { slots = Dict.insert (VarSet.varKey var) (Bound type_) store.slots
     , ranks = store.ranks
     , letRanks = store.letRanks
     }
@@ -162,7 +179,7 @@ linkTo { child, parent } store =
     -- No rank bookkeeping: constraints only differ between two vars rarely, so
     -- leaving these classes at rank 0 costs nothing measurable and keeps the
     -- common path (`union`) free of extra dictionary work.
-    { slots = Dict.insert (key child) (Link parent) store.slots
+    { slots = Dict.insert (VarSet.varKey child) (Link parent) store.slots
     , ranks = store.ranks
     , letRanks = store.letRanks
     }
@@ -176,11 +193,11 @@ union a b store =
     let
         keyA : Key
         keyA =
-            key a
+            VarSet.varKey a
 
         keyB : Key
         keyB =
-            key b
+            VarSet.varKey b
 
         rankA : Int
         rankA =
@@ -216,7 +233,7 @@ union a b store =
             |> setVarLetRank a mergedLetRank
 
 
-rankOf : SubstitutionMap -> Key -> Int
+rankOf : SubstitutionMap -> VarKey -> Int
 rankOf store k =
     Dict.get k store.ranks
         |> Maybe.withDefault 0
@@ -365,9 +382,9 @@ substituteTracked store (Forall boundVars monoType) =
                 ( didIntersect, restricted ) =
                     List.foldl
                         (\var ( found, acc ) ->
-                            if Dict.member (key var) acc.slots then
+                            if Dict.member (VarSet.varKey var) acc.slots then
                                 ( True
-                                , { slots = Dict.remove (key var) acc.slots
+                                , { slots = Dict.remove (VarSet.varKey var) acc.slots
                                   , ranks = acc.ranks
                                   , letRanks = acc.letRanks
                                   }
@@ -439,7 +456,7 @@ substituteMonoTracked store monoType =
             let
                 k : Key
                 k =
-                    key var
+                    VarSet.varKey var
             in
             -- One dictionary lookup covers the cache, the unbound case and the
             -- directly-bound case; `find` is inlined so only a real link chain
@@ -447,10 +464,16 @@ substituteMonoTracked store monoType =
             case Dict.get k store.slots of
                 Nothing ->
                     -- Unbound root.
-                    ( monoType, noFlags, store )
+                    ( monoType
+                    , noFlags
+                    , store
+                    )
 
                 Just (Ground groundType) ->
-                    ( groundType, groundAndChanged, store )
+                    ( groundType
+                    , groundAndChanged
+                    , store
+                    )
 
                 Just (Bound bound) ->
                     resolveBound store k bound
@@ -460,7 +483,7 @@ substituteMonoTracked store monoType =
                         ( root, store1 ) =
                             findHelp store [ var ] next
                     in
-                    case Dict.get (key root) store1.slots of
+                    case Dict.get (VarSet.varKey root) store1.slots of
                         Just (Bound bound) ->
                             resolveBound store1 k bound
 
@@ -476,7 +499,10 @@ substituteMonoTracked store monoType =
                         _ ->
                             -- Unbound root: the best we can say is which var
                             -- this one has merged into.
-                            ( TypeVar root, changedFlag, store1 )
+                            ( TypeVar root
+                            , changedFlag
+                            , store1
+                            )
 
         -- The rest are just recursion
         Function { from, to } ->
@@ -678,7 +704,7 @@ either cache the answer (ground: can never change) or path-compress the chain
 straight to it (not ground: still has to be walked again later, but no longer
 through the whole chain).
 -}
-resolveBound : SubstitutionMap -> Key -> MonoType -> ( MonoType, Flags, SubstitutionMap )
+resolveBound : SubstitutionMap -> VarKey -> MonoType -> ( MonoType, Flags, SubstitutionMap )
 resolveBound store k bound =
     let
         ( resolved, flags, store1 ) =
@@ -709,57 +735,6 @@ resolveBound store k bound =
           , letRanks = store1.letRanks
           }
         )
-
-
-{-| `isGround` and `isChanged` packed into one `Int`.
-
-This is returned once per AST node per substitution, on the hottest path in the
-library. Elm has no 4-tuples, and a record here allocates more than the flags
-save.
-
--}
-type alias Flags =
-    Int
-
-
-noFlags : Flags
-noFlags =
-    0
-
-
-groundFlag : Flags
-groundFlag =
-    1
-
-
-changedFlag : Flags
-changedFlag =
-    2
-
-
-groundAndChanged : Flags
-groundAndChanged =
-    3
-
-
-isGround : Flags -> Bool
-isGround flags =
-    Bitwise.and flags groundFlag /= 0
-
-
-isChanged : Flags -> Bool
-isChanged flags =
-    Bitwise.and flags changedFlag /= 0
-
-
-{-| Flags for a node built from two children: ground only if both are, changed
-if either is.
--}
-both : Flags -> Flags -> Flags
-both a b =
-    Bitwise.or
-        (Bitwise.and groundFlag (Bitwise.and a b))
-        (Bitwise.and changedFlag (Bitwise.or a b))
 
 
 substituteFieldsTracked : SubstitutionMap -> Dict VarName MonoType -> ( Dict VarName MonoType, Flags, SubstitutionMap )
@@ -806,3 +781,31 @@ substituteArgsTracked store args =
 
     else
         ( args, flags, store1 )
+
+
+
+-- TEST HELPERS
+
+
+{-| Test-only helper. Can produce cycles (doesn't validate).
+-}
+test_fromList : List ( TypeVar, MonoType ) -> SubstitutionMap
+test_fromList list =
+    { slots =
+        List.foldl
+            (\( var, type_ ) acc -> Dict.insert (VarSet.varKey var) (test_slotFor type_) acc)
+            Dict.empty
+            list
+    , ranks = Dict.empty
+    , letRanks = Dict.empty
+    }
+
+
+test_slotFor : MonoType -> Slot
+test_slotFor type_ =
+    case type_ of
+        TypeVar other ->
+            Link other
+
+        _ ->
+            Bound type_
