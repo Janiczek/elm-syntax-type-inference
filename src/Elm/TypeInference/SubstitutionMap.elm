@@ -18,6 +18,9 @@ module Elm.TypeInference.SubstitutionMap exposing
     )
 
 {-| A dict mapping type variables to the inferred types.
+
+Once created, `substitute*` functions are the way to consume it.
+
 -}
 
 import Bitwise
