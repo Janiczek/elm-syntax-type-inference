@@ -1,4 +1,4 @@
-module Result.ExtraExtra exposing (combineFilter, firstJustLazy)
+module Result.ExtraExtra exposing (firstJustLazy)
 
 {-| -}
 
@@ -18,28 +18,3 @@ firstJustLazy lookups =
 
                 found ->
                     found
-
-
-{-| Like `List.filter`, but the predicate can fail and short-circuit the whole filter traversal.
--}
-combineFilter : (a -> Result e Bool) -> List a -> Result e (List a)
-combineFilter predicate list =
-    case list of
-        [] ->
-            Ok []
-
-        x :: rest ->
-            case predicate x of
-                Err err ->
-                    Err err
-
-                Ok ok ->
-                    combineFilter predicate rest
-                        |> Result.map
-                            (\restFiltered ->
-                                if ok then
-                                    x :: restFiltered
-
-                                else
-                                    restFiltered
-                            )

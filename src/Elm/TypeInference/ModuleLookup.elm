@@ -108,10 +108,14 @@ emptyIndex =
 {-| We have roughly these options:
 
   - bar = >baz< (baz being defined elsewhere in this module)
-  - import Foo exposing (baz); bar = >baz<
-  - import Foo; bar = >Foo.baz<
-  - import Foo as F; bar = >F.baz<
+  - import Foo exposing (baz); bar = >baz< (explicit unqualified)
   - something implicitly imported from `elm/core` prelude (`Just`, `+`, ...)
+    -- explicit and implicit unqualified share one candidate set: Elm reports
+    -- `AMBIGUOUS NAME` across the boundary (e.g. `Basics.identity` vs
+    -- `Foo.identity`), so they must be merged, not tried in order.
+  - import Foo; bar = >Foo.baz< (qualified, needs an unaliased import)
+  - import Foo as F; bar = >F.baz< (aliased; `Cmd`/`Sub` also come from the
+    implicit `Platform.Cmd as Cmd` / `Platform.Sub as Sub`)
 
 In all these cases we need to find the package and full unaliased module name
 of the var.
@@ -127,14 +131,14 @@ moduleOfVar :
 moduleOfVar index modules thisModule maybeModuleName varName =
     Result.ExtraExtra.firstJustLazy
         [ \() -> unqualifiedVarInThisModule thisModule maybeModuleName varName
-        , \() -> unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName
+        , \() -> unqualifiedVarOutsideThisModule index modules thisModule maybeModuleName varName
         , -- Aliases must be resolved before a bare qualifier lookup: otherwise
           -- `import Quantity.Interval as Interval` would let a qualified
-          -- `Interval.from` resolve to an unrelated, unimported `Interval`
-          -- module that happens to share the alias's name.
-          \() -> qualifiedVarInAliasedModule index modules thisModule maybeModuleName varName
-        , \() -> qualifiedVarInImportedModule index modules maybeModuleName varName
-        , \() -> implicitUnqualifiedValue index thisModule maybeModuleName varName
+          -- `Interval.from` resolve to an unrelated `Interval` module.
+          -- And a bare qualifier needs an unaliased import (or an implicit
+          -- module); `Foo.bar` without `import Foo` is an error, as is a full
+          -- `Platform.Cmd` qualifier without an explicit import.
+          \() -> qualifiedVar index modules thisModule maybeModuleName varName
         ]
 
 
@@ -213,155 +217,49 @@ unqualifiedVarInThisModule thisModule maybeModuleName varName =
             Nothing
 
 
-unqualifiedVarInImportedModule :
+{-| Unqualified lookup outside this module.
+
+Explicit imports and the implicit `elm/core` prelude share one candidate set:
+Elm reports `AMBIGUOUS NAME` across the boundary (e.g. an explicit
+`import Foo exposing (identity)` clashes with the implicit
+`Basics.identity`), so trying explicit first and falling back to implicit
+would silently pick the wrong module. A repeated module (explicit
+`import Basics` + implicit `Basics`) counts once.
+
+-}
+unqualifiedVarOutsideThisModule :
     Index
     -> Dict FullModuleName ModuleIndex
     -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
     -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
-unqualifiedVarInImportedModule index modules thisModule maybeModuleName varName =
+unqualifiedVarOutsideThisModule index modules thisModule maybeModuleName varName =
     if maybeModuleName /= Nothing then
         -- we don't care about qualified vars in this function
         Ok Nothing
 
     else
-        let
-            importDefinesValue : ImportIndex -> Result ErrorDetails Bool
-            importDefinesValue import_ =
-                case Dict.get import_.moduleName modules of
-                    Just importedModule ->
-                        Ok (Set.member varName importedModule.exposedValues)
-
-                    Nothing ->
-                        dependencyModuleDefines index import_.dottedModuleName varName
-                            |> Result.map ((/=) Nothing)
-
-            acceptableImports : Result ErrorDetails (List ImportIndex)
-            acceptableImports =
-                thisModule.imports
-                    |> List.filter (\import_ -> ModuleIndex.importCouldExposeValue import_ varName)
-                    |> Result.ExtraExtra.combineFilter importDefinesValue
-        in
-        acceptableImports
+        Result.Extra.combineMap
+            (\import_ -> explicitImportDefinesValue index modules import_ varName)
+            (List.filter (\import_ -> ModuleIndex.importCouldExposeValue import_ varName) thisModule.imports)
             |> Result.andThen
-                (\imports ->
-                    case imports of
-                        [] ->
-                            Ok Nothing
-
-                        [ acceptableImport ] ->
-                            if Dict.member acceptableImport.moduleName modules then
-                                Ok (Just ( "", acceptableImport.moduleName ))
-
-                            else
-                                dependencyModuleDefines index acceptableImport.dottedModuleName varName
-                                    |> Result.map (Maybe.map (\package -> ( package, acceptableImport.moduleName )))
-
-                        _ ->
-                            Err <|
-                                AmbiguousName
-                                    { varName = varName
-                                    , usedIn = FullModuleName.toModuleName thisModule.moduleName
-                                    , possibleModules = List.map (.moduleName >> FullModuleName.toModuleName) imports
-                                    }
-                )
-
-
-{-| We don't think about module `as` aliasing here.
--}
-qualifiedVarInImportedModule :
-    Index
-    -> Dict FullModuleName ModuleIndex
-    -> Maybe FullModuleName
-    -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
-qualifiedVarInImportedModule index modules maybeModuleName varName =
-    case maybeModuleName of
-        Nothing ->
-            Ok Nothing
-
-        Just moduleName ->
-            case Dict.get moduleName modules of
-                Just moduleIndex ->
-                    Ok <|
-                        if Set.member varName moduleIndex.declaredValues then
-                            Just ( "", moduleName )
-
-                        else
-                            Nothing
-
-                Nothing ->
-                    dependencyModuleDefines index (FullModuleName.toString moduleName) varName
-                        |> Result.map (Maybe.map (\package -> ( package, moduleName )))
-
-
-qualifiedVarInAliasedModule :
-    Index
-    -> Dict FullModuleName ModuleIndex
-    -> ModuleIndex
-    -> Maybe FullModuleName
-    -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
-qualifiedVarInAliasedModule index modules thisModule maybeModuleName varName =
-    let
-        {- The same alias can be given to more than one import (e.g.
-           `import Svg as S` and `import Internal.Svg as S`), so a qualified
-           reference like `S.Gradient` might belong to any of them. Try every
-           aliased candidate, in import order, and use whichever one actually
-           defines the name.
-        -}
-        unaliasedModuleNames : List FullModuleName
-        unaliasedModuleNames =
-            case maybeModuleName of
-                Nothing ->
-                    []
-
-                Just ( single, [] ) ->
-                    case ModuleIndex.modulesWithAlias thisModule single of
-                        [] ->
-                            ImplicitImports.unaliasModule single
-                                |> Maybe.map List.singleton
-                                |> Maybe.withDefault []
-
-                        found ->
-                            found
-
-                Just _ ->
-                    []
-    in
-    unaliasedModuleNames
-        |> List.map
-            (\unaliasedModuleName () ->
-                qualifiedVarInImportedModule
-                    index
-                    modules
-                    (Just unaliasedModuleName)
-                    varName
-            )
-        |> Result.ExtraExtra.firstJustLazy
-
-
-implicitUnqualifiedValue :
-    Index
-    -> ModuleIndex
-    -> Maybe FullModuleName
-    -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
-implicitUnqualifiedValue index thisModule maybeModuleName varName =
-    if maybeModuleName /= Nothing then
-        Ok Nothing
-
-    else
-        ImplicitImports.modulesPossiblyExposingValue varName
-            |> Result.Extra.combineMap
-                (\moduleNameStr ->
-                    dependencyModuleDefines index moduleNameStr varName
-                        |> Result.map (Maybe.map (\package -> ( package, FullModuleName.fromDotted moduleNameStr )))
+                (\explicitMatches ->
+                    Result.Extra.combineMap
+                        (\home ->
+                            dependencyModuleDefines index (FullModuleName.toString home) varName
+                                |> Result.map (Maybe.map (\package -> ( package, home )))
+                        )
+                        (ImplicitImports.implicitValueHomes varName)
+                        |> Result.map
+                            (\implicitMatches ->
+                                List.filterMap identity explicitMatches
+                                    ++ List.filterMap identity implicitMatches
+                            )
                 )
             |> Result.andThen
-                (\matches ->
-                    case List.filterMap identity matches of
+                (\allMatches ->
+                    case dedupeOwners allMatches of
                         [] ->
                             Ok Nothing
 
@@ -369,14 +267,180 @@ implicitUnqualifiedValue index thisModule maybeModuleName varName =
                             Ok (Just single)
 
                         many ->
-                            Err
-                                (AmbiguousName
-                                    { usedIn = FullModuleName.toModuleName thisModule.moduleName
-                                    , varName = varName
+                            Err <|
+                                AmbiguousName
+                                    { varName = varName
+                                    , usedIn = FullModuleName.toModuleName thisModule.moduleName
                                     , possibleModules = List.map (Tuple.second >> FullModuleName.toModuleName) many
                                     }
-                                )
                 )
+
+
+explicitImportDefinesValue :
+    Index
+    -> Dict FullModuleName ModuleIndex
+    -> ImportIndex
+    -> VarName
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
+explicitImportDefinesValue index modules import_ varName =
+    case Dict.get import_.moduleName modules of
+        Just importedModule ->
+            Ok <|
+                if Set.member varName importedModule.exposedValues then
+                    Just ( "", import_.moduleName )
+
+                else
+                    Nothing
+
+        Nothing ->
+            dependencyModuleDefines index import_.dottedModuleName varName
+                |> Result.map (Maybe.map (\package -> ( package, import_.moduleName )))
+
+
+{-| Qualified lookup with Elm's actual scoping rules:
+
+  - A single-segment qualifier resolves through aliases first: every explicit
+    `import ... as Q` plus the implicit `Cmd`/`Sub` aliases. If several of
+    them define the name it is ambiguous; if exactly one defines it, it wins
+    over the literal module name (matching `typeResolverFor`).
+  - The literal module name is only a fallback when it is imported unaliased
+    or implicitly available (`List`, `Tuple`, ... -- but never a full
+    `Platform.Cmd`, which is only implicit via `Cmd`). In particular
+    `import Quantity.Interval as Interval` alone never falls back to an
+    unrelated `Interval` module, and `Foo.bar` without `import Foo` is
+    `VarNotFound`.
+  - A multi-segment qualifier has no alias handling and needs an unaliased
+    import.
+
+-}
+qualifiedVar :
+    Index
+    -> Dict FullModuleName ModuleIndex
+    -> ModuleIndex
+    -> Maybe FullModuleName
+    -> VarName
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
+qualifiedVar index modules thisModule maybeModuleName varName =
+    case maybeModuleName of
+        Nothing ->
+            Ok Nothing
+
+        Just qualifier ->
+            case qualifier of
+                ( single, [] ) ->
+                    let
+                        aliasCandidates : List FullModuleName
+                        aliasCandidates =
+                            dedupeFullModuleNames
+                                (ModuleIndex.modulesWithAlias thisModule single
+                                    ++ (ImplicitImports.unaliasModule single
+                                            |> Maybe.map List.singleton
+                                            |> Maybe.withDefault []
+                                       )
+                                )
+                    in
+                    Result.Extra.combineMap
+                        (\unaliased -> qualifiedModuleDefines index modules unaliased varName)
+                        aliasCandidates
+                        |> Result.andThen
+                            (\aliasMatches ->
+                                case dedupeOwners (List.filterMap identity aliasMatches) of
+                                    [] ->
+                                        let
+                                            qualifierModuleName : ModuleName
+                                            qualifierModuleName =
+                                                FullModuleName.toModuleName qualifier
+                                        in
+                                        if
+                                            ModuleIndex.isImportedUnaliased thisModule qualifierModuleName
+                                                || ImplicitImports.isImplicitQualifiedModule qualifierModuleName
+                                        then
+                                            qualifiedModuleDefines index modules qualifier varName
+
+                                        else
+                                            Ok Nothing
+
+                                    [ singleDef ] ->
+                                        -- The alias wins even if the literal
+                                        -- module also defines the name.
+                                        Ok (Just singleDef)
+
+                                    multiple ->
+                                        Err <|
+                                            AmbiguousName
+                                                { varName = varName
+                                                , usedIn = FullModuleName.toModuleName thisModule.moduleName
+                                                , possibleModules = List.map (Tuple.second >> FullModuleName.toModuleName) multiple
+                                                }
+                            )
+
+                _ ->
+                    if ModuleIndex.isImportedUnaliased thisModule (FullModuleName.toModuleName qualifier) then
+                        qualifiedModuleDefines index modules qualifier varName
+
+                    else
+                        Ok Nothing
+
+
+qualifiedModuleDefines :
+    Index
+    -> Dict FullModuleName ModuleIndex
+    -> FullModuleName
+    -> VarName
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
+qualifiedModuleDefines index modules moduleName varName =
+    case Dict.get moduleName modules of
+        Just moduleIndex ->
+            Ok <|
+                if Set.member varName moduleIndex.declaredValues then
+                    Just ( "", moduleName )
+
+                else
+                    Nothing
+
+        Nothing ->
+            dependencyModuleDefines index (FullModuleName.toString moduleName) varName
+                |> Result.map (Maybe.map (\package -> ( package, moduleName )))
+
+
+dedupeOwners : List ( PackageName, FullModuleName ) -> List ( PackageName, FullModuleName )
+dedupeOwners pairs =
+    List.foldl
+        (\( package, mod ) ( seen, acc ) ->
+            let
+                key : ( PackageName, String )
+                key =
+                    ( package, FullModuleName.toString mod )
+            in
+            if List.member key seen then
+                ( seen, acc )
+
+            else
+                ( key :: seen, acc ++ [ ( package, mod ) ] )
+        )
+        ( [], [] )
+        pairs
+        |> Tuple.second
+
+
+dedupeFullModuleNames : List FullModuleName -> List FullModuleName
+dedupeFullModuleNames names =
+    List.foldl
+        (\mod ( seen, acc ) ->
+            let
+                key : String
+                key =
+                    FullModuleName.toString mod
+            in
+            if List.member key seen then
+                ( seen, acc )
+
+            else
+                ( key :: seen, acc ++ [ mod ] )
+        )
+        ( [], [] )
+        names
+        |> Tuple.second
 
 
 dependencyModuleDefines : Index -> String -> VarName -> Result ErrorDetails (Maybe PackageName)
@@ -448,10 +512,10 @@ qualifierCandidates thisModule qualifier =
                 _ ->
                     []
 
-        implicitAliasedModule : List ModuleName
-        implicitAliasedModule =
-            case ( qualifier, aliasedModules ) of
-                ( [ single ], [] ) ->
+        implicitAlias : List ModuleName
+        implicitAlias =
+            case qualifier of
+                [ single ] ->
                     case ImplicitImports.unaliasModule single of
                         Just m ->
                             [ FullModuleName.toModuleName m ]
@@ -464,24 +528,39 @@ qualifierCandidates thisModule qualifier =
 
         aliasCandidates : List ModuleName
         aliasCandidates =
-            aliasedModules ++ implicitAliasedModule
+            List.foldl
+                (\candidate acc ->
+                    if List.member candidate acc then
+                        acc
+
+                    else
+                        acc ++ [ candidate ]
+                )
+                []
+                (explicitAliases ++ implicitAlias)
+
+        literalAvailable : Bool
+        literalAvailable =
+            -- Unqualified lookup always runs: it checks local declarations,
+            -- then explicit imports (last wins), then the implicit prelude.
+            List.isEmpty qualifier
+                || ModuleIndex.isImportedUnaliased thisModule qualifier
+                || ImplicitImports.isImplicitQualifiedModule qualifier
     in
     if List.isEmpty aliasCandidates then
-        [ qualifier ]
-
-    else
-        let
-            isImportedUnaliased : Bool
-            isImportedUnaliased =
-                ModuleIndex.isImportedUnaliased thisModule qualifier
-        in
-        if isImportedUnaliased then
-            -- The alias(es) win if one of them declares the type, the literal
-            -- module name is the fallback.
-            aliasCandidates ++ [ qualifier ]
+        if literalAvailable then
+            [ qualifier ]
 
         else
-            aliasCandidates
+            []
+
+    else if literalAvailable then
+        -- The alias(es) win if one of them declares the type, the literal
+        -- module name is the fallback.
+        aliasCandidates ++ [ qualifier ]
+
+    else
+        aliasCandidates
 
 
 typeResolverFor : Index -> Dict FullModuleName ModuleIndex -> ModuleIndex -> TypeResolver
@@ -501,21 +580,22 @@ typeResolverFor ((Index index) as wrappedIndex) modules thisModule qualifier typ
                     thisModule.imports
                         |> List.filterMap
                             (\import_ ->
-                                case Dict.get import_.moduleName modules of
-                                    Just importedModule ->
-                                        if Set.member typeName importedModule.exposedTypes then
-                                            Just ( "", import_.moduleName )
+                                if not (ModuleIndex.importExposesType import_ typeName) then
+                                    Nothing
 
-                                        else
-                                            Nothing
+                                else
+                                    case Dict.get import_.moduleName modules of
+                                        Just importedModule ->
+                                            if Set.member typeName importedModule.exposedTypes then
+                                                Just ( "", import_.moduleName )
 
-                                    Nothing ->
-                                        if ModuleIndex.importExposesType import_ typeName then
+                                            else
+                                                Nothing
+
+                                        Nothing ->
                                             dependencyModuleDefinesType wrappedIndex import_.moduleName typeName
-
-                                        else
-                                            Nothing
                             )
+                        |> List.reverse
                         |> List.head
 
             else

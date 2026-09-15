@@ -1,8 +1,9 @@
 module Elm.TypeInference.ImplicitImports exposing
     ( elmCorePackage
     , unaliasModule
-    , modulesPossiblyExposingValue
+    , implicitValueHomes
     , moduleExposingType
+    , isImplicitQualifiedModule
     )
 
 {-| Elm compiles every module with these implicit imports:
@@ -21,31 +22,21 @@ module Elm.TypeInference.ImplicitImports exposing
     import Platform.Cmd as Cmd exposing ( Cmd )
     import Platform.Sub as Sub exposing ( Sub )
 
-Here we define them as data. We don't need to know/list all the functions; the
-read docs.json will supply that.
+The data below is hardcoded because `elm/core`'s prelude never changes.
+We don't list all of `Basics`' functions; `docs.json` supplies that, so any
+otherwise-unknown unqualified value can only come from `Basics`.
 
 @docs elmCorePackage
 @docs unaliasModule
-@docs modulesPossiblyExposingValue
+@docs implicitValueHomes
 @docs moduleExposingType
+@docs isImplicitQualifiedModule
 
 -}
 
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.VarName exposing (VarName)
-
-
-type Exposed
-    = All
-    | Only (List String)
-
-
-type alias ImplicitImport =
-    { moduleName : String
-    , alias_ : Maybe String
-    , values : Exposed
-    , types : Exposed
-    }
 
 
 elmCorePackage : String
@@ -53,109 +44,155 @@ elmCorePackage =
     "elm/core"
 
 
-implicitImports : List ImplicitImport
-implicitImports =
-    [ { moduleName = "Basics"
-      , alias_ = Nothing
-      , values = All
-      , types = Only [ "Int", "Float", "Bool", "Never", "Order" ]
-      }
-    , { moduleName = "List"
-      , alias_ = Nothing
-      , values = Only [ "::" ]
-      , types = Only [ "List" ]
-      }
-    , { moduleName = "Maybe"
-      , alias_ = Nothing
-      , values = Only [ "Just", "Nothing" ]
-      , types = Only [ "Maybe" ]
-      }
-    , { moduleName = "Result"
-      , alias_ = Nothing
-      , values = Only [ "Ok", "Err" ]
-      , types = Only [ "Result" ]
-      }
-    , { moduleName = "String"
-      , alias_ = Nothing
-      , values = Only []
-      , types = Only [ "String" ]
-      }
-    , { moduleName = "Char"
-      , alias_ = Nothing
-      , values = Only []
-      , types = Only [ "Char" ]
-      }
-    , { moduleName = "Tuple"
-      , alias_ = Nothing
-      , values = Only []
-      , types = Only []
-      }
-    , { moduleName = "Debug"
-      , alias_ = Nothing
-      , values = Only []
-      , types = Only []
-      }
-    , { moduleName = "Platform"
-      , alias_ = Nothing
-      , values = Only []
-      , types = Only [ "Program" ]
-      }
-    , { moduleName = "Platform.Cmd"
-      , alias_ = Just "Cmd"
-      , values = Only []
-      , types = Only [ "Cmd" ]
-      }
-    , { moduleName = "Platform.Sub"
-      , alias_ = Just "Sub"
-      , values = Only []
-      , types = Only [ "Sub" ]
-      }
-    ]
-
-
 {-| `Cmd` -> `Platform.Cmd`, `Sub` -> `Platform.Sub`
 
-This only comes into play if we know there's no `import My.Cmd as Cmd`
+Only these two implicit imports use an alias.
 
 -}
 unaliasModule : String -> Maybe FullModuleName
 unaliasModule singleSegmentAlias =
-    implicitImports
-        |> List.filter (\import_ -> import_.alias_ == Just singleSegmentAlias)
-        |> List.head
-        |> Maybe.map (.moduleName >> FullModuleName.fromDotted)
+    case singleSegmentAlias of
+        "Cmd" ->
+            Just (FullModuleName.fromDotted "Platform.Cmd")
+
+        "Sub" ->
+            Just (FullModuleName.fromDotted "Platform.Sub")
+
+        _ ->
+            Nothing
 
 
-{-|
+{-| Which implicit modules could expose this unqualified value?
 
-    identity --> ["Basics"]
-    map --> ["Basics"]
-    foobar --> ["Basics"]
-    :: -> ["Basics", "List"]
+Only `Basics` (`exposing (..)`), `List` (`(::)`), `Maybe`
+(`Just`, `Nothing`) and `Result` (`Ok`, `Err`) expose values; everything else
+exposes `Only []` for values. `Basics` is always a candidate because we don't
+enumerate its contents here -- `docs.json` settles whether it defines the name.
+
+    identity --> [Basics]
+    foobar --> [Basics]
+    "::" --> [Basics, List]
+    "Just" --> [Basics, Maybe]
 
 -}
-modulesPossiblyExposingValue : VarName -> List String
-modulesPossiblyExposingValue varName =
-    implicitImports
-        |> List.filter (\import_ -> couldExposeName varName import_.values)
-        |> List.map .moduleName
+implicitValueHomes : VarName -> List FullModuleName
+implicitValueHomes varName =
+    case varName of
+        "::" ->
+            [ FullModuleName.fromDotted "Basics"
+            , FullModuleName.fromDotted "List"
+            ]
+
+        "Just" ->
+            [ FullModuleName.fromDotted "Basics"
+            , FullModuleName.fromDotted "Maybe"
+            ]
+
+        "Nothing" ->
+            [ FullModuleName.fromDotted "Basics"
+            , FullModuleName.fromDotted "Maybe"
+            ]
+
+        "Ok" ->
+            [ FullModuleName.fromDotted "Basics"
+            , FullModuleName.fromDotted "Result"
+            ]
+
+        "Err" ->
+            [ FullModuleName.fromDotted "Basics"
+            , FullModuleName.fromDotted "Result"
+            ]
+
+        _ ->
+            [ FullModuleName.fromDotted "Basics" ]
 
 
-{-| TODO weird: it looks at values too, not just at types?
+{-| Which implicit module exposes this type unqualified? (`Tuple` and `Debug`
+expose none.)
 -}
 moduleExposingType : String -> Maybe FullModuleName
 moduleExposingType typeName =
-    implicitImports
-        |> List.filter (\import_ -> couldExposeName typeName import_.types)
-        |> List.head
-        |> Maybe.map (.moduleName >> FullModuleName.fromDotted)
+    case typeName of
+        "Int" ->
+            Just (FullModuleName.fromDotted "Basics")
+
+        "Float" ->
+            Just (FullModuleName.fromDotted "Basics")
+
+        "Bool" ->
+            Just (FullModuleName.fromDotted "Basics")
+
+        "Never" ->
+            Just (FullModuleName.fromDotted "Basics")
+
+        "Order" ->
+            Just (FullModuleName.fromDotted "Basics")
+
+        "List" ->
+            Just (FullModuleName.fromDotted "List")
+
+        "Maybe" ->
+            Just (FullModuleName.fromDotted "Maybe")
+
+        "Result" ->
+            Just (FullModuleName.fromDotted "Result")
+
+        "String" ->
+            Just (FullModuleName.fromDotted "String")
+
+        "Char" ->
+            Just (FullModuleName.fromDotted "Char")
+
+        "Program" ->
+            Just (FullModuleName.fromDotted "Platform")
+
+        "Cmd" ->
+            Just (FullModuleName.fromDotted "Platform.Cmd")
+
+        "Sub" ->
+            Just (FullModuleName.fromDotted "Platform.Sub")
+
+        _ ->
+            Nothing
 
 
-couldExposeName : String -> Exposed -> Bool
-couldExposeName name exposed =
-    case exposed of
-        All ->
+{-| Is this qualifier implicitly available for qualified references?
+
+`import Basics/List/Maybe/Result/String/Char/Tuple/Debug/Platform` are all
+implicit by full name, so `List.map` or `Tuple.first` work without an explicit
+import. `Platform.Cmd`/`Platform.Sub` are only implicit via their `Cmd`/`Sub`
+aliases (see `unaliasModule`), so a full `Platform.Cmd` qualifier needs an
+explicit import.
+-}
+isImplicitQualifiedModule : ModuleName -> Bool
+isImplicitQualifiedModule qualifier =
+    case qualifier of
+        [ "Basics" ] ->
             True
 
-        Only names ->
-            List.member name names
+        [ "List" ] ->
+            True
+
+        [ "Maybe" ] ->
+            True
+
+        [ "Result" ] ->
+            True
+
+        [ "String" ] ->
+            True
+
+        [ "Char" ] ->
+            True
+
+        [ "Tuple" ] ->
+            True
+
+        [ "Debug" ] ->
+            True
+
+        [ "Platform" ] ->
+            True
+
+        _ ->
+            False

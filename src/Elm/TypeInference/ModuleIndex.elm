@@ -403,5 +403,7 @@ modulesWithAlias index wantedAlias =
 isImportedUnaliased : ModuleIndex -> ModuleName -> Bool
 isImportedUnaliased index moduleName =
     List.any
-        (\import_ -> FullModuleName.toModuleName import_.moduleName == moduleName)
+        (\import_ ->
+            FullModuleName.toModuleName import_.moduleName == moduleName && import_.alias_ == Nothing
+        )
         index.imports
