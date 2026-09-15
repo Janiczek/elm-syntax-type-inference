@@ -293,30 +293,50 @@ getNextIdAndTick : TIState Id
 getNextIdAndTick =
     \state ->
         ( Ok state.nextId
-        , { state
-            | nextId = state.nextId + 1
-            , subst = SubstitutionMap.stampId state.nextId state.currentLevel state.subst
+        , { nextId = state.nextId + 1
+          , nodeIds = state.nodeIds
+          , lexicalEnv = state.lexicalEnv
+          , globalEnv = state.globalEnv
+          , subst = SubstitutionMap.stampId state.nextId state.currentLevel state.subst
+          , currentLevel = state.currentLevel
           }
         )
 
 
 enterLevel : TIState ()
 enterLevel =
-    modify (\state -> { state | currentLevel = state.currentLevel + 1 })
+    modify
+        (\state ->
+            { nextId = state.nextId
+            , nodeIds = state.nodeIds
+            , lexicalEnv = state.lexicalEnv
+            , globalEnv = state.globalEnv
+            , subst = state.subst
+            , currentLevel = state.currentLevel + 1
+            }
+        )
 
 
 leaveLevel : TIState ()
 leaveLevel =
-    modify (\state -> { state | currentLevel = state.currentLevel - 1 })
+    modify
+        (\state ->
+            { nextId = state.nextId
+            , nodeIds = state.nodeIds
+            , lexicalEnv = state.lexicalEnv
+            , globalEnv = state.globalEnv
+            , subst = state.subst
+            , currentLevel = state.currentLevel - 1
+            }
+        )
 
 
 {-| Move a previously allocated id to the current let-depth.
 -}
 setIdLevel : Id -> TIState ()
 setIdLevel id =
-    do get <|
-        \state ->
-            modifySubst (SubstitutionMap.setIdLevel id state.currentLevel)
+    do get <| \state ->
+    modifySubst (SubstitutionMap.setIdLevel id state.currentLevel)
 
 
 
@@ -333,11 +353,9 @@ getNodeIds =
 -}
 idForNode : Node a -> TIState Id
 idForNode node =
-    do getNextIdAndTick <|
-        \theId ->
-            do (aliasNodeId (Node.range node) theId) <|
-                \() ->
-                    pure theId
+    do getNextIdAndTick <| \theId ->
+    do (aliasNodeId (Node.range node) theId) <| \() ->
+    pure theId
 
 
 {-| Make another range point to an already assigned ID.
@@ -352,7 +370,13 @@ aliasNodeId : Range -> Id -> TIState ()
 aliasNodeId range theId =
     modify
         (\state ->
-            { state | nodeIds = Dict.insert (RangeLike.fromRange range) theId state.nodeIds }
+            { nextId = state.nextId
+            , nodeIds = Dict.insert (RangeLike.fromRange range) theId state.nodeIds
+            , lexicalEnv = state.lexicalEnv
+            , globalEnv = state.globalEnv
+            , subst = state.subst
+            , currentLevel = state.currentLevel
+            }
         )
 
 
@@ -371,12 +395,30 @@ threads the same store forward.
 -}
 modifySubst : (SubstitutionMap -> SubstitutionMap) -> TIState ()
 modifySubst fn =
-    modify (\state -> { state | subst = fn state.subst })
+    modify
+        (\state ->
+            { nextId = state.nextId
+            , nodeIds = state.nodeIds
+            , lexicalEnv = state.lexicalEnv
+            , globalEnv = state.globalEnv
+            , subst = fn state.subst
+            , currentLevel = state.currentLevel
+            }
+        )
 
 
 setSubst : SubstitutionMap -> TIState ()
 setSubst subst =
-    modify (\state -> { state | subst = subst })
+    modify
+        (\state ->
+            { nextId = state.nextId
+            , nodeIds = state.nodeIds
+            , lexicalEnv = state.lexicalEnv
+            , globalEnv = state.globalEnv
+            , subst = subst
+            , currentLevel = state.currentLevel
+            }
+        )
 
 
 {-| Substitute a `MonoType`, writing back any newly-discovered ground
@@ -385,15 +427,13 @@ benefit too.
 -}
 substituteMono : MonoType -> TIState MonoType
 substituteMono monoType =
-    do getSubst <|
-        \subst ->
-            let
-                ( monoType_, subst1 ) =
-                    SubstitutionMap.substituteMono subst monoType
-            in
-            do (setSubst subst1) <|
-                \() ->
-                    pure monoType_
+    do getSubst <| \subst ->
+    let
+        ( monoType_, subst1 ) =
+            SubstitutionMap.substituteMono subst monoType
+    in
+    do (setSubst subst1) <| \() ->
+    pure monoType_
 
 
 {-| Substitute both sides of one equation, reporting for each whether it came
@@ -419,7 +459,13 @@ substituteEquation t1 t2 =
             ( ( st1, SubstitutionMap.resultIsGround flags1 )
             , ( st2, SubstitutionMap.resultIsGround flags2 )
             )
-        , { state | subst = subst2 }
+        , { nextId = state.nextId
+          , nodeIds = state.nodeIds
+          , lexicalEnv = state.lexicalEnv
+          , globalEnv = state.globalEnv
+          , subst = subst2
+          , currentLevel = state.currentLevel
+          }
         )
 
 
@@ -427,15 +473,13 @@ substituteEquation t1 t2 =
 -}
 substitute : Type -> TIState Type
 substitute type_ =
-    do getSubst <|
-        \subst ->
-            let
-                ( type__, subst1 ) =
-                    SubstitutionMap.substituteTracked subst type_
-            in
-            do (setSubst subst1) <|
-                \() ->
-                    pure type__
+    do getSubst <| \subst ->
+    let
+        ( type__, subst1 ) =
+            SubstitutionMap.substituteTracked subst type_
+    in
+    do (setSubst subst1) <| \() ->
+    pure type__
 
 
 
@@ -450,7 +494,16 @@ getLexicalEnv =
 
 modifyLexicalEnv : (Dict VarName Type -> Dict VarName Type) -> TIState ()
 modifyLexicalEnv fn =
-    modify (\state -> { state | lexicalEnv = fn state.lexicalEnv })
+    modify
+        (\state ->
+            { nextId = state.nextId
+            , nodeIds = state.nodeIds
+            , lexicalEnv = fn state.lexicalEnv
+            , globalEnv = state.globalEnv
+            , subst = state.subst
+            , currentLevel = state.currentLevel
+            }
+        )
 
 
 addBinding : VarName -> Type -> TIState ()
@@ -474,7 +527,15 @@ withScopedEnv action =
             ( result, newState ) =
                 action state
         in
-        ( result, { newState | lexicalEnv = state.lexicalEnv } )
+        ( result
+        , { nextId = newState.nextId
+          , nodeIds = newState.nodeIds
+          , lexicalEnv = state.lexicalEnv
+          , globalEnv = newState.globalEnv
+          , subst = newState.subst
+          , currentLevel = newState.currentLevel
+          }
+        )
 
 
 existsInEnv : VarName -> TIState Bool
@@ -488,24 +549,22 @@ typevars that we can.
 -}
 lookupEnv : FullModuleName -> VarName -> TIState MonoType
 lookupEnv thisModule var =
-    do getLexicalEnv <|
-        \env ->
-            case Dict.get var env of
-                Nothing ->
-                    error
-                        { moduleName = FullModuleName.toModuleName thisModule
-                        , declarationNames = []
-                        , details =
-                            VarNotFound
-                                { usedIn = FullModuleName.toModuleName thisModule
-                                , varName = var
-                                }
+    do getLexicalEnv <| \env ->
+    case Dict.get var env of
+        Nothing ->
+            error
+                { moduleName = FullModuleName.toModuleName thisModule
+                , declarationNames = []
+                , details =
+                    VarNotFound
+                        { usedIn = FullModuleName.toModuleName thisModule
+                        , varName = var
                         }
+                }
 
-                Just type_ ->
-                    do (substitute type_) <|
-                        \substituted ->
-                            instantiate substituted
+        Just type_ ->
+            do (substitute type_) <| \substituted ->
+            instantiate substituted
 
 
 
@@ -523,7 +582,16 @@ getGlobalEnv =
 
 addGlobalBinding : GlobalKey -> Type -> TIState ()
 addGlobalBinding key type_ =
-    modify (\state -> { state | globalEnv = Dict.insert key type_ state.globalEnv })
+    modify
+        (\state ->
+            { nextId = state.nextId
+            , nodeIds = state.nodeIds
+            , lexicalEnv = state.lexicalEnv
+            , globalEnv = Dict.insert key type_ state.globalEnv
+            , subst = state.subst
+            , currentLevel = state.currentLevel
+            }
+        )
 
 
 {-| Look up a global name (top-level/constructor/port/dependency).
@@ -537,22 +605,21 @@ free vars left for `state.subst` to resolve.
 -}
 lookupGlobalEnv : PackageName -> FullModuleName -> VarName -> TIState MonoType
 lookupGlobalEnv package moduleName var =
-    do getGlobalEnv <|
-        \env ->
-            case Dict.get ( package, moduleName, var ) env of
-                Nothing ->
-                    error
-                        { moduleName = FullModuleName.toModuleName moduleName
-                        , declarationNames = []
-                        , details =
-                            VarNotFound
-                                { usedIn = FullModuleName.toModuleName moduleName
-                                , varName = var
-                                }
+    do getGlobalEnv <| \env ->
+    case Dict.get ( package, moduleName, var ) env of
+        Nothing ->
+            error
+                { moduleName = FullModuleName.toModuleName moduleName
+                , declarationNames = []
+                , details =
+                    VarNotFound
+                        { usedIn = FullModuleName.toModuleName moduleName
+                        , varName = var
                         }
+                }
 
-                Just type_ ->
-                    instantiate type_
+        Just type_ ->
+            instantiate type_
 
 
 {-| Give a scheme's quantified variables fresh ids.
@@ -573,29 +640,28 @@ instantiate (Forall boundVars monoType) =
             pure monoType
 
         _ ->
-            do (traverse (always getNextIdAndTick) boundVars) <|
-                \varIds ->
-                    let
-                        renaming : Dict VarSet.VarKey TypeVar
-                        renaming =
-                            List.map2
-                                (\(( _, super ) as var) freshId ->
-                                    ( VarSet.varKey var
-                                    , -- keep the constraint (eg. `number`)
-                                      ( TypeVar.Generated freshId, super )
-                                    )
-                                )
-                                boundVars
-                                varIds
-                                |> Dict.fromList
-                    in
-                    monoType
-                        |> Type.mapVarsMono
-                            (\var ->
-                                Dict.get (VarSet.varKey var) renaming
-                                    |> Maybe.withDefault var
+            do (traverse (always getNextIdAndTick) boundVars) <| \varIds ->
+            let
+                renaming : Dict VarSet.VarKey TypeVar
+                renaming =
+                    List.map2
+                        (\(( _, super ) as var) freshId ->
+                            ( VarSet.varKey var
+                            , -- keep the constraint (eg. `number`)
+                              ( TypeVar.Generated freshId, super )
                             )
-                        |> pure
+                        )
+                        boundVars
+                        varIds
+                        |> Dict.fromList
+            in
+            monoType
+                |> Type.mapVarsMono
+                    (\var ->
+                        Dict.get (VarSet.varKey var) renaming
+                            |> Maybe.withDefault var
+                    )
+                |> pure
 
 
 
@@ -604,16 +670,14 @@ instantiate (Forall boundVars monoType) =
 
 generalizeWith : MonoType -> TIState Type
 generalizeWith monoType =
-    do (substituteMono monoType) <|
-        \substitutedMono ->
-            do get <|
-                \state ->
-                    let
-                        boundIds : List TypeVar
-                        boundIds =
-                            Type.freeVarsMono substitutedMono
-                                |> VarSet.toList
-                                |> List.filter
-                                    (\var -> SubstitutionMap.levelOf var state.subst > state.currentLevel)
-                    in
-                    pure (Forall boundIds substitutedMono)
+    do (substituteMono monoType) <| \substitutedMono ->
+    do get <| \state ->
+    let
+        boundIds : List TypeVar
+        boundIds =
+            Type.freeVarsMono substitutedMono
+                |> VarSet.toList
+                |> List.filter
+                    (\var -> SubstitutionMap.levelOf var state.subst > state.currentLevel)
+    in
+    pure (Forall boundIds substitutedMono)

@@ -152,12 +152,13 @@ findHelp store path var =
 
         _ ->
             ( var
-            , { store
-                | slots =
+            , { slots =
                     List.foldl
                         (\pathVar acc -> Dict.insert (key pathVar) (Link var) acc)
                         store.slots
                         path
+              , ranks = store.ranks
+              , levels = store.levels
               }
             )
 
@@ -169,7 +170,10 @@ The caller must have run the occurs check first (`Unify.bind` does).
 -}
 bindRoot : TypeVar -> MonoType -> SubstitutionMap -> SubstitutionMap
 bindRoot var type_ store =
-    { store | slots = Dict.insert (key var) (Bound type_) store.slots }
+    { slots = Dict.insert (key var) (Bound type_) store.slots
+    , ranks = store.ranks
+    , levels = store.levels
+    }
         |> adjustLevels (levelOf var store) type_
 
 
@@ -184,7 +188,10 @@ linkTo { child, parent } store =
     -- No rank bookkeeping: constraints only differ between two vars rarely, so
     -- leaving these classes at rank 0 costs nothing measurable and keeps the
     -- common path (`union`) free of extra dictionary work.
-    { store | slots = Dict.insert (key child) (Link parent) store.slots }
+    { slots = Dict.insert (key child) (Link parent) store.slots
+    , ranks = store.ranks
+    , levels = store.levels
+    }
         |> setVarLevel parent (min (levelOf child store) (levelOf parent store))
 
 
@@ -214,17 +221,23 @@ union a b store =
             min (levelOf a store) (levelOf b store)
     in
     if rankA < rankB then
-        { store | slots = Dict.insert keyA (Link b) store.slots }
+        { slots = Dict.insert keyA (Link b) store.slots
+        , ranks = store.ranks
+        , levels = store.levels
+        }
             |> setVarLevel b mergedLevel
 
     else if rankB < rankA then
-        { store | slots = Dict.insert keyB (Link a) store.slots }
+        { slots = Dict.insert keyB (Link a) store.slots
+        , ranks = store.ranks
+        , levels = store.levels
+        }
             |> setVarLevel a mergedLevel
 
     else
-        { store
-            | slots = Dict.insert keyB (Link a) store.slots
-            , ranks = Dict.insert keyA (rankA + 1) store.ranks
+        { slots = Dict.insert keyB (Link a) store.slots
+        , ranks = Dict.insert keyA (rankA + 1) store.ranks
+        , levels = store.levels
         }
             |> setVarLevel a mergedLevel
 
@@ -239,7 +252,10 @@ rankOf store k =
 -}
 stampId : Id -> Int -> SubstitutionMap -> SubstitutionMap
 stampId id level store =
-    { store | levels = Dict.insert id level store.levels }
+    { slots = store.slots
+    , ranks = store.ranks
+    , levels = Dict.insert id level store.levels
+    }
 
 
 {-| Overwrite an id's let-depth. Used when a binding-group placeholder was
@@ -265,7 +281,10 @@ setVarLevel : TypeVar -> Int -> SubstitutionMap -> SubstitutionMap
 setVarLevel var level store =
     case Tuple.first var of
         TypeVar.Generated id ->
-            { store | levels = Dict.insert id level store.levels }
+            { slots = store.slots
+            , ranks = store.ranks
+            , levels = Dict.insert id level store.levels
+            }
 
         TypeVar.Named _ ->
             store
@@ -372,7 +391,12 @@ substituteTracked store (Forall boundVars monoType) =
                 restricted : SubstitutionMap
                 restricted =
                     List.foldl
-                        (\var acc -> { acc | slots = Dict.remove (key var) acc.slots })
+                        (\var acc ->
+                            { slots = Dict.remove (key var) acc.slots
+                            , ranks = acc.ranks
+                            , levels = acc.levels
+                            }
+                        )
                         store
                         boundVars
 
@@ -455,7 +479,10 @@ substituteMonoTracked store monoType =
                         Just (Ground groundType) ->
                             ( groundType
                             , groundAndChanged
-                            , { store1 | slots = Dict.insert k (Ground groundType) store1.slots }
+                            , { slots = Dict.insert k (Ground groundType) store1.slots
+                              , ranks = store1.ranks
+                              , levels = store1.levels
+                              }
                             )
 
                         _ ->
@@ -616,7 +643,15 @@ substituteMonoTracked store monoType =
                     substituteArgsTracked store r.args
             in
             if isChanged flags then
-                ( UserDefinedType { r | args = args_ }, flags, s1 )
+                ( UserDefinedType
+                    { package = r.package
+                    , moduleName = r.moduleName
+                    , name = r.name
+                    , args = args_
+                    }
+                , flags
+                , s1
+                )
 
             else
                 ( monoType, flags, s1 )
@@ -672,7 +707,10 @@ resolveBound store k bound =
     ( resolved
     , -- Resolving a var to what it's bound to is always a change.
       Bitwise.or flags changedFlag
-    , { store1 | slots = Dict.insert k slot store1.slots }
+    , { slots = Dict.insert k slot store1.slots
+      , ranks = store1.ranks
+      , levels = store1.levels
+      }
     )
 
 

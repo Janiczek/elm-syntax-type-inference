@@ -246,7 +246,11 @@ recurse f type_ =
 
         UserDefinedType r ->
             UserDefinedType
-                { r | args = List.map f r.args }
+                { package = r.package
+                , moduleName = r.moduleName
+                , name = r.name
+                , args = List.map f r.args
+                }
 
         WebGLShader r ->
             WebGLShader

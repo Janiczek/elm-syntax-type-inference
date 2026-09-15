@@ -1,13 +1,14 @@
 test,seconds
-core-extra,0.180
-elm-charts,0.288
-elm-geometry,0.933
-elm-review,0.511
-elm-review-unused,0.247
-elm-ui,0.208
-elm-units,0.053
-elm-visualization,0.285 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-evg,0.164
-histogram-force-comparable,0.004
-set-import-resolution,0.004
-toy-beam-os,0.035
+core-extra,0.143
+elm-charts,0.258
+elm-geometry,0.839
+elm-review,0.444
+elm-review-unused,0.217
+elm-ui,0.180
+elm-units,0.044
+elm-visualization,0.274
+evg,0.144
+extensible-record-infinite-type,0.003
+histogram-force-comparable,0.002
+set-import-resolution,0.003
+toy-beam-os,0.032

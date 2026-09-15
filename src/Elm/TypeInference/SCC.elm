@@ -152,10 +152,12 @@ runFrames edges frames acc =
                                     ( component, remainingStack ) =
                                         splitOffComponent v acc.nodeStack
                                 in
-                                { acc
-                                    | sccs = component :: acc.sccs
-                                    , nodeStack = remainingStack
-                                    , onStack = List.foldl Set.remove acc.onStack component
+                                { index = acc.index
+                                , lowlink = acc.lowlink
+                                , onStack = List.foldl Set.remove acc.onStack component
+                                , nodeStack = remainingStack
+                                , sccs = component :: acc.sccs
+                                , counter = acc.counter
                                 }
 
                             else
@@ -173,15 +175,22 @@ runFrames edges frames acc =
                             in
                             runFrames edges
                                 outerFrames
-                                { accAfterPop
-                                    | lowlink = Dict.insert parent.node (min parentLowlink vLowlink) accAfterPop.lowlink
+                                { index = accAfterPop.index
+                                , lowlink = Dict.insert parent.node (min parentLowlink vLowlink) accAfterPop.lowlink
+                                , onStack = accAfterPop.onStack
+                                , nodeStack = accAfterPop.nodeStack
+                                , sccs = accAfterPop.sccs
+                                , counter = accAfterPop.counter
                                 }
 
                 w :: ws ->
                     let
                         framesWithNextNeighbour : List (Frame comparable)
                         framesWithNextNeighbour =
-                            { frame | remaining = ws } :: outerFrames
+                            { node = frame.node
+                            , remaining = ws
+                            }
+                                :: outerFrames
                     in
                     if not (Dict.member w acc.index) then
                         -- Tree edge: recurse into `w`.
@@ -201,7 +210,13 @@ runFrames edges frames acc =
                         in
                         runFrames edges
                             framesWithNextNeighbour
-                            { acc | lowlink = Dict.insert frame.node (min vLowlink wIndex) acc.lowlink }
+                            { index = acc.index
+                            , lowlink = Dict.insert frame.node (min vLowlink wIndex) acc.lowlink
+                            , onStack = acc.onStack
+                            , nodeStack = acc.nodeStack
+                            , sccs = acc.sccs
+                            , counter = acc.counter
+                            }
 
                     else
                         -- `w` belongs to an already-completed component

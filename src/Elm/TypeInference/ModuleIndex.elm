@@ -122,7 +122,12 @@ addDeclaration : Declaration -> Declarations -> Declarations
 addDeclaration decl acc =
     case decl of
         FunctionDeclaration fn ->
-            { acc | values = Set.insert (Elm.Syntax.Expression.Extra.functionName fn) acc.values }
+            { values = Set.insert (Elm.Syntax.Expression.Extra.functionName fn) acc.values
+            , types = acc.types
+            , unionConstructors = acc.unionConstructors
+            , recordAliases = acc.recordAliases
+            , infixes = acc.infixes
+            }
 
         AliasDeclaration typeAlias ->
             let
@@ -139,21 +144,21 @@ addDeclaration decl acc =
                         _ ->
                             False
             in
-            { acc
-              -- Record aliases define an implicit constructor function
-                | values =
-                    if isRecord then
-                        Set.insert name acc.values
+            { values =
+                if isRecord then
+                    Set.insert name acc.values
 
-                    else
-                        acc.values
-                , types = Set.insert name acc.types
-                , recordAliases =
-                    if isRecord then
-                        Set.insert name acc.recordAliases
+                else
+                    acc.values
+            , types = Set.insert name acc.types
+            , unionConstructors = acc.unionConstructors
+            , recordAliases =
+                if isRecord then
+                    Set.insert name acc.recordAliases
 
-                    else
-                        acc.recordAliases
+                else
+                    acc.recordAliases
+            , infixes = acc.infixes
             }
 
         CustomTypeDeclaration customType ->
@@ -166,19 +171,25 @@ addDeclaration decl acc =
                 ctorNames =
                     List.map (\ctor -> Node.value (Node.value ctor).name) customType.constructors
             in
-            { acc
-                | values = List.foldl Set.insert acc.values ctorNames
-                , types = Set.insert typeName acc.types
-                , unionConstructors =
-                    if Dict.member typeName acc.unionConstructors then
-                        acc.unionConstructors
+            { values = List.foldl Set.insert acc.values ctorNames
+            , types = Set.insert typeName acc.types
+            , unionConstructors =
+                if Dict.member typeName acc.unionConstructors then
+                    acc.unionConstructors
 
-                    else
-                        Dict.insert typeName ctorNames acc.unionConstructors
+                else
+                    Dict.insert typeName ctorNames acc.unionConstructors
+            , recordAliases = acc.recordAliases
+            , infixes = acc.infixes
             }
 
         PortDeclaration signature ->
-            { acc | values = Set.insert (Node.value signature.name) acc.values }
+            { values = Set.insert (Node.value signature.name) acc.values
+            , types = acc.types
+            , unionConstructors = acc.unionConstructors
+            , recordAliases = acc.recordAliases
+            , infixes = acc.infixes
+            }
 
         InfixDeclaration infix ->
             let
@@ -186,22 +197,24 @@ addDeclaration decl acc =
                 operator =
                     Node.value infix.operator
             in
-            { acc
-                | values = Set.insert operator acc.values
-                , infixes =
-                    if Dict.member operator acc.infixes then
-                        acc.infixes
+            { values = Set.insert operator acc.values
+            , types = acc.types
+            , unionConstructors = acc.unionConstructors
+            , recordAliases = acc.recordAliases
+            , infixes =
+                if Dict.member operator acc.infixes then
+                    acc.infixes
 
-                    else
-                        Dict.insert operator (Node.value infix.function) acc.infixes
+                else
+                    Dict.insert operator (Node.value infix.function) acc.infixes
             }
 
         Destructuring pattern _ ->
-            { acc
-                | values =
-                    List.foldl Set.insert
-                        acc.values
-                        (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern))
+            { values = List.foldl Set.insert acc.values (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern))
+            , types = acc.types
+            , unionConstructors = acc.unionConstructors
+            , recordAliases = acc.recordAliases
+            , infixes = acc.infixes
             }
 
 
@@ -304,21 +317,31 @@ importIndex import_ =
                         (\exposedNode acc ->
                             case Node.value exposedNode of
                                 Exposing.FunctionExpose fn ->
-                                    { acc | values = Set.insert fn acc.values }
+                                    { values = Set.insert fn acc.values
+                                    , types = acc.types
+                                    , hasOpenedUnion = acc.hasOpenedUnion
+                                    , opaqueTypes = acc.opaqueTypes
+                                    }
 
                                 Exposing.InfixExpose op ->
-                                    { acc | values = Set.insert op acc.values }
+                                    { values = Set.insert op acc.values
+                                    , types = acc.types
+                                    , hasOpenedUnion = acc.hasOpenedUnion
+                                    , opaqueTypes = acc.opaqueTypes
+                                    }
 
                                 Exposing.TypeOrAliasExpose name ->
-                                    { acc
-                                        | types = Set.insert name acc.types
-                                        , opaqueTypes = Set.insert name acc.opaqueTypes
+                                    { values = acc.values
+                                    , types = Set.insert name acc.types
+                                    , hasOpenedUnion = acc.hasOpenedUnion
+                                    , opaqueTypes = Set.insert name acc.opaqueTypes
                                     }
 
                                 Exposing.TypeExpose exposedType ->
-                                    { acc
-                                        | types = Set.insert exposedType.name acc.types
-                                        , hasOpenedUnion = acc.hasOpenedUnion || exposedType.open /= Nothing
+                                    { values = acc.values
+                                    , types = Set.insert exposedType.name acc.types
+                                    , hasOpenedUnion = acc.hasOpenedUnion || exposedType.open /= Nothing
+                                    , opaqueTypes = acc.opaqueTypes
                                     }
                         )
                         { values = Set.empty

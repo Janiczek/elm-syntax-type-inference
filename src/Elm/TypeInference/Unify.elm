@@ -60,9 +60,8 @@ unifyMany : UnifyConfig -> List ( MonoType, MonoType ) -> TIState ()
 unifyMany cfg eqs =
     State.foldl
         (\( t1, t2 ) () ->
-            State.do (State.substituteEquation t1 t2) <|
-                \( ( st1, isGround1 ), ( st2, isGround2 ) ) ->
-                    unifyMono cfg isGround1 st1 isGround2 st2
+            State.do (State.substituteEquation t1 t2) <| \( ( st1, isGround1 ), ( st2, isGround2 ) ) ->
+            unifyMono cfg isGround1 st1 isGround2 st2
         )
         ()
         eqs
@@ -222,7 +221,12 @@ substituteAliasArgs argsByName type_ =
                 }
 
         UserDefinedType r ->
-            UserDefinedType { r | args = List.map go r.args }
+            UserDefinedType
+                { package = r.package
+                , moduleName = r.moduleName
+                , name = r.name
+                , args = List.map go r.args
+                }
 
         WebGLShader r ->
             WebGLShader
@@ -478,29 +482,28 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                 else
-                    State.do State.getNextIdAndTick <|
-                        \tailId ->
-                            let
-                                tail : MonoType
-                                tail =
-                                    Type.id_ tailId
-                            in
-                            unifyMany
-                                cfg
-                                (( r1.extensionTypevar
-                                 , ExtensibleRecord
+                    State.do State.getNextIdAndTick <| \tailId ->
+                    let
+                        tail : MonoType
+                        tail =
+                            Type.id_ tailId
+                    in
+                    unifyMany
+                        cfg
+                        (( r1.extensionTypevar
+                         , ExtensibleRecord
+                            { extensionTypevar = tail
+                            , fields = onlyIn2
+                            }
+                         )
+                            :: ( r2.extensionTypevar
+                               , ExtensibleRecord
                                     { extensionTypevar = tail
-                                    , fields = onlyIn2
+                                    , fields = onlyIn1
                                     }
-                                 )
-                                    :: ( r2.extensionTypevar
-                                       , ExtensibleRecord
-                                            { extensionTypevar = tail
-                                            , fields = onlyIn1
-                                            }
-                                       )
-                                    :: sharedEqs
-                                )
+                               )
+                            :: sharedEqs
+                        )
 
             ( ExtensibleRecord er, Record r ) ->
                 recordVsExtensible r.fields er
@@ -613,17 +616,16 @@ bind cfg typeVar type_ =
                             -- eg. Comparable and Appendable
                             -- introduce fresh var with combined constraint
                             -- point both at it
-                            State.do State.getNextIdAndTick <|
-                                \freshId ->
-                                    let
-                                        fresh : TypeVar
-                                        fresh =
-                                            ( Generated freshId, m )
-                                    in
-                                    State.modifySubst
-                                        (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                            >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
-                                        )
+                            State.do State.getNextIdAndTick <| \freshId ->
+                            let
+                                fresh : TypeVar
+                                fresh =
+                                    ( Generated freshId, m )
+                            in
+                            State.modifySubst
+                                (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                    >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                                )
 
             _ ->
                 if not cfg.checks || accepts cfg.typeAliases super type_ then
