@@ -132,28 +132,20 @@ expandAliasHelp fuel typeAliases type_ =
                         type_
 
                     Just alias_ ->
-                        if List.length alias_.args /= List.length ut.args then
+                        case zipAliasArgs alias_.args ut.args of
                             -- A partially applied or malformed alias. Expanding
-                            -- anyway would `List.map2`-truncate and leave the
-                            -- body's remaining parameters unsubstituted -- and
-                            -- an unsubstituted name-keyed typeclass var then
-                            -- leaks out and becomes indistinguishable from an
+                            -- anyway would truncate and leave the body's
+                            -- remaining parameters unsubstituted -- and an
+                            -- unsubstituted name-keyed typeclass var then leaks
+                            -- out and becomes indistinguishable from an
                             -- unrelated same-named var elsewhere (the bug class
                             -- `e2e/tests/histogram-force-comparable` exists
                             -- for). Leaving the alias opaque is strictly safer.
-                            type_
+                            Nothing ->
+                                type_
 
-                        else
-                            let
-                                argsByName : Dict VarName MonoType
-                                argsByName =
-                                    List.map2
-                                        (\rawArgName argType -> ( aliasArgKey rawArgName, argType ))
-                                        alias_.args
-                                        ut.args
-                                        |> Dict.fromList
-                            in
-                            expandAliasHelp (fuel - 1) typeAliases (substituteAliasArgs argsByName alias_.type_)
+                            Just argsByName ->
+                                expandAliasHelp (fuel - 1) typeAliases (substituteAliasArgs argsByName alias_.type_)
 
         _ ->
             type_
@@ -265,6 +257,52 @@ substituteAliasArgs argsByName type_ =
                 }
 
 
+{-| Zip alias generic names with use-site args in one traversal, or `Nothing`
+on arity mismatch (see `expandAliasHelp` for why truncating is unsound).
+-}
+zipAliasArgs : List VarName -> List MonoType -> Maybe (Dict VarName MonoType)
+zipAliasArgs names args =
+    case ( names, args ) of
+        ( [], [] ) ->
+            Just Dict.empty
+
+        ( rawArgName :: restNames, argType :: restArgs ) ->
+            Maybe.map
+                (Dict.insert (aliasArgKey rawArgName) argType)
+                (zipAliasArgs restNames restArgs)
+
+        _ ->
+            Nothing
+
+
+{-| Pair two arg lists, or `Nothing` if their lengths differ.
+
+Single traversal: `List.length` on both sides followed by `List.map2` would
+walk each list twice (and `map2` silently truncates on mismatch, which is why
+the length pre-check existed at all).
+
+-}
+zipArgs : List MonoType -> List MonoType -> Maybe (List ( MonoType, MonoType ))
+zipArgs args1 args2 =
+    case ( args1, args2 ) of
+        ( [], [] ) ->
+            Just []
+
+        ( a1 :: rest1, a2 :: rest2 ) ->
+            case zipArgs rest1 rest2 of
+                Just lst ->
+                    Just (( a1, a2 ) :: lst)
+
+                Nothing ->
+                    Nothing
+
+        ( a1 :: _, [] ) ->
+            Nothing
+
+        ( [], a2 :: _ ) ->
+            Nothing
+
+
 {-| Pair the two field dicts up _by name_, or `Nothing` if the key sets differ
 at all.
 
@@ -369,22 +407,33 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     }
                 -> TIState ()
             recordVsExtensible recordFields er =
-                if not (List.all (\k -> Dict.member k recordFields) (Dict.keys er.fields)) then
+                let
+                    ( residual, matchedEqs, matchedCount ) =
+                        Dict.foldr
+                            (\k v ( res, eqs, n ) ->
+                                case Dict.get k er.fields of
+                                    Just ev ->
+                                        ( res
+                                        , ( v, ev ) :: eqs
+                                        , n + 1
+                                        )
+
+                                    Nothing ->
+                                        ( Dict.insert k v res
+                                        , eqs
+                                        , n
+                                        )
+                            )
+                            ( Dict.empty, [], 0 )
+                            recordFields
+                in
+                if matchedCount /= Dict.size er.fields then
                     typeMismatch ()
 
                 else
-                    let
-                        residual : Dict VarName MonoType
-                        residual =
-                            Dict.filter (\k _ -> not (Dict.member k er.fields)) recordFields
-
-                        matched : Dict VarName MonoType
-                        matched =
-                            Dict.filter (\k _ -> Dict.member k er.fields) recordFields
-                    in
                     unifyMany cfg
                         (( er.extensionTypevar, Record { fields = residual } )
-                            :: List.map2 Tuple.pair (Dict.values matched) (Dict.values er.fields)
+                            :: matchedEqs
                         )
         in
         case ( t1, t2 ) of
@@ -490,19 +539,33 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                    - sum : { commonVar | x : Float, y : Float } -> Float
                 -}
                 let
-                    onlyIn1 : Dict VarName MonoType
-                    onlyIn1 =
-                        Dict.filter (\k _ -> not (Dict.member k r2.fields)) r1.fields
-
-                    onlyIn2 : Dict VarName MonoType
-                    onlyIn2 =
-                        Dict.filter (\k _ -> not (Dict.member k r1.fields)) r2.fields
+                    ( onlyIn1, onlyIn2, sharedEqsReversed ) =
+                        Dict.merge
+                            (\k v ( o1, o2, eqs ) ->
+                                ( Dict.insert k v o1
+                                , o2
+                                , eqs
+                                )
+                            )
+                            (\k v1 v2 ( o1, o2, eqs ) ->
+                                ( o1
+                                , o2
+                                , ( v1, v2 ) :: eqs
+                                )
+                            )
+                            (\k v ( o1, o2, eqs ) ->
+                                ( o1
+                                , Dict.insert k v o2
+                                , eqs
+                                )
+                            )
+                            r1.fields
+                            r2.fields
+                            ( Dict.empty, Dict.empty, [] )
 
                     sharedEqs : List ( MonoType, MonoType )
                     sharedEqs =
-                        List.map2 Tuple.pair
-                            (Dict.values (Dict.filter (\k _ -> Dict.member k r2.fields) r1.fields))
-                            (Dict.values (Dict.filter (\k _ -> Dict.member k r1.fields) r2.fields))
+                        List.reverse sharedEqsReversed
                 in
                 if Dict.isEmpty onlyIn1 && Dict.isEmpty onlyIn2 then
                     {- Same field set on both sides -> the `r` in `{r | ...}`
@@ -545,13 +608,16 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     (ut1.package /= ut2.package)
                         || (ut1.moduleName /= ut2.moduleName)
                         || (ut1.name /= ut2.name)
-                        || (List.length ut1.args /= List.length ut2.args)
                 then
                     typeMismatch ()
 
                 else
-                    List.map2 Tuple.pair ut1.args ut2.args
-                        |> unifyMany cfg
+                    case zipArgs ut1.args ut2.args of
+                        Nothing ->
+                            typeMismatch ()
+
+                        Just eqs ->
+                            unifyMany cfg eqs
 
             ( UserDefinedType _, _ ) ->
                 typeMismatch ()

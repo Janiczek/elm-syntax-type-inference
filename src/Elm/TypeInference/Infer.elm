@@ -95,10 +95,13 @@ inferMany : (a -> TIState Inferred) -> List a -> TIState ( List Id, List TypeEqu
 inferMany f items =
     State.traverse f items
         |> State.map
-            (\inferreds ->
-                ( List.map Tuple.first inferreds
-                , List.ExtraExtra.fastConcatMap Tuple.second inferreds
+            (List.foldr
+                (\( id_, eqs ) ( ids, allEqs ) ->
+                    ( id_ :: ids
+                    , eqs ++ allEqs
+                    )
                 )
+                ( [], [] )
             )
 
 
@@ -462,27 +465,23 @@ inferExpr ctx exprNode =
                 caseEqs =
                     List.ExtraExtra.fastConcatMap Tuple.second caseInferreds
 
-                scrutineeEquations : List TypeEquation
-                scrutineeEquations =
-                    caseIds
-                        |> List.map
-                            (\( patternId, _ ) ->
-                                ( TypeI.id_ scrutineeId
-                                , TypeI.id_ patternId
-                                , "Case: scrutinee = branch pattern"
-                                )
+                ( scrutineeEquations, bodyEquations ) =
+                    List.foldr
+                        (\( patternId, bodyId ) ( scruts, bodies ) ->
+                            ( ( TypeI.id_ scrutineeId
+                              , TypeI.id_ patternId
+                              , "Case: scrutinee = branch pattern"
+                              )
+                                :: scruts
+                            , ( type_
+                              , TypeI.id_ bodyId
+                              , "Case: result = branch body"
+                              )
+                                :: bodies
                             )
-
-                bodyEquations : List TypeEquation
-                bodyEquations =
-                    caseIds
-                        |> List.map
-                            (\( _, bodyId ) ->
-                                ( type_
-                                , TypeI.id_ bodyId
-                                , "Case: result = branch body"
-                                )
-                            )
+                        )
+                        ( [], [] )
+                        caseIds
             in
             finish <|
                 scrutineeEqs
@@ -641,10 +640,13 @@ inferRecordSetters ctx fieldSetters =
                 State.pure ( ( Node.value fieldNameNode, TypeI.id_ fieldId ), eqs )
             )
         |> State.map
-            (\fieldsAndEqs ->
-                ( fieldsAndEqs |> List.map Tuple.first |> Dict.fromList
-                , fieldsAndEqs |> List.ExtraExtra.fastConcatMap Tuple.second
+            (List.foldl
+                (\( field, eqs ) ( fields, allEqs ) ->
+                    ( Dict.insert (Tuple.first field) (Tuple.second field) fields
+                    , allEqs ++ eqs
+                    )
                 )
+                ( Dict.empty, [] )
             )
 
 
@@ -741,31 +743,18 @@ solveLetDeclarations ctx declarations =
                 groupDecls =
                     groupIndices |> List.filterMap (\index -> Dict.get index byIndex)
 
-                functions : List ( Node LetDeclaration, Expression.Function )
-                functions =
-                    groupDecls
-                        |> List.filterMap
-                            (\declNode ->
-                                case Node.value declNode of
-                                    LetFunction fn ->
-                                        Just ( declNode, fn )
+                ( functions, destructurings ) =
+                    List.foldr
+                        (\declNode ( fns, dests ) ->
+                            case Node.value declNode of
+                                LetFunction fn ->
+                                    ( ( declNode, fn ) :: fns, dests )
 
-                                    LetDestructuring _ _ ->
-                                        Nothing
-                            )
-
-                destructurings : List ( Node LetDeclaration, Node Pattern, Node Expression )
-                destructurings =
-                    groupDecls
-                        |> List.filterMap
-                            (\declNode ->
-                                case Node.value declNode of
-                                    LetDestructuring patternNode exprNode ->
-                                        Just ( declNode, patternNode, exprNode )
-
-                                    LetFunction _ ->
-                                        Nothing
-                            )
+                                LetDestructuring patternNode exprNode ->
+                                    ( fns, ( declNode, patternNode, exprNode ) :: dests )
+                        )
+                        ( [], [] )
+                        groupDecls
             in
             State.do
                 (functions

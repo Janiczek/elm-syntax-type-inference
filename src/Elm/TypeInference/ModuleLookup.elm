@@ -68,7 +68,15 @@ valueNamesOf mod =
     List.map .name mod.values
         ++ List.map .name mod.binops
         ++ List.ExtraExtra.fastConcatMap (\u -> List.map Tuple.first u.tags) mod.unions
-        ++ (mod.aliases |> List.filter isRecordAlias |> List.map .name)
+        ++ List.filterMap
+            (\a ->
+                if isRecordAlias a then
+                    Just a.name
+
+                else
+                    Nothing
+            )
+            mod.aliases
 
 
 typeNamesOf : Elm.Docs.Module -> List VarName

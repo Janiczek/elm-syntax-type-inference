@@ -321,9 +321,10 @@ registerAlias pkgName fullModuleName resolver alias_ =
                                     let
                                         ctorType : MonoType
                                         ctorType =
-                                            resolvedFields
-                                                |> List.map Tuple.second
-                                                |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
+                                            List.foldr
+                                                (\( _, fieldT ) acc -> Function { from = fieldT, to = acc })
+                                                aliasMono
+                                                resolvedFields
                                     in
                                     State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (TypeI.closeOver ctorType)
 

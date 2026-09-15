@@ -392,21 +392,26 @@ substituteTracked store (Forall boundVars monoType) =
             ( Forall [] monoType_, store1 )
 
         _ ->
-            -- Only exclude slots when they actually intersect with bound vars (skip work)
-            if List.any (\var -> Dict.member (key var) store.slots) boundVars then
-                let
-                    restricted : SubstitutionMap
-                    restricted =
-                        List.foldl
-                            (\var acc ->
-                                { slots = Dict.remove (key var) acc.slots
-                                , ranks = acc.ranks
-                                , levels = acc.levels
-                                }
-                            )
-                            store
-                            boundVars
+            let
+                ( didIntersect, restricted ) =
+                    List.foldl
+                        (\var ( found, acc ) ->
+                            if Dict.member (key var) acc.slots then
+                                ( True
+                                , { slots = Dict.remove (key var) acc.slots
+                                  , ranks = acc.ranks
+                                  , levels = acc.levels
+                                  }
+                                )
 
+                            else
+                                ( found, acc )
+                        )
+                        ( False, store )
+                        boundVars
+            in
+            if didIntersect then
+                let
                     ( monoType_, _ ) =
                         substituteMono restricted monoType
                 in

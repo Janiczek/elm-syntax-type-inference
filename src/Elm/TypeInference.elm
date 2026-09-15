@@ -420,28 +420,35 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
             importedInterfaces
                 |> Dict.map (\_ interface -> Interface.moduleIndex interface)
                 |> Dict.insert thisIndex.moduleName thisIndex
+
+        imported :
+            { inheritedAliases : Dict GlobalKey TypeAlias
+            , globalEnv : Dict GlobalKey TypeI.Type
+            }
+        imported =
+            Dict.foldl
+                (\moduleName interface acc ->
+                    { inheritedAliases = Dict.union (Interface.typeAliases interface) acc.inheritedAliases
+                    , globalEnv =
+                        Dict.foldl
+                            (\name scheme inner -> Dict.insert ( "", moduleName, name ) scheme inner)
+                            acc.globalEnv
+                            (Interface.values interface)
+                    }
+                )
+                { inheritedAliases = Dict.empty
+                , globalEnv = depEnv.globalEnv
+                }
+                importedInterfaces
     in
     { thisIndex = thisIndex
     , thisModuleName = thisIndex.moduleName
     , modules = modules
     , resolver = ModuleLookup.typeResolverFor depEnv.index modules thisIndex
     , index = depEnv.index
-    , inheritedAliases =
-        Dict.foldl
-            (\_ interface acc -> Dict.union (Interface.typeAliases interface) acc)
-            Dict.empty
-            importedInterfaces
+    , inheritedAliases = imported.inheritedAliases
     , depTypeAliases = depEnv.typeAliases
-    , globalEnv =
-        Dict.foldl
-            (\moduleName interface acc ->
-                Dict.foldl
-                    (\name scheme inner -> Dict.insert ( "", moduleName, name ) scheme inner)
-                    acc
-                    (Interface.values interface)
-            )
-            depEnv.globalEnv
-            importedInterfaces
+    , globalEnv = imported.globalEnv
     }
 
 
@@ -592,15 +599,15 @@ solveModule { checks } ctx typeAliases file =
                                 Nothing
                     )
 
-        nodeSet : Set VarName
-        nodeSet =
-            topLevelFunctions
-                |> List.map Tuple.first
-                |> Set.fromList
-
-        byKey : Dict VarName ( Node Declaration, Expression.Function )
-        byKey =
-            Dict.fromList topLevelFunctions
+        ( nodeSet, byKey ) =
+            List.foldl
+                (\( name, member ) ( names, dict ) ->
+                    ( Set.insert name names
+                    , Dict.insert name member dict
+                    )
+                )
+                ( Set.empty, Dict.empty )
+                topLevelFunctions
 
         edges : VarName -> List VarName
         edges key =
