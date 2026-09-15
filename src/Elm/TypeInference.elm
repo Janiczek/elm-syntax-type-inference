@@ -702,7 +702,7 @@ gatherTypeAliases ctx file =
                         State.pure <|
                             Just
                                 ( ( "", moduleName, Node.value typeAlias.name )
-                                , { args = List.map Node.value typeAlias.generics
+                                , { args = List.map (Node.value >> TypeVar.parse) typeAlias.generics
                                   , type_ = type__
                                   }
                                 )

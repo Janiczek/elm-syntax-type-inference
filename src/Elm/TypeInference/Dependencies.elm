@@ -335,5 +335,5 @@ registerAlias pkgName fullModuleName resolver alias_ =
                     State.pure <|
                         Just
                             ( ( pkgName, fullModuleName, alias_.name )
-                            , { args = alias_.args, type_ = aliasMono }
+                            , { args = List.map TypeVar.parse alias_.args, type_ = aliasMono }
                             )

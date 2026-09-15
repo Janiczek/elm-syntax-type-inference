@@ -7,7 +7,7 @@ import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as Type exposing (MonoType(..))
-import Elm.TypeInference.TypeVar as TypeVar
+import Elm.TypeInference.TypeVar
     exposing
         ( SuperType(..)
         , TypeVar
@@ -16,8 +16,8 @@ import Elm.TypeInference.TypeVar as TypeVar
 
 
 type alias TypeAlias =
-    { args : List VarName
-    , type_ : MonoType
+    { type_ : MonoType
+    , args : List TypeVar
     }
 
 
@@ -41,9 +41,6 @@ type alias UnifyConfig =
     }
 
 
-{-| Solve the equations left to right, each under the solution the ones before
-it produced.
--}
 unifyMany : UnifyConfig -> List ( MonoType, MonoType ) -> StateM ()
 unifyMany cfg eqs =
     \state -> unifyManyHelp cfg eqs state
@@ -138,64 +135,28 @@ expandAliasHelp fuel typeAliases type_ =
                             Nothing ->
                                 type_
 
-                            Just argsByName ->
-                                expandAliasHelp (fuel - 1) typeAliases (substituteAliasArgs argsByName alias_.type_)
+                            Just mappings ->
+                                expandAliasHelp (fuel - 1) typeAliases (substituteAliasArgs mappings alias_.type_)
 
         _ ->
             type_
 
 
-{-| An alias's declared generic (eg. `type alias Threshold comparable = ...`)
-is stored verbatim (`"comparable"`), but `Type.fromTypeAnnotation` parses that
-same name inside the alias's body through `TypeVar.parse`, which strips
-the `number`/`comparable`/`appendable`/`compappend` typeclass prefix (so the
-body's `comparable` becomes `TypeVar ( Named "", Comparable )`, not `Named
-"comparable"`). Without re-parsing here, `substituteAliasArgs` looks up the
-raw name and never finds it, silently leaving the body's typeclass var
-unsubstituted -- which then leaks out of the alias and, being name-keyed, is
-indistinguishable from any other same-named typeclass var elsewhere in the
-project (see the `e2e/tests/histogram-force-comparable` regression fixture).
+{-| Replace type alias' arguments with the supplied types, verbatim.
 -}
-aliasArgKey : VarName -> VarName
-aliasArgKey rawArgName =
-    case Tuple.first (TypeVar.parse rawArgName) of
-        Named parsedName ->
-            parsedName
-
-        Generated _ ->
-            rawArgName
-
-
-{-| One-shot, non-chaining replacement of a type alias's own generic
-parameters with the actual type arguments from its use site.
-
-Deliberately not `SubstitutionMap.substituteMono`: that treats its input as a
-triangular substitution and chain-follows `TypeVar -> TypeVar` links, which is
-unsound here. The alias's parameter names live in a completely different
-scope than the caller's own type variables, and can collide by pure spelling
-coincidence -- e.g. `type alias Wrap acc = acc -> acc` applied at a call site
-that also has its own, unrelated `acc`. Keying by that shared spelling in a
-chain-following substitution map produces a var that (mis)resolves to itself,
-looping forever. A plain one-shot rewrite instead replaces each hole exactly
-once with the caller's argument verbatim, so a same-named-but-unrelated
-variable in that argument is never mistaken for another parameter to expand.
-
--}
-substituteAliasArgs : Dict VarName MonoType -> MonoType -> MonoType
-substituteAliasArgs argsByName type_ =
+substituteAliasArgs : List ( TypeVar, MonoType ) -> MonoType -> MonoType
+substituteAliasArgs mappings type_ =
     let
         go : MonoType -> MonoType
         go =
-            substituteAliasArgs argsByName
+            substituteAliasArgs mappings
     in
     case type_ of
-        TypeVar ( Named name, _ ) ->
-            Dict.get name argsByName
+        TypeVar v ->
+            findAliasArg v mappings
                 |> Maybe.withDefault type_
 
-        TypeVar ( Generated _, _ ) ->
-            type_
-
+        -- The rest is recursion
         Function f ->
             Function { from = go f.from, to = go f.to }
 
@@ -251,31 +212,37 @@ substituteAliasArgs argsByName type_ =
                 }
 
 
-{-| Zip alias generic names with use-site args in one traversal, or `Nothing`
-on arity mismatch (see `expandAliasHelp` for why truncating is unsound).
+{-| Find the var in the alias argument list.
+List deemed acceptable (aliases don't have many arguments).
 -}
-zipAliasArgs : List VarName -> List MonoType -> Maybe (Dict VarName MonoType)
-zipAliasArgs names args =
-    case ( names, args ) of
-        ( [], [] ) ->
-            Just Dict.empty
+findAliasArg : TypeVar -> List ( TypeVar, MonoType ) -> Maybe MonoType
+findAliasArg needle mappings =
+    case mappings of
+        [] ->
+            Nothing
 
-        ( rawArgName :: restNames, argType :: restArgs ) ->
-            Maybe.map
-                (Dict.insert (aliasArgKey rawArgName) argType)
-                (zipAliasArgs restNames restArgs)
+        ( param, argType ) :: rest ->
+            if param == needle then
+                Just argType
+
+            else
+                findAliasArg needle rest
+
+
+zipAliasArgs : List TypeVar -> List MonoType -> Maybe (List ( TypeVar, MonoType ))
+zipAliasArgs params args =
+    case ( params, args ) of
+        ( [], [] ) ->
+            Just []
+
+        ( param :: restParams, argType :: restArgs ) ->
+            zipAliasArgs restParams restArgs
+                |> Maybe.map ((::) ( param, argType ))
 
         _ ->
             Nothing
 
 
-{-| Pair two arg lists, or `Nothing` if their lengths differ.
-
-Single traversal: `List.length` on both sides followed by `List.map2` would
-walk each list twice (and `map2` silently truncates on mismatch, which is why
-the length pre-check existed at all).
-
--}
 zipArgs : List MonoType -> List MonoType -> Maybe (List ( MonoType, MonoType ))
 zipArgs args1 args2 =
     case ( args1, args2 ) of
@@ -297,15 +264,8 @@ zipArgs args1 args2 =
             Nothing
 
 
-{-| Pair the two field dicts up _by name_, or `Nothing` if the key sets differ
-at all.
-
-Zipping `Dict.values` by sorted position (what this used to do) pairs unrelated
-fields whenever the key sets disagree, and truncates to the shorter list --
-silently producing wrong types. Two `Record`s with different key sets can reach
-here even on code that already compiles, via `collapseExtensible` /
-`recordVsExtensible`, so this must be correct in both `canSkipChecks` modes.
-
+{-| Pair the two record field dicts up _by name_.
+`Nothing` if the key sets differ at all.
 -}
 zipRecordFields : Dict VarName MonoType -> Dict VarName MonoType -> Maybe (List ( MonoType, MonoType ))
 zipRecordFields bindings1 bindings2 =
@@ -564,28 +524,29 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                 else
-                    State.do State.getNextIdAndTick <| \tailId ->
-                    let
-                        tail : MonoType
-                        tail =
-                            Type.id_ tailId
-                    in
-                    unifyMany
-                        cfg
-                        (( r1.extensionTypevar
-                         , ExtensibleRecord
-                            { extensionTypevar = tail
-                            , fields = onlyIn2
-                            }
-                         )
-                            :: ( r2.extensionTypevar
-                               , ExtensibleRecord
+                    State.do State.getNextIdAndTick <|
+                        \tailId ->
+                            let
+                                tail : MonoType
+                                tail =
+                                    Type.id_ tailId
+                            in
+                            unifyMany
+                                cfg
+                                (( r1.extensionTypevar
+                                 , ExtensibleRecord
                                     { extensionTypevar = tail
-                                    , fields = onlyIn1
+                                    , fields = onlyIn2
                                     }
-                               )
-                            :: sharedEqs
-                        )
+                                 )
+                                    :: ( r2.extensionTypevar
+                                       , ExtensibleRecord
+                                            { extensionTypevar = tail
+                                            , fields = onlyIn1
+                                            }
+                                       )
+                                    :: sharedEqs
+                                )
 
             ( ExtensibleRecord er, Record r ) ->
                 recordVsExtensible r.fields er
@@ -672,8 +633,8 @@ bind cfg typeVar type_ =
                             -- class -- except that a `Named` var is not unique
                             -- the way a `Generated` one is: two unrelated
                             -- declarations can both write `a` in a signature,
-                            -- and an alias body can leak one (see
-                            -- `aliasArgKey`). Making such a var the
+                            -- and an alias body can mention one free. Making
+                            -- such a var the
                             -- representative would bind it for _every_
                             -- same-named var in the project. Generated ids
                             -- can't collide, so they always win; between two
@@ -701,16 +662,17 @@ bind cfg typeVar type_ =
                             -- eg. Comparable and Appendable
                             -- introduce fresh var with combined constraint
                             -- point both at it
-                            State.do State.getNextIdAndTick <| \freshId ->
-                            let
-                                fresh : TypeVar
-                                fresh =
-                                    ( Generated freshId, m )
-                            in
-                            State.modifySubst
-                                (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                    >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
-                                )
+                            State.do State.getNextIdAndTick <|
+                                \freshId ->
+                                    let
+                                        fresh : TypeVar
+                                        fresh =
+                                            ( Generated freshId, m )
+                                    in
+                                    State.modifySubst
+                                        (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                            >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                                        )
 
             _ ->
                 if cfg.canSkipChecks || accepts cfg.typeAliases super type_ then

@@ -1731,7 +1731,7 @@ unifyAliasSuite =
     let
         pairAlias : Unify.TypeAlias
         pairAlias =
-            { args = [ "a" ]
+            { args = [ ( TypeVar.Named "a", TypeVar.Normal ) ]
             , type_ =
                 TypeI.Tuple2
                     (TypeI.TypeVar ( TypeVar.Named "a", TypeVar.Normal ))
