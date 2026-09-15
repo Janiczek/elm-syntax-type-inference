@@ -1,5 +1,5 @@
 module Elm.TypeInference.Type exposing
-    ( Type(..), toString
+    ( Type(..), toString, toTypeAnnotation
     , PackageName
     )
 
@@ -7,7 +7,7 @@ module Elm.TypeInference.Type exposing
 
 This module is not named `Elm.Type` because that already exists in elm/project-metadata-utils.
 
-@docs Type, toString
+@docs Type, toString, toTypeAnnotation
 @docs PackageName
 
 -}
@@ -15,6 +15,8 @@ This module is not named `Elm.Type` because that already exists in elm/project-m
 import Dict exposing (Dict)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.ModuleName.Extra
+import Elm.Syntax.Node as Node
+import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 
 
 {-| Eg. "elm/core".
@@ -168,3 +170,97 @@ toString t =
             , toString (Record { fields = varyings })
             ]
                 |> String.join " "
+
+
+{-| Convert a `Type` to an `elm-syntax` `TypeAnnotation`.
+
+All `Node`s use dummy ranges.
+
+-}
+toTypeAnnotation : Type -> TypeAnnotation
+toTypeAnnotation type_ =
+    case type_ of
+        TypeVar name ->
+            TypeAnnotation.GenericType name
+
+        Function { from, to } ->
+            TypeAnnotation.FunctionTypeAnnotation
+                (Node.empty (toTypeAnnotation from))
+                (Node.empty (toTypeAnnotation to))
+
+        Int ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Int" )) []
+
+        Float ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Float" )) []
+
+        Char ->
+            TypeAnnotation.Typed (Node.empty ( [ "Char" ], "Char" )) []
+
+        String ->
+            TypeAnnotation.Typed (Node.empty ( [ "String" ], "String" )) []
+
+        Bool ->
+            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Bool" )) []
+
+        List itemType ->
+            TypeAnnotation.Typed
+                (Node.empty ( [ "List" ], "List" ))
+                [ Node.empty (toTypeAnnotation itemType) ]
+
+        Unit ->
+            TypeAnnotation.Unit
+
+        Tuple2 t1 t2 ->
+            TypeAnnotation.Tupled
+                [ Node.empty (toTypeAnnotation t1)
+                , Node.empty (toTypeAnnotation t2)
+                ]
+
+        Tuple3 t1 t2 t3 ->
+            TypeAnnotation.Tupled
+                [ Node.empty (toTypeAnnotation t1)
+                , Node.empty (toTypeAnnotation t2)
+                , Node.empty (toTypeAnnotation t3)
+                ]
+
+        Record { fields } ->
+            TypeAnnotation.Record
+                (recordFieldsToRecordDefinition fields)
+
+        ExtensibleRecord { fields, extensionTypevar } ->
+            TypeAnnotation.GenericRecord
+                (Node.empty extensionTypevar)
+                (Node.empty (recordFieldsToRecordDefinition fields))
+
+        Named { moduleName, name, arguments } ->
+            TypeAnnotation.Typed
+                (Node.empty ( moduleName, name ))
+                (List.map (toTypeAnnotation >> Node.empty) arguments)
+
+        WebGLShader { attributes, uniforms, varyings } ->
+            TypeAnnotation.Typed
+                (Node.empty ( [ "WebGL" ], "Shader" ))
+                ([ attributes
+                 , uniforms
+                 , varyings
+                 ]
+                    |> List.map
+                        (recordFieldsToRecordDefinition
+                            >> TypeAnnotation.Record
+                            >> Node.empty
+                        )
+                )
+
+
+recordFieldsToRecordDefinition : Dict String Type -> TypeAnnotation.RecordDefinition
+recordFieldsToRecordDefinition fields =
+    fields
+        |> Dict.toList
+        |> List.map
+            (\( fieldName, fieldType ) ->
+                Node.empty
+                    ( Node.empty fieldName
+                    , Node.empty (toTypeAnnotation fieldType)
+                    )
+            )
