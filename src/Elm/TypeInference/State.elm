@@ -427,13 +427,20 @@ benefit too.
 -}
 substituteMono : MonoType -> TIState MonoType
 substituteMono monoType =
-    do getSubst <| \subst ->
-    let
-        ( monoType_, subst1 ) =
-            SubstitutionMap.substituteMono subst monoType
-    in
-    do (setSubst subst1) <| \() ->
-    pure monoType_
+    \state ->
+        let
+            ( monoType_, subst1 ) =
+                SubstitutionMap.substituteMono state.subst monoType
+        in
+        ( Ok monoType_
+        , { nextId = state.nextId
+          , nodeIds = state.nodeIds
+          , lexicalEnv = state.lexicalEnv
+          , globalEnv = state.globalEnv
+          , subst = subst1
+          , currentLevel = state.currentLevel
+          }
+        )
 
 
 {-| Substitute both sides of one equation, reporting for each whether it came
@@ -473,13 +480,20 @@ substituteEquation t1 t2 =
 -}
 substitute : Type -> TIState Type
 substitute type_ =
-    do getSubst <| \subst ->
-    let
-        ( type__, subst1 ) =
-            SubstitutionMap.substituteTracked subst type_
-    in
-    do (setSubst subst1) <| \() ->
-    pure type__
+    \state ->
+        let
+            ( type__, subst1 ) =
+                SubstitutionMap.substituteTracked state.subst type_
+        in
+        ( Ok type__
+        , { nextId = state.nextId
+          , nodeIds = state.nodeIds
+          , lexicalEnv = state.lexicalEnv
+          , globalEnv = state.globalEnv
+          , subst = subst1
+          , currentLevel = state.currentLevel
+          }
+        )
 
 
 

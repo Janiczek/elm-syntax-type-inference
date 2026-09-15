@@ -3,7 +3,7 @@ module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.VarName exposing (VarName)
-import Elm.TypeInference.Error exposing (ErrorDetails(..))
+import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (TIState)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type.Internal as Type
@@ -58,13 +58,42 @@ far.
 -}
 unifyMany : UnifyConfig -> List ( MonoType, MonoType ) -> TIState ()
 unifyMany cfg eqs =
-    State.foldl
-        (\( t1, t2 ) () ->
-            State.do (State.substituteEquation t1 t2) <| \( ( st1, isGround1 ), ( st2, isGround2 ) ) ->
-            unifyMono cfg isGround1 st1 isGround2 st2
-        )
-        ()
-        eqs
+    \state -> unifyManyHelp cfg eqs state
+
+
+{-| Could be a State.foldl with State.substituteEquation and unifyMono,
+but we optimized it to reduce GC pressure.
+-}
+unifyManyHelp : UnifyConfig -> List ( MonoType, MonoType ) -> State.State -> ( Result Error (), State.State )
+unifyManyHelp cfg eqs state =
+    case eqs of
+        [] ->
+            ( Ok (), state )
+
+        ( t1, t2 ) :: rest ->
+            let
+                ( st1, flags1, subst1 ) =
+                    SubstitutionMap.substituteMonoTracked state.subst t1
+
+                ( st2, flags2, subst2 ) =
+                    SubstitutionMap.substituteMonoTracked subst1 t2
+
+                state1 : State.State
+                state1 =
+                    { nextId = state.nextId
+                    , nodeIds = state.nodeIds
+                    , lexicalEnv = state.lexicalEnv
+                    , globalEnv = state.globalEnv
+                    , subst = subst2
+                    , currentLevel = state.currentLevel
+                    }
+            in
+            case unifyMono cfg (SubstitutionMap.resultIsGround flags1) st1 (SubstitutionMap.resultIsGround flags2) st2 state1 of
+                ( Err err, newState ) ->
+                    ( Err err, newState )
+
+                ( Ok (), newState ) ->
+                    unifyManyHelp cfg rest newState
 
 
 {-| Expand alias (substitute its args) recursively, then collapse extensible records.
