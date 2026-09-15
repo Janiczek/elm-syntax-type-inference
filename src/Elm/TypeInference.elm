@@ -1,6 +1,7 @@
 module Elm.TypeInference exposing
     ( inferAndCheck, inferCorrectCode
-    , DependencyEnv, dependencyEnv, Dependency
+    , DependencyEnv, dependencyEnv
+    , Dependency
     )
 
 {-| Type inference for [`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
@@ -20,7 +21,8 @@ TODO: inferAndCheck needs to check the annotations too. inferCorrectCode can tru
 
 # Dependencies
 
-@docs DependencyEnv, dependencyEnv, Dependency
+@docs DependencyEnv, dependencyEnv
+@docs Dependency
 
 -}
 
