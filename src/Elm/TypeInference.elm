@@ -1,7 +1,6 @@
 module Elm.TypeInference exposing
     ( inferAndCheck, inferCorrectCode
     , DependencyEnv, dependencyEnv, Dependency
-    , Interface, inferModule, inferProject, interfaceFromAnnotations
     )
 
 {-| Type inference for [`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
@@ -23,11 +22,6 @@ TODO: inferAndCheck needs to check the annotations too. inferCorrectCode can tru
 
 @docs DependencyEnv, dependencyEnv, Dependency
 
-
-# One module at a time
-
-@docs Interface, inferModule, inferProject, interfaceFromAnnotations
-
 -}
 
 import Dict exposing (Dict)
@@ -48,7 +42,6 @@ import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError)
 import Elm.TypeInference.Infer as Infer
-import Elm.TypeInference.Interface as Interface
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
@@ -192,22 +185,43 @@ dependencyEnv { directDependencies, allDependencies } =
 
 
 
--- PER-MODULE INFERENCE
+-- PER-MODULE INFERENCE (internal)
 
 
-{-| What one module contributes to the modules importing it. Opaque.
+{-| What one module contributes to the modules that import it.
 
-TODO: why do we need this for users? Should this be hidden beneath TypeLookupTable somehow?
+Inference runs one module at a time (Elm forbids import cycles, so a module can
+always be inferred once its imports are done). An `Interface` is everything the
+importing module needs: it replaces having the imported `File`s around.
+
+The types in here are id-space independent: `State.generalizeWith` substitutes
+before quantifying vars younger than the enclosing let, and
+`State.lookupGlobalEnv` re-instantiates with fresh ids on every lookup. So an
+interface stays valid no matter which `State` consumes it.
+
+  - `moduleIndex` -- the declared/exposed names, imports and infix declarations
+    that name resolution in the importing module needs.
+  - `values` -- the module's _exposed_ values (functions, constructors, ports,
+    record-alias constructors) with their generalized schemes.
+  - `typeAliases` -- the module's own type aliases _plus_ every alias it
+    inherited from its own imports. A type flowing out of this module's
+    signatures can mention an alias the importer never imported itself, and
+    `Unify.expandAlias` still has to be able to expand it. (Dependency aliases
+    are not in here: they live in the `DependencyEnv`, which every module has
+    anyway.)
 
 -}
-type alias Interface =
-    Interface.Interface
+type Interface
+    = Interface
+        { moduleIndex : ModuleIndex
+        , values : Dict VarName TypeI.Type
+        , typeAliases : Dict GlobalKey TypeAlias
+        }
 
 
 {-| Infer a single module, given the interfaces of the modules it imports.
 
-Feed modules in topological order (or use [`inferProject`](#inferProject),
-which does that for you).
+Feed modules in topological order (or use `inferProject`, which does that for you).
 
 -}
 inferModule :
@@ -235,10 +249,10 @@ interfaceFromAnnotations depEnv importedInterfaces file =
 
 {-| Infer every module of a project, in dependency order.
 
-Unlike [`inferCorrectCode`](#inferCorrectCode) this reports failures **per
+Unlike `inferCorrectCode` this reports failures **per
 module**: a type error in one module no longer kills the whole run. The failed
 module's dependents are inferred against its annotations
-(see [`interfaceFromAnnotations`](#interfaceFromAnnotations)).
+(see `interfaceFromAnnotations`).
 
 -}
 inferProject :
@@ -418,7 +432,7 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
         modules : Dict FullModuleName ModuleIndex
         modules =
             importedInterfaces
-                |> Dict.map (\_ interface -> Interface.moduleIndex interface)
+                |> Dict.map (\_ (Interface interface) -> interface.moduleIndex)
                 |> Dict.insert thisIndex.moduleName thisIndex
 
         imported :
@@ -427,13 +441,13 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
             }
         imported =
             Dict.foldl
-                (\moduleName interface acc ->
-                    { inheritedAliases = Dict.union (Interface.typeAliases interface) acc.inheritedAliases
+                (\moduleName (Interface interface) acc ->
+                    { inheritedAliases = Dict.union interface.typeAliases acc.inheritedAliases
                     , globalEnv =
                         Dict.foldl
                             (\name scheme inner -> Dict.insert ( "", moduleName, name ) scheme inner)
                             acc.globalEnv
-                            (Interface.values interface)
+                            interface.values
                     }
                 )
                 { inheritedAliases = Dict.empty
@@ -507,7 +521,7 @@ interfaceFromAnnotations_ depEnv importedInterfaces file =
         |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = ctx.globalEnv })
         |> Tuple.first
         |> Result.withDefault
-            (Interface.create
+            (Interface
                 { moduleIndex = ctx.thisIndex
                 , values = Dict.empty
                 , typeAliases = ctx.inheritedAliases
@@ -563,7 +577,7 @@ moduleResult ctx outgoingAliases =
                             State.pure
                                 { table = TypeLookupTable.Internal.TLT typesByRange
                                 , interface =
-                                    Interface.create
+                                    Interface
                                         { moduleIndex = ctx.thisIndex
                                         , values = exposedValues
                                         , typeAliases = outgoingAliases
