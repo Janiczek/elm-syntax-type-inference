@@ -11,15 +11,14 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
-import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.State as State exposing (StateM)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal exposing (TypeResolver)
 import List.ExtraExtra
 import Result.Extra
@@ -150,7 +149,7 @@ findModuleOfVar :
     -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> TIState ( PackageName, FullModuleName )
+    -> StateM ( PackageName, FullModuleName )
 findModuleOfVar index modules thisModule maybeModuleName varName =
     case moduleOfVar index modules thisModule maybeModuleName varName of
         Err details ->

@@ -66,21 +66,20 @@ testExpr ( exprCode, predicate ) =
         trimmedExprCode =
             String.ExtraExtra.multilineInput exprCode
     in
-    Test.test trimmedExprCode <|
-        \() ->
-            case getExprType trimmedExprCode of
-                Err (CouldntInfer err) ->
-                    predicate (Err err)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
+    Test.test trimmedExprCode <| \() ->
+    case getExprType trimmedExprCode of
+        Err (CouldntInfer err) ->
+            predicate (Err err)
+                |> Expect.equal True
+                |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
-                Ok type_ ->
-                    predicate (Ok type_)
-                        |> Expect.equal True
-                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
+        Ok type_ ->
+            predicate (Ok type_)
+                |> Expect.equal True
+                |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
 
-                Err err ->
-                    Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+        Err err ->
+            Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
 
 
 is : Type -> Result Error Type -> Bool
@@ -442,10 +441,9 @@ parenthesizedTest =
     Test.describe "e == (e)" <|
         List.map
             (\( expr, _ ) ->
-                Test.test expr <|
-                    \() ->
-                        getExprType ("(" ++ expr ++ ")")
-                            |> Expect.equal (getExprType expr)
+                Test.test expr <| \() ->
+                getExprType ("(" ++ expr ++ ")")
+                    |> Expect.equal (getExprType expr)
             )
             goodExprs
 
@@ -453,9 +451,8 @@ parenthesizedTest =
 subexpressionsSuite : Test
 subexpressionsSuite =
     Test.describe "subexpressions"
-        [ Test.test "the `2` in `main = [1.0, 2]` is a Float" <|
-            \() ->
-                """module Main exposing (main)
+        [ Test.test "the `2` in `main = [1.0, 2]` is a Float" <| \() ->
+        """module Main exposing (main)
 
 main = [1.0, 2]"""
                     |> inferMainModule
@@ -467,9 +464,8 @@ main = [1.0, 2]"""
                                 }
                         )
                     |> Expect.equal (Ok (Just Float))
-        , Test.test "a top-level function reports its function type, not its body's" <|
-            \() ->
-                """module Main exposing (main)
+        , Test.test "a top-level function reports its function type, not its body's" <| \() ->
+        """module Main exposing (main)
 
 main x = x"""
                     |> inferMainModule
@@ -488,11 +484,10 @@ main x = x"""
 largeInputsSuite : Test
 largeInputsSuite =
     Test.describe "large inputs"
-        [ Test.test "a large list literal doesn't blow the stack" <|
-            \() ->
-                -- One declaration's binding group holds ~2 type equations per
-                -- list item; solving them used to recurse once per equation.
-                ("""module Main exposing (main)
+        [ Test.test "a large list literal doesn't blow the stack" <| \() ->
+        -- One declaration's binding group holds ~2 type equations per
+        -- list item; solving them used to recurse once per equation.
+        ("""module Main exposing (main)
 
 main =
     [ """
@@ -504,19 +499,18 @@ main =
                     |> inferMainModule
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
-        , Test.test "a large list of large records doesn't blow the stack" <|
-            \() ->
-                let
-                    record : String
-                    record =
-                        "{ "
-                            ++ (List.range 1 17
-                                    |> List.map (\i -> "field" ++ String.fromInt i ++ " = " ++ String.fromInt i)
-                                    |> String.join ", "
-                               )
-                            ++ " }"
-                in
-                ("""module Main exposing (main)
+        , Test.test "a large list of large records doesn't blow the stack" <| \() ->
+        let
+            record : String
+            record =
+                "{ "
+                    ++ (List.range 1 17
+                            |> List.map (\i -> "field" ++ String.fromInt i ++ " = " ++ String.fromInt i)
+                            |> String.join ", "
+                       )
+                    ++ " }"
+        in
+        ("""module Main exposing (main)
 
 main =
     [ """
@@ -757,21 +751,20 @@ dependenciesSuite =
     let
         testWithCore : ( String, Result Error Type.Type -> Bool ) -> Test
         testWithCore ( exprCode, predicate ) =
-            Test.test exprCode <|
-                \() ->
-                    case getExprTypeWithDeps [ CoreFixture.core ] exprCode of
-                        Err (CouldntInfer err) ->
-                            predicate (Err err)
-                                |> Expect.equal True
-                                |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
+            Test.test exprCode <| \() ->
+            case getExprTypeWithDeps [ CoreFixture.core ] exprCode of
+                Err (CouldntInfer err) ->
+                    predicate (Err err)
+                        |> Expect.equal True
+                        |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
-                        Ok type_ ->
-                            predicate (Ok type_)
-                                |> Expect.equal True
-                                |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
+                Ok type_ ->
+                    predicate (Ok type_)
+                        |> Expect.equal True
+                        |> Expect.onFail ("Has inferred a bad type: " ++ Type.toString type_)
 
-                        Err err ->
-                            Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
+                Err err ->
+                    Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
     in
     Test.describe "3rd party dependency types (using an elm/core fixture)"
         [ Test.describe "good expressions"
@@ -791,57 +784,56 @@ dependenciesSuite =
                 , ( "True + 1", fails ) -- Bool isn't a number
                 ]
             )
-        , Test.test "a module name exposed by one package and shipped internally by another stays two distinct types" <|
-            \() ->
-                let
-                    pkgA : Dependency
-                    pkgA =
-                        { name = "authorA/pkg-a"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "ModuleA"
+        , Test.test "a module name exposed by one package and shipped internally by another stays two distinct types" <| \() ->
+        let
+            pkgA : Dependency
+            pkgA =
+                { name = "authorA/pkg-a"
+                , dependencies = []
+                , modules =
+                    [ { name = "ModuleA"
+                      , comment = ""
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "consume"
                               , comment = ""
-                              , unions = []
-                              , aliases = []
-                              , values =
-                                    [ { name = "consume"
-                                      , comment = ""
-                                      , tipe =
-                                            Elm.Type.Lambda
-                                                (Elm.Type.Type "Char.Extra.Classification" [])
-                                                (Elm.Type.Type "Basics.Int" [])
-                                      }
-                                    ]
-                              , binops = []
+                              , tipe =
+                                    Elm.Type.Lambda
+                                        (Elm.Type.Type "Char.Extra.Classification" [])
+                                        (Elm.Type.Type "Basics.Int" [])
                               }
                             ]
-                        }
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    pkgB : Dependency
-                    pkgB =
-                        { name = "authorB/pkg-b"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "Char.Extra"
+            pkgB : Dependency
+            pkgB =
+                { name = "authorB/pkg-b"
+                , dependencies = []
+                , modules =
+                    [ { name = "Char.Extra"
+                      , comment = ""
+                      , unions =
+                            [ { name = "Classification"
                               , comment = ""
-                              , unions =
-                                    [ { name = "Classification"
-                                      , comment = ""
-                                      , args = []
-                                      , tags = [ ( "Alpha", [] ) ]
-                                      }
-                                    ]
-                              , aliases = []
-                              , values = []
-                              , binops = []
+                              , args = []
+                              , tags = [ ( "Alpha", [] ) ]
                               }
                             ]
-                        }
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 import ModuleA
@@ -853,66 +845,65 @@ main = ModuleA.consume Char.Extra.Alpha
                 getDeclTypeWithDeps [ pkgA, pkgB ] modules [ "Main" ] "main"
                     |> Result.map (always ())
                     |> Expect.err
-        , Test.test "ambiguity between two same-named exposed modules across packages (miniBill/elm-ui-with-context's Element) is an error" <|
-            \() ->
-                let
-                    elmUi : Dependency
-                    elmUi =
-                        { name = "mdgriffith/elm-ui"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "Element"
+        , Test.test "ambiguity between two same-named exposed modules across packages (miniBill/elm-ui-with-context's Element) is an error" <| \() ->
+        let
+            elmUi : Dependency
+            elmUi =
+                { name = "mdgriffith/elm-ui"
+                , dependencies = []
+                , modules =
+                    [ { name = "Element"
+                      , comment = ""
+                      , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    ]
+                }
+
+            styleElements : Dependency
+            styleElements =
+                { name = "mdgriffith/style-elements"
+                , dependencies = []
+                , modules =
+                    [ { name = "Element"
+                      , comment = ""
+                      , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    ]
+                }
+
+            elmUiWithContext : Dependency
+            elmUiWithContext =
+                { name = "miniBill/elm-ui-with-context"
+                , dependencies = [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
+                , modules =
+                    [ { name = "Element.WithContext"
+                      , comment = ""
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "toElement"
                               , comment = ""
-                              , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
-                              , aliases = []
-                              , values = []
-                              , binops = []
+                              , tipe =
+                                    Elm.Type.Lambda
+                                        (Elm.Type.Type "Element.Element" [ Elm.Type.Var "msg" ])
+                                        (Elm.Type.Type "Basics.Int" [])
                               }
                             ]
-                        }
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    styleElements : Dependency
-                    styleElements =
-                        { name = "mdgriffith/style-elements"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "Element"
-                              , comment = ""
-                              , unions = [ { name = "Element", comment = "", args = [ "msg" ], tags = [] } ]
-                              , aliases = []
-                              , values = []
-                              , binops = []
-                              }
-                            ]
-                        }
-
-                    elmUiWithContext : Dependency
-                    elmUiWithContext =
-                        { name = "miniBill/elm-ui-with-context"
-                        , dependencies = [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
-                        , modules =
-                            [ { name = "Element.WithContext"
-                              , comment = ""
-                              , unions = []
-                              , aliases = []
-                              , values =
-                                    [ { name = "toElement"
-                                      , comment = ""
-                                      , tipe =
-                                            Elm.Type.Lambda
-                                                (Elm.Type.Type "Element.Element" [ Elm.Type.Var "msg" ])
-                                                (Elm.Type.Type "Basics.Int" [])
-                                      }
-                                    ]
-                              , binops = []
-                              }
-                            ]
-                        }
-
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main = 1
@@ -933,59 +924,58 @@ main = 1
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
-        , Test.test "ambiguity between two packages both defining Element.text is an error" <|
-            \() ->
-                let
-                    elmUi : Dependency
-                    elmUi =
-                        { name = "mdgriffith/elm-ui"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "Element"
+        , Test.test "ambiguity between two packages both defining Element.text is an error" <| \() ->
+        let
+            elmUi : Dependency
+            elmUi =
+                { name = "mdgriffith/elm-ui"
+                , dependencies = []
+                , modules =
+                    [ { name = "Element"
+                      , comment = ""
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "text"
                               , comment = ""
-                              , unions = []
-                              , aliases = []
-                              , values =
-                                    [ { name = "text"
-                                      , comment = ""
-                                      , tipe =
-                                            Elm.Type.Lambda
-                                                (Elm.Type.Type "String.String" [])
-                                                (Elm.Type.Type "Basics.Int" [])
-                                      }
-                                    ]
-                              , binops = []
+                              , tipe =
+                                    Elm.Type.Lambda
+                                        (Elm.Type.Type "String.String" [])
+                                        (Elm.Type.Type "Basics.Int" [])
                               }
                             ]
-                        }
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    styleElements : Dependency
-                    styleElements =
-                        { name = "mdgriffith/style-elements"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "Element"
+            styleElements : Dependency
+            styleElements =
+                { name = "mdgriffith/style-elements"
+                , dependencies = []
+                , modules =
+                    [ { name = "Element"
+                      , comment = ""
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "text"
                               , comment = ""
-                              , unions = []
-                              , aliases = []
-                              , values =
-                                    [ { name = "text"
-                                      , comment = ""
-                                      , tipe =
-                                            Elm.Type.Lambda
-                                                (Elm.Type.Type "String.String" [])
-                                                (Elm.Type.Type "Basics.Int" [])
-                                      }
-                                    ]
-                              , binops = []
+                              , tipe =
+                                    Elm.Type.Lambda
+                                        (Elm.Type.Type "String.String" [])
+                                        (Elm.Type.Type "Basics.Int" [])
                               }
                             ]
-                        }
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 import Element
@@ -1008,51 +998,50 @@ main = Element.text "hi"
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
-        , Test.test "ambiguity between two packages both defining an Element type is an error" <|
-            \() ->
-                let
-                    elementUnion : Elm.Docs.Union
-                    elementUnion =
-                        { name = "Element"
-                        , comment = ""
-                        , args = [ "msg" ]
-                        , tags = []
-                        }
+        , Test.test "ambiguity between two packages both defining an Element type is an error" <| \() ->
+        let
+            elementUnion : Elm.Docs.Union
+            elementUnion =
+                { name = "Element"
+                , comment = ""
+                , args = [ "msg" ]
+                , tags = []
+                }
 
-                    elmUi : Dependency
-                    elmUi =
-                        { name = "mdgriffith/elm-ui"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "Element"
-                              , comment = ""
-                              , unions = [ elementUnion ]
-                              , aliases = []
-                              , values = []
-                              , binops = []
-                              }
-                            ]
-                        }
+            elmUi : Dependency
+            elmUi =
+                { name = "mdgriffith/elm-ui"
+                , dependencies = []
+                , modules =
+                    [ { name = "Element"
+                      , comment = ""
+                      , unions = [ elementUnion ]
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    styleElements : Dependency
-                    styleElements =
-                        { name = "mdgriffith/style-elements"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "Element"
-                              , comment = ""
-                              , unions = [ elementUnion ]
-                              , aliases = []
-                              , values = []
-                              , binops = []
-                              }
-                            ]
-                        }
+            styleElements : Dependency
+            styleElements =
+                { name = "mdgriffith/style-elements"
+                , dependencies = []
+                , modules =
+                    [ { name = "Element"
+                      , comment = ""
+                      , unions = [ elementUnion ]
+                      , aliases = []
+                      , values = []
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 import Element
@@ -1078,60 +1067,59 @@ main = 1
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
-        , Test.test "a module exposed by both a direct dependency and a dependency-of-a-dependency isn't ambiguous (regression: gampleman/elm-visualization depends directly on elmcraft/core-extra, which exposes List.Extra; folkertdev/one-true-path-experiment -- itself only a direct dep -- separately depends on elm-community/list-extra, which *also* exposes a module named List.Extra, but that package isn't reachable/importable from our own source, exactly as with `elm make`)" <|
-            \() ->
-                let
-                    coreExtra : Dependency
-                    coreExtra =
-                        { name = "elmcraft/core-extra"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "List.Extra"
+        , Test.test "a module exposed by both a direct dependency and a dependency-of-a-dependency isn't ambiguous (regression: gampleman/elm-visualization depends directly on elmcraft/core-extra, which exposes List.Extra; folkertdev/one-true-path-experiment -- itself only a direct dep -- separately depends on elm-community/list-extra, which *also* exposes a module named List.Extra, but that package isn't reachable/importable from our own source, exactly as with `elm make`)" <| \() ->
+        let
+            coreExtra : Dependency
+            coreExtra =
+                { name = "elmcraft/core-extra"
+                , dependencies = []
+                , modules =
+                    [ { name = "List.Extra"
+                      , comment = ""
+                      , unions = [ { name = "Sentinel", comment = "", args = [], tags = [ ( "Sentinel", [] ) ] } ]
+                      , aliases = []
+                      , values =
+                            [ { name = "last"
                               , comment = ""
-                              , unions = [ { name = "Sentinel", comment = "", args = [], tags = [ ( "Sentinel", [] ) ] } ]
-                              , aliases = []
-                              , values =
-                                    [ { name = "last"
-                                      , comment = ""
-                                      , tipe = Elm.Type.Type "List.Extra.Sentinel" []
-                                      }
-                                    ]
-                              , binops = []
+                              , tipe = Elm.Type.Type "List.Extra.Sentinel" []
                               }
                             ]
-                        }
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    listExtra : Dependency
-                    listExtra =
-                        { name = "elm-community/list-extra"
-                        , dependencies = []
-                        , modules =
-                            [ { name = "List.Extra"
+            listExtra : Dependency
+            listExtra =
+                { name = "elm-community/list-extra"
+                , dependencies = []
+                , modules =
+                    [ { name = "List.Extra"
+                      , comment = ""
+                      , unions = [ { name = "Sentinel", comment = "", args = [], tags = [ ( "Sentinel", [] ) ] } ]
+                      , aliases = []
+                      , values =
+                            [ { name = "last"
                               , comment = ""
-                              , unions = [ { name = "Sentinel", comment = "", args = [], tags = [ ( "Sentinel", [] ) ] } ]
-                              , aliases = []
-                              , values =
-                                    [ { name = "last"
-                                      , comment = ""
-                                      , tipe = Elm.Type.Type "List.Extra.Sentinel" []
-                                      }
-                                    ]
-                              , binops = []
+                              , tipe = Elm.Type.Type "List.Extra.Sentinel" []
                               }
                             ]
-                        }
+                      , binops = []
+                      }
+                    ]
+                }
 
-                    onePathExperiment : Dependency
-                    onePathExperiment =
-                        { name = "folkertdev/one-true-path-experiment"
-                        , dependencies = [ "elm-community/list-extra" ]
-                        , modules = []
-                        }
+            onePathExperiment : Dependency
+            onePathExperiment =
+                { name = "folkertdev/one-true-path-experiment"
+                , dependencies = [ "elm-community/list-extra" ]
+                , modules = []
+                }
 
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 import List.Extra
@@ -1147,13 +1135,12 @@ main = List.Extra.last
                     "main"
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
-        , Test.test "`import Platform.Cmd as Cmd exposing (Cmd)` is implicit" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "`import Platform.Cmd as Cmd exposing (Cmd)` is implicit" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main : Cmd msg
@@ -1163,41 +1150,40 @@ main = Cmd.none
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Platform.Cmd.Cmd a")
-        , Test.test "custom operator" <|
-            \() ->
-                let
-                    pkgCustomOps : Dependency
-                    pkgCustomOps =
-                        { name = "author/custom-ops"
-                        , dependencies = [ "elm/core" ]
-                        , modules =
-                            [ { name = "CustomOps"
+        , Test.test "custom operator" <| \() ->
+        let
+            pkgCustomOps : Dependency
+            pkgCustomOps =
+                { name = "author/custom-ops"
+                , dependencies = [ "elm/core" ]
+                , modules =
+                    [ { name = "CustomOps"
+                      , comment = ""
+                      , unions = []
+                      , aliases = []
+                      , values = []
+                      , binops =
+                            [ { name = "|="
                               , comment = ""
-                              , unions = []
-                              , aliases = []
-                              , values = []
-                              , binops =
-                                    [ { name = "|="
-                                      , comment = ""
-                                      , tipe =
-                                            Elm.Type.Lambda
-                                                (Elm.Type.Type "Basics.Int" [])
-                                                (Elm.Type.Lambda
-                                                    (Elm.Type.Type "Basics.Int" [])
-                                                    (Elm.Type.Type "Basics.Int" [])
-                                                )
-                                      , associativity = Elm.Docs.Left
-                                      , precedence = 5
-                                      }
-                                    ]
+                              , tipe =
+                                    Elm.Type.Lambda
+                                        (Elm.Type.Type "Basics.Int" [])
+                                        (Elm.Type.Lambda
+                                            (Elm.Type.Type "Basics.Int" [])
+                                            (Elm.Type.Type "Basics.Int" [])
+                                        )
+                              , associativity = Elm.Docs.Left
+                              , precedence = 5
                               }
                             ]
-                        }
+                      }
+                    ]
+                }
 
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 import CustomOps exposing ((|=))
@@ -1208,13 +1194,12 @@ main = 1 |= 2
                 getDeclTypeWithDeps [ CoreFixture.core, pkgCustomOps ] modules [ "Main" ] "main"
                     |> Result.map (Ok >> is Int)
                     |> Expect.equal (Ok True)
-        , Test.test "`Basics.Bool` unifies with `True` (qualified primitive)" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "`Basics.Bool` unifies with `True` (qualified primitive)" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (x)
 
 x : Basics.Bool
@@ -1224,13 +1209,12 @@ x = True
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "x"
                     |> Result.map (Ok >> is Bool)
                     |> Expect.equal (Ok True)
-        , Test.test "`x : B.Int` (aliased import) unifies with an Int literal" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "`x : B.Int` (aliased import) unifies with an Int literal" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (x)
 
 import Basics as B
@@ -1242,13 +1226,12 @@ x = 1
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "x"
                     |> Result.map (Ok >> is Int)
                     |> Expect.equal (Ok True)
-        , Test.test "`x : Char.Char` unifies with a Char literal" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "`x : Char.Char` unifies with a Char literal" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (x)
 
 x : Char.Char
@@ -1264,13 +1247,12 @@ x = 'a'
 bindingGroupSuite : Test
 bindingGroupSuite =
     Test.describe "binding groups"
-        [ Test.test "top-level declaration order doesn't matter" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        [ Test.test "top-level declaration order doesn't matter" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main = helper 1
@@ -1291,14 +1273,13 @@ helper x = x
            main = isEven
            """
         -}
-        , Test.test "a top-level var is usable, at its own inferred type, across modules" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.fromList
-                            [ ( [ "Other" ]
-                              , """
+        , Test.test "a top-level var is usable, at its own inferred type, across modules" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.fromList
+                    [ ( [ "Other" ]
+                      , """
 module Other exposing (identity)
 
 identity x = x
@@ -1318,13 +1299,12 @@ main = Other.identity 1
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a project's own custom-type constructor is usable in an expression" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a project's own custom-type constructor is usable in an expression" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 type Box a = Box a
@@ -1334,13 +1314,12 @@ main = Box 1
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Main.Box number")
-        , Test.test "a custom operator declaration is type-checked (infix usage)" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a custom operator declaration is type-checked (infix usage)" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 myAdd a b = a
@@ -1353,13 +1332,12 @@ main = 1 + 2
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a custom operator declaration is type-checked (prefix usage)" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a custom operator declaration is type-checked (prefix usage)" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 myAdd a b = a
@@ -1372,14 +1350,13 @@ main = (+) 1 2
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a custom operator declaration aliasing an imported function is type-checked" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.fromList
-                            [ ( [ "Other" ]
-                              , """
+        , Test.test "a custom operator declaration aliasing an imported function is type-checked" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.fromList
+                    [ ( [ "Other" ]
+                      , """
 module Other exposing (myAdd)
 
 myAdd a b = a
@@ -1401,13 +1378,12 @@ main = 1 + 2
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (Ok >> isNumber)
                     |> Expect.equal (Ok True)
-        , Test.test "a let destructuring can use a let function defined above it" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a let destructuring can use a let function defined above it" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1421,13 +1397,12 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let destructuring can use a let function defined below it" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a let destructuring can use a let function defined below it" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1441,13 +1416,12 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let function can use a name bound by a let destructuring below it" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a let function can use a name bound by a let destructuring below it" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1461,13 +1435,12 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let record destructuring can use a let function defined above it" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a let record destructuring can use a let function defined above it" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1483,13 +1456,12 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a chain of let destructurings resolves in dependency order" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a chain of let destructurings resolves in dependency order" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1504,13 +1476,12 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a case-pattern variable shadows an implicitly imported name" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a case-pattern variable shadows an implicitly imported name" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 type Box a = Box a
@@ -1524,13 +1495,12 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a let binding shadows an implicitly imported name" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a let binding shadows an implicitly imported name" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1543,13 +1513,12 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a lambda argument shadows an implicitly imported name" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a lambda argument shadows an implicitly imported name" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1559,13 +1528,12 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a function argument shadows an implicitly imported name" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a function argument shadows an implicitly imported name" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 useIt identity = identity
@@ -1576,13 +1544,12 @@ main = useIt 'x'
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a local binding shadowing an implicitly imported name keeps the annotated type of its declaration" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "a local binding shadowing an implicitly imported name keeps the annotated type of its declaration" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 type MyResult e a = MyOk a | MyErr e
@@ -1600,14 +1567,13 @@ main =
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Main.MyResult Char Int")
-        , Test.test "a qualifier shared by an alias and a real module resolves a type to whichever declares it" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.fromList
-                            [ ( [ "Parser" ]
-                              , """
+        , Test.test "a qualifier shared by an alias and a real module resolves a type to whichever declares it" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.fromList
+                    [ ( [ "Parser" ]
+                      , """
 module Parser exposing (Problem(..))
 
 type Problem = Oops
@@ -1638,14 +1604,13 @@ main = describe Parser.Oops
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Char")
-        , Test.test "a qualifier shared by an alias and a real module prefers the aliased module when it declares the type" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.fromList
-                            [ ( [ "Parser" ]
-                              , """
+        , Test.test "a qualifier shared by an alias and a real module prefers the aliased module when it declares the type" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.fromList
+                    [ ( [ "Parser" ]
+                      , """
 module Parser exposing (Problem(..))
 
 type Problem = TheWrongOne
@@ -1674,14 +1639,13 @@ main = Parser.TheRightOne
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Elm.Parser.Problem")
-        , Test.test "an aliased qualifier still resolves when no module of the alias's own name is imported" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.fromList
-                            [ ( [ "Elm", "Parser" ]
-                              , """
+        , Test.test "an aliased qualifier still resolves when no module of the alias's own name is imported" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.fromList
+                    [ ( [ "Elm", "Parser" ]
+                      , """
 module Elm.Parser exposing (Problem(..))
 
 type Problem = Oops
@@ -1702,13 +1666,12 @@ main = Parser.Oops
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Elm.Parser.Problem")
-        , Test.test "an `as` destructuring binds both the alias and the inner names" <|
-            \() ->
-                let
-                    modules : Dict ModuleName String
-                    modules =
-                        Dict.singleton [ "Main" ]
-                            """
+        , Test.test "an `as` destructuring binds both the alias and the inner names" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
 module Main exposing (main)
 
 main =
@@ -1739,11 +1702,24 @@ generatedVar n =
 
 runUnify : Dict ( PackageName, FullModuleName, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
-    (State.do (Unify.unifyMany { typeAliases = typeAliases, checks = True, internalChecks = False, moduleName = mainModule, declarationNames = [] } eqs) <|
-        \() ->
-            State.getSubst
+    (State.do
+        (Unify.unifyMany
+            { typeAliases = typeAliases
+            , canSkipChecks = False
+            , moduleName = mainModule
+            , declarationNames = []
+            }
+            eqs
+        )
+     <| \() ->
+     State.getSubst
     )
-        |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = Dict.empty })
+        |> State.run
+            (State.test_initFull
+                { lexicalEnv = Dict.empty
+                , globalEnv = Dict.empty
+                }
+            )
         |> Tuple.first
 
 
@@ -1780,55 +1756,52 @@ unifyAliasSuite =
             runUnify typeAliases
     in
     Test.describe "Unify: type alias expansion"
-        [ Test.test "a Pair Float unifies with (Float, Float)" <|
-            \() ->
-                run
-                    [ ( pairOf TypeI.Float
-                      , TypeI.Tuple2 (generatedVar 0) (generatedVar 1)
-                      )
-                    ]
-                    |> Result.map
-                        (\subst ->
-                            let
-                                ( res, _, _ ) =
-                                    SubstitutionMap.substituteMono
-                                        subst
-                                        (TypeI.Tuple2 (generatedVar 0) (generatedVar 1))
-                            in
-                            res
-                        )
-                    |> Expect.equal (Ok (TypeI.Tuple2 TypeI.Float TypeI.Float))
-        , Test.test "two different uses of the same alias don't leak into each other" <|
-            \() ->
-                run
-                    [ ( pairOf TypeI.Float
-                      , TypeI.Tuple2 (generatedVar 0) (generatedVar 1)
-                      )
-                    , ( pairOf TypeI.Char
-                      , TypeI.Tuple2 (generatedVar 2) (generatedVar 3)
-                      )
-                    ]
-                    |> Result.map
-                        (\subst ->
-                            let
-                                ( res0, _, _ ) =
-                                    SubstitutionMap.substituteMono subst (generatedVar 0)
+        [ Test.test "a Pair Float unifies with (Float, Float)" <| \() ->
+        run
+            [ ( pairOf TypeI.Float
+              , TypeI.Tuple2 (generatedVar 0) (generatedVar 1)
+              )
+            ]
+            |> Result.map
+                (\subst ->
+                    let
+                        ( res, _, _ ) =
+                            SubstitutionMap.substituteMono
+                                subst
+                                (TypeI.Tuple2 (generatedVar 0) (generatedVar 1))
+                    in
+                    res
+                )
+            |> Expect.equal (Ok (TypeI.Tuple2 TypeI.Float TypeI.Float))
+        , Test.test "two different uses of the same alias don't leak into each other" <| \() ->
+        run
+            [ ( pairOf TypeI.Float
+              , TypeI.Tuple2 (generatedVar 0) (generatedVar 1)
+              )
+            , ( pairOf TypeI.Char
+              , TypeI.Tuple2 (generatedVar 2) (generatedVar 3)
+              )
+            ]
+            |> Result.map
+                (\subst ->
+                    let
+                        ( res0, _, _ ) =
+                            SubstitutionMap.substituteMono subst (generatedVar 0)
 
-                                ( res2, _, _ ) =
-                                    SubstitutionMap.substituteMono subst (generatedVar 2)
-                            in
-                            ( res0, res2 )
-                        )
-                    |> Expect.equal (Ok ( TypeI.Float, TypeI.Char ))
-        , Test.test "a Pair Float does not unify with (Float, Char)" <|
-            \() ->
-                run
-                    [ ( pairOf TypeI.Float
-                      , TypeI.Tuple2 TypeI.Float TypeI.Char
-                      )
-                    ]
-                    |> Result.map (always ())
-                    |> Expect.err
+                        ( res2, _, _ ) =
+                            SubstitutionMap.substituteMono subst (generatedVar 2)
+                    in
+                    ( res0, res2 )
+                )
+            |> Expect.equal (Ok ( TypeI.Float, TypeI.Char ))
+        , Test.test "a Pair Float does not unify with (Float, Char)" <| \() ->
+        run
+            [ ( pairOf TypeI.Float
+              , TypeI.Tuple2 TypeI.Float TypeI.Char
+              )
+            ]
+            |> Result.map (always ())
+            |> Expect.err
         ]
 
 
@@ -1860,15 +1833,14 @@ comparableAliasedTupleRegression =
         comparableVar =
             TypeI.TypeVar ( TypeVar.Generated 0, TypeVar.Comparable )
     in
-    Test.test "a Tuple2 with an aliased (List String) element unifies with a `comparable` var" <|
-        \() ->
-            runUnify typeAliases
-                [ ( comparableVar
-                  , TypeI.Tuple2 moduleNameType TypeI.String
-                  )
-                ]
-                |> Result.map (always ())
-                |> Expect.equal (Ok ())
+    Test.test "a Tuple2 with an aliased (List String) element unifies with a `comparable` var" <| \() ->
+    runUnify typeAliases
+        [ ( comparableVar
+          , TypeI.Tuple2 moduleNameType TypeI.String
+          )
+        ]
+        |> Result.map (always ())
+        |> Expect.equal (Ok ())
 
 
 {-| `optimizations-plan.md` Step 1: path compression must not jump _over_ a
@@ -1899,19 +1871,17 @@ substitutionMapCompressionSuite =
                 ]
     in
     Test.describe "SubstitutionMap: path compression stops at quantified vars"
-        [ Test.test "substituting outside any scheme resolves the whole chain" <|
-            \() ->
-                let
-                    ( res, _, _ ) =
-                        SubstitutionMap.substituteMono subst (TypeI.TypeVar a)
-                in
-                res
-                    |> Expect.equal TypeI.Int
-        , Test.test "substituting a scheme quantified over `b` stops the chain at `b`" <|
-            \() ->
-                SubstitutionMap.substitute subst (TypeI.Forall [ b ] (TypeI.TypeVar a))
-                    |> Tuple.first
-                    |> Expect.equal (TypeI.Forall [ b ] (TypeI.TypeVar b))
+        [ Test.test "substituting outside any scheme resolves the whole chain" <| \() ->
+        let
+            ( res, _, _ ) =
+                SubstitutionMap.substituteMono subst (TypeI.TypeVar a)
+        in
+        res
+            |> Expect.equal TypeI.Int
+        , Test.test "substituting a scheme quantified over `b` stops the chain at `b`" <| \() ->
+        SubstitutionMap.substitute subst (TypeI.Forall [ b ] (TypeI.TypeVar a))
+            |> Tuple.first
+            |> Expect.equal (TypeI.Forall [ b ] (TypeI.TypeVar b))
         ]
 
 
@@ -1943,190 +1913,181 @@ linkToRankSuite =
             SubstitutionMap.unionFindRankOf subst (VarSet.varKey var)
     in
     Test.describe "SubstitutionMap: linkTo rank handling"
-        [ Test.test "linkTo resolves child to parent" <|
-            \() ->
+        [ Test.test "linkTo resolves child to parent" <| \() ->
+        SubstitutionMap.empty
+            |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
+            |> (\subst -> resolve subst childVar)
+            |> Expect.equal (TypeI.TypeVar parentVar)
+        , Test.test "linkTo leaves union-find ranks at 0 (intentionally skipped)" <| \() ->
+        let
+            subst : SubstitutionMap.SubstitutionMap
+            subst =
                 SubstitutionMap.empty
                     |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
-                    |> (\subst -> resolve subst childVar)
-                    |> Expect.equal (TypeI.TypeVar parentVar)
-        , Test.test "linkTo leaves union-find ranks at 0 (intentionally skipped)" <|
-            \() ->
-                let
-                    subst : SubstitutionMap.SubstitutionMap
-                    subst =
-                        SubstitutionMap.empty
-                            |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
-                in
-                ( unionFindRankOfVar subst childVar
-                , unionFindRankOfVar subst parentVar
+        in
+        ( unionFindRankOfVar subst childVar
+        , unionFindRankOfVar subst parentVar
+        )
+            |> Expect.equal ( 0, 0 )
+        , Test.test "linkTo lowers parent let-rank to min when child is outer" <| \() ->
+        let
+            childLetRank : Int
+            childLetRank =
+                0
+
+            parentLetRank : Int
+            parentLetRank =
+                5
+
+            subst : SubstitutionMap.SubstitutionMap
+            subst =
+                SubstitutionMap.empty
+                    |> SubstitutionMap.stampIdAtLetRank 10 childLetRank
+                    |> SubstitutionMap.stampIdAtLetRank 11 parentLetRank
+                    |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
+        in
+        SubstitutionMap.letRankOf parentVar subst
+            |> Expect.equal (min childLetRank parentLetRank)
+        , Test.test "linkTo lowers parent let-rank to min when parent is outer" <| \() ->
+        let
+            childLetRank : Int
+            childLetRank =
+                7
+
+            parentLetRank : Int
+            parentLetRank =
+                2
+
+            subst : SubstitutionMap.SubstitutionMap
+            subst =
+                SubstitutionMap.empty
+                    |> SubstitutionMap.stampIdAtLetRank 10 childLetRank
+                    |> SubstitutionMap.stampIdAtLetRank 11 parentLetRank
+                    |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
+        in
+        SubstitutionMap.letRankOf parentVar subst
+            |> Expect.equal (min childLetRank parentLetRank)
+        , Test.test "linkTo chain resolves to ultimate parent despite union-find ranks staying 0" <| \() ->
+        let
+            middleVar : TypeVar
+            middleVar =
+                ( TypeVar.Generated 11, TypeVar.Normal )
+
+            outerVar : TypeVar
+            outerVar =
+                ( TypeVar.Generated 12, TypeVar.Normal )
+
+            subst : SubstitutionMap.SubstitutionMap
+            subst =
+                SubstitutionMap.empty
+                    |> SubstitutionMap.linkTo { child = childVar, parent = middleVar }
+                    |> SubstitutionMap.linkTo { child = middleVar, parent = outerVar }
+        in
+        ( resolve subst childVar
+        , ( unionFindRankOfVar subst childVar
+          , unionFindRankOfVar subst middleVar
+          , unionFindRankOfVar subst outerVar
+          )
+        )
+            |> Expect.equal
+                ( TypeI.TypeVar outerVar
+                , ( 0, 0, 0 )
                 )
-                    |> Expect.equal ( 0, 0 )
-        , Test.test "linkTo lowers parent let-rank to min when child is outer" <|
-            \() ->
-                let
-                    childLetRank : Int
-                    childLetRank =
-                        0
+        , Test.test "union bumps union-find rank on equal merge and merges let-ranks to min" <| \() ->
+        let
+            aVar : TypeVar
+            aVar =
+                ( TypeVar.Generated 20, TypeVar.Normal )
 
-                    parentLetRank : Int
-                    parentLetRank =
-                        5
+            bVar : TypeVar
+            bVar =
+                ( TypeVar.Generated 21, TypeVar.Normal )
 
-                    subst : SubstitutionMap.SubstitutionMap
-                    subst =
-                        SubstitutionMap.empty
-                            |> SubstitutionMap.stampIdAtLetRank 10 childLetRank
-                            |> SubstitutionMap.stampIdAtLetRank 11 parentLetRank
-                            |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
-                in
-                SubstitutionMap.letRankOf parentVar subst
-                    |> Expect.equal (min childLetRank parentLetRank)
-        , Test.test "linkTo lowers parent let-rank to min when parent is outer" <|
-            \() ->
-                let
-                    childLetRank : Int
-                    childLetRank =
-                        7
+            subst : SubstitutionMap.SubstitutionMap
+            subst =
+                SubstitutionMap.empty
+                    |> SubstitutionMap.stampIdAtLetRank 20 3
+                    |> SubstitutionMap.stampIdAtLetRank 21 7
+                    |> SubstitutionMap.union aVar bVar
+        in
+        -- Equal union-find ranks: `union a b` links b -> a and bumps a to 1.
+        ( resolve subst bVar
+        , SubstitutionMap.letRankOf aVar subst
+        , unionFindRankOfVar subst aVar
+        )
+            |> Expect.equal ( TypeI.TypeVar aVar, 3, 1 )
+        , Test.test "union lets taller union-find tree win (contrast: linkTo direction is forced)" <| \() ->
+        let
+            aVar : TypeVar
+            aVar =
+                ( TypeVar.Generated 20, TypeVar.Normal )
 
-                    parentLetRank : Int
-                    parentLetRank =
-                        2
+            bVar : TypeVar
+            bVar =
+                ( TypeVar.Generated 21, TypeVar.Normal )
 
-                    subst : SubstitutionMap.SubstitutionMap
-                    subst =
-                        SubstitutionMap.empty
-                            |> SubstitutionMap.stampIdAtLetRank 10 childLetRank
-                            |> SubstitutionMap.stampIdAtLetRank 11 parentLetRank
-                            |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
-                in
-                SubstitutionMap.letRankOf parentVar subst
-                    |> Expect.equal (min childLetRank parentLetRank)
-        , Test.test "linkTo chain resolves to ultimate parent despite union-find ranks staying 0" <|
-            \() ->
-                let
-                    middleVar : TypeVar
-                    middleVar =
-                        ( TypeVar.Generated 11, TypeVar.Normal )
+            cVar : TypeVar
+            cVar =
+                ( TypeVar.Generated 22, TypeVar.Normal )
 
-                    outerVar : TypeVar
-                    outerVar =
-                        ( TypeVar.Generated 12, TypeVar.Normal )
+            subst : SubstitutionMap.SubstitutionMap
+            subst =
+                SubstitutionMap.empty
+                    |> SubstitutionMap.union aVar bVar
+                    |> SubstitutionMap.union aVar cVar
+        in
+        -- After the first union a has union-find rank 1, c has 0,
+        -- so the second union must attach c under a.
+        resolve subst cVar
+            |> Expect.equal (TypeI.TypeVar aVar)
+        , Test.test "unify Normal with Number keeps the more constrained parent" <| \() ->
+        let
+            normalMono : MonoType
+            normalMono =
+                TypeI.TypeVar ( TypeVar.Generated 30, TypeVar.Normal )
 
-                    subst : SubstitutionMap.SubstitutionMap
-                    subst =
-                        SubstitutionMap.empty
-                            |> SubstitutionMap.linkTo { child = childVar, parent = middleVar }
-                            |> SubstitutionMap.linkTo { child = middleVar, parent = outerVar }
-                in
-                ( resolve subst childVar
-                , ( unionFindRankOfVar subst childVar
-                  , unionFindRankOfVar subst middleVar
-                  , unionFindRankOfVar subst outerVar
-                  )
+            numberMono : MonoType
+            numberMono =
+                TypeI.TypeVar ( TypeVar.Generated 31, TypeVar.Number )
+        in
+        runUnify Dict.empty [ ( normalMono, numberMono ) ]
+            |> Result.map
+                (\subst ->
+                    ( resolve subst ( TypeVar.Generated 30, TypeVar.Normal )
+                    , resolve subst ( TypeVar.Generated 31, TypeVar.Number )
+                    )
                 )
-                    |> Expect.equal
-                        ( TypeI.TypeVar outerVar
-                        , ( 0, 0, 0 )
-                        )
-        , Test.test "union bumps union-find rank on equal merge and merges let-ranks to min" <|
-            \() ->
-                let
-                    aVar : TypeVar
-                    aVar =
-                        ( TypeVar.Generated 20, TypeVar.Normal )
+            |> Expect.equal (Ok ( numberMono, numberMono ))
+        , Test.test "unify Comparable with Appendable resolves both to one fresh CompAppend var" <| \() ->
+        let
+            comparableMono : MonoType
+            comparableMono =
+                TypeI.TypeVar ( TypeVar.Generated 30, TypeVar.Comparable )
 
-                    bVar : TypeVar
-                    bVar =
-                        ( TypeVar.Generated 21, TypeVar.Normal )
+            appendableMono : MonoType
+            appendableMono =
+                TypeI.TypeVar ( TypeVar.Generated 31, TypeVar.Appendable )
+        in
+        runUnify Dict.empty [ ( comparableMono, appendableMono ) ]
+            |> Result.map
+                (\subst ->
+                    let
+                        resA : MonoType
+                        resA =
+                            resolve subst ( TypeVar.Generated 30, TypeVar.Comparable )
 
-                    subst : SubstitutionMap.SubstitutionMap
-                    subst =
-                        SubstitutionMap.empty
-                            |> SubstitutionMap.stampIdAtLetRank 20 3
-                            |> SubstitutionMap.stampIdAtLetRank 21 7
-                            |> SubstitutionMap.union aVar bVar
-                in
-                -- Equal union-find ranks: `union a b` links b -> a and bumps a to 1.
-                ( resolve subst bVar
-                , SubstitutionMap.letRankOf aVar subst
-                , unionFindRankOfVar subst aVar
+                        resB : MonoType
+                        resB =
+                            resolve subst ( TypeVar.Generated 31, TypeVar.Appendable )
+                    in
+                    case ( resA, resB ) of
+                        ( TypeI.TypeVar ( TypeVar.Generated freshIdA, superA ), TypeI.TypeVar ( TypeVar.Generated freshIdB, superB ) ) ->
+                            ( freshIdA == freshIdB, superA, superB )
+
+                        _ ->
+                            ( False, TypeVar.Normal, TypeVar.Normal )
                 )
-                    |> Expect.equal ( TypeI.TypeVar aVar, 3, 1 )
-        , Test.test "union lets taller union-find tree win (contrast: linkTo direction is forced)" <|
-            \() ->
-                let
-                    aVar : TypeVar
-                    aVar =
-                        ( TypeVar.Generated 20, TypeVar.Normal )
-
-                    bVar : TypeVar
-                    bVar =
-                        ( TypeVar.Generated 21, TypeVar.Normal )
-
-                    cVar : TypeVar
-                    cVar =
-                        ( TypeVar.Generated 22, TypeVar.Normal )
-
-                    subst : SubstitutionMap.SubstitutionMap
-                    subst =
-                        SubstitutionMap.empty
-                            |> SubstitutionMap.union aVar bVar
-                            |> SubstitutionMap.union aVar cVar
-                in
-                -- After the first union a has union-find rank 1, c has 0,
-                -- so the second union must attach c under a.
-                resolve subst cVar
-                    |> Expect.equal (TypeI.TypeVar aVar)
-        , Test.test "unify Normal with Number keeps the more constrained parent" <|
-            \() ->
-                let
-                    normalMono : MonoType
-                    normalMono =
-                        TypeI.TypeVar ( TypeVar.Generated 30, TypeVar.Normal )
-
-                    numberMono : MonoType
-                    numberMono =
-                        TypeI.TypeVar ( TypeVar.Generated 31, TypeVar.Number )
-                in
-                runUnify Dict.empty [ ( normalMono, numberMono ) ]
-                    |> Result.map
-                        (\subst ->
-                            ( resolve subst ( TypeVar.Generated 30, TypeVar.Normal )
-                            , resolve subst ( TypeVar.Generated 31, TypeVar.Number )
-                            )
-                        )
-                    |> Expect.equal (Ok ( numberMono, numberMono ))
-        , Test.test "unify Comparable with Appendable resolves both to one fresh CompAppend var" <|
-            \() ->
-                let
-                    comparableMono : MonoType
-                    comparableMono =
-                        TypeI.TypeVar ( TypeVar.Generated 30, TypeVar.Comparable )
-
-                    appendableMono : MonoType
-                    appendableMono =
-                        TypeI.TypeVar ( TypeVar.Generated 31, TypeVar.Appendable )
-                in
-                runUnify Dict.empty [ ( comparableMono, appendableMono ) ]
-                    |> Result.map
-                        (\subst ->
-                            let
-                                resA : MonoType
-                                resA =
-                                    resolve subst ( TypeVar.Generated 30, TypeVar.Comparable )
-
-                                resB : MonoType
-                                resB =
-                                    resolve subst ( TypeVar.Generated 31, TypeVar.Appendable )
-                            in
-                            case ( resA, resB ) of
-                                ( TypeI.TypeVar ( TypeVar.Generated freshIdA, superA ), TypeI.TypeVar ( TypeVar.Generated freshIdB, superB ) ) ->
-                                    ( freshIdA == freshIdB, superA, superB )
-
-                                _ ->
-                                    ( False, TypeVar.Normal, TypeVar.Normal )
-                        )
-                    |> Expect.equal (Ok ( True, TypeVar.CompAppend, TypeVar.CompAppend ))
+            |> Expect.equal (Ok ( True, TypeVar.CompAppend, TypeVar.CompAppend ))
         ]
 
 
@@ -2138,26 +2099,25 @@ We want to get #5 -> #0 and #0 -> #1 and end up with (#0, #1).
 -}
 instantiateIdCollisionRegression : Test
 instantiateIdCollisionRegression =
-    Test.test "instantiate doesn't chain when a fresh id collides with another bound id" <|
-        \() ->
-            -- Counter starts at 0, the fresh ids will be #0 and #1
-            -- Collision with #0 being already bound.
-            State.instantiate
-                (TypeI.Forall
-                    [ ( TypeVar.Generated 5, TypeVar.Normal )
-                    , ( TypeVar.Generated 0, TypeVar.Normal )
-                    ]
-                    (TypeI.Tuple2 (generatedVar 5) (generatedVar 0))
+    Test.test "instantiate doesn't chain when a fresh id collides with another bound id" <| \() ->
+    -- Counter starts at 0, the fresh ids will be #0 and #1
+    -- Collision with #0 being already bound.
+    State.instantiate
+        (TypeI.Forall
+            [ ( TypeVar.Generated 5, TypeVar.Normal )
+            , ( TypeVar.Generated 0, TypeVar.Normal )
+            ]
+            (TypeI.Tuple2 (generatedVar 5) (generatedVar 0))
+        )
+        |> State.run State.empty
+        |> Tuple.first
+        |> Expect.equal
+            (Ok
+                (TypeI.Tuple2
+                    (generatedVar 0)
+                    (generatedVar 1)
                 )
-                |> State.run State.empty
-                |> Tuple.first
-                |> Expect.equal
-                    (Ok
-                        (TypeI.Tuple2
-                            (generatedVar 0)
-                            (generatedVar 1)
-                        )
-                    )
+            )
 
 
 {-|
@@ -2179,21 +2139,20 @@ composeCycleRegression =
         b =
             TypeI.TypeVar ( TypeVar.Generated 1, TypeVar.Normal )
     in
-    Test.test "unifying two vars in both directions works" <|
-        \() ->
-            runUnify Dict.empty [ ( a, b ), ( b, a ) ]
-                |> Result.map
-                    (\subst ->
-                        let
-                            ( resA, _, _ ) =
-                                SubstitutionMap.substituteMono subst a
+    Test.test "unifying two vars in both directions works" <| \() ->
+    runUnify Dict.empty [ ( a, b ), ( b, a ) ]
+        |> Result.map
+            (\subst ->
+                let
+                    ( resA, _, _ ) =
+                        SubstitutionMap.substituteMono subst a
 
-                            ( resB, _, _ ) =
-                                SubstitutionMap.substituteMono subst b
-                        in
-                        ( resA, resB )
-                    )
-                |> Expect.equal (Ok ( a, a ))
+                    ( resB, _, _ ) =
+                        SubstitutionMap.substituteMono subst b
+                in
+                ( resA, resB )
+            )
+        |> Expect.equal (Ok ( a, a ))
 
 
 importedTypeInferredProperly : Test
@@ -2237,19 +2196,18 @@ importedTypeInferredProperly =
                     Set.fromList []
                 """
     in
-    Test.test "import Set exposing (Set) then using Set, gets inferred correctly" <|
-        \() ->
-            getDeclTypeWithDeps [ core ] modules [ "Main" ] "allowedNames"
-                |> Expect.equal
-                    (Ok
-                        (Named
-                            { package = "elm/core"
-                            , moduleName = [ "Set" ]
-                            , name = "Set"
-                            , arguments = [ String ]
-                            }
-                        )
-                    )
+    Test.test "import Set exposing (Set) then using Set, gets inferred correctly" <| \() ->
+    getDeclTypeWithDeps [ core ] modules [ "Main" ] "allowedNames"
+        |> Expect.equal
+            (Ok
+                (Named
+                    { package = "elm/core"
+                    , moduleName = [ "Set" ]
+                    , name = "Set"
+                    , arguments = [ String ]
+                    }
+                )
+            )
 
 
 infiniteLoopRegression : Test
@@ -2279,11 +2237,10 @@ infiniteLoopRegression =
                     List.map updatePosition windows
                 """
     in
-    Test.test "infinite loop for extensible records - regression test" <|
-        \() ->
-            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "update"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "List Main.Window -> List Main.Window")
+    Test.test "infinite loop for extensible records - regression test" <| \() ->
+    getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "update"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "List Main.Window -> List Main.Window")
 
 
 aliasParamNameCollisionRegression : Test
@@ -2303,280 +2260,272 @@ aliasParamNameCollisionRegression =
                     f x
                 """
     in
-    Test.test "type alias whose own generic param name collides with the caller's generic name (regression test)" <|
-        \() ->
-            getDeclType modules [ "Main" ] "apply"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "(Main.Wrap a) -> a -> a")
+    Test.test "type alias whose own generic param name collides with the caller's generic name (regression test)" <| \() ->
+    getDeclType modules [ "Main" ] "apply"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "(Main.Wrap a) -> a -> a")
 
 
 recordConstructorFunctionRegression : Test
 recordConstructorFunctionRegression =
-    Test.test "a record type alias's own module can call it as a constructor function" <|
-        \() ->
-            let
-                modules : Dict ModuleName String
-                modules =
-                    Dict.singleton [ "Main" ] <|
-                        String.ExtraExtra.multilineInput """
-                    module Main exposing (main)
+    Test.test "a record type alias's own module can call it as a constructor function" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.singleton [ "Main" ] <|
+                String.ExtraExtra.multilineInput """
+            module Main exposing (main)
 
-                    type alias Foo =
-                        { a : Int
-                        , b : String
-                        }
+            type alias Foo =
+                { a : Int
+                , b : String
+                }
 
-                    main : Foo
-                    main =
-                        Foo 1 "x"
-                    """
-            in
-            getDeclType modules [ "Main" ] "main"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "{a : Int, b : String}")
+            main : Foo
+            main =
+                Foo 1 "x"
+            """
+    in
+    getDeclType modules [ "Main" ] "main"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "{a : Int, b : String}")
 
 
 unionConstructorReexposeRegression : Test
 unionConstructorReexposeRegression =
-    Test.test "a union constructor re-exported via `exposing (Foo(..))` resolves unqualified in an importing module" <|
-        \() ->
-            let
-                modules : Dict ModuleName String
-                modules =
-                    Dict.fromList
-                        [ ( [ "A" ]
-                          , String.ExtraExtra.multilineInput """
-                        module A exposing (Foo(..))
+    Test.test "a union constructor re-exported via `exposing (Foo(..))` resolves unqualified in an importing module" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.fromList
+                [ ( [ "A" ]
+                  , String.ExtraExtra.multilineInput """
+                module A exposing (Foo(..))
 
-                        type Foo
-                            = Foo Int
-                        """
-                          )
-                        , ( [ "Main" ]
-                          , String.ExtraExtra.multilineInput """
-                        module Main exposing (main)
+                type Foo
+                    = Foo Int
+                """
+                  )
+                , ( [ "Main" ]
+                  , String.ExtraExtra.multilineInput """
+                module Main exposing (main)
 
-                        import A exposing (Foo(..))
+                import A exposing (Foo(..))
 
-                        main : Foo
-                        main =
-                            Foo 1
-                        """
-                          )
-                        ]
-            in
-            getDeclType modules [ "Main" ] "main"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "A.Foo")
+                main : Foo
+                main =
+                    Foo 1
+                """
+                  )
+                ]
+    in
+    getDeclType modules [ "Main" ] "main"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "A.Foo")
 
 
 recordConstructorReexposeRegression : Test
 recordConstructorReexposeRegression =
-    Test.test "a record type alias's implicit constructor re-exported via `exposing (Bar)` resolves unqualified in an importing module" <|
-        \() ->
-            let
-                modules : Dict ModuleName String
-                modules =
-                    Dict.fromList
-                        [ ( [ "A" ]
-                          , String.ExtraExtra.multilineInput """
-                        module A exposing (Bar)
+    Test.test "a record type alias's implicit constructor re-exported via `exposing (Bar)` resolves unqualified in an importing module" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.fromList
+                [ ( [ "A" ]
+                  , String.ExtraExtra.multilineInput """
+                module A exposing (Bar)
 
-                        type alias Bar =
-                            { x : Int }
-                        """
-                          )
-                        , ( [ "Main" ]
-                          , String.ExtraExtra.multilineInput """
-                        module Main exposing (main)
+                type alias Bar =
+                    { x : Int }
+                """
+                  )
+                , ( [ "Main" ]
+                  , String.ExtraExtra.multilineInput """
+                module Main exposing (main)
 
-                        import A exposing (Bar)
+                import A exposing (Bar)
 
-                        main : Bar
-                        main =
-                            Bar 1
-                        """
-                          )
-                        ]
-            in
-            getDeclType modules [ "Main" ] "main"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "{x : Int}")
+                main : Bar
+                main =
+                    Bar 1
+                """
+                  )
+                ]
+    in
+    getDeclType modules [ "Main" ] "main"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "{x : Int}")
 
 
 unexposedUnionConstructorIsntFound : Test
 unexposedUnionConstructorIsntFound =
-    Test.test "union type exposed without `(..)` does not let an importing module use its constructor unqualified" <|
-        \() ->
-            let
-                modules : Dict ModuleName String
-                modules =
-                    Dict.fromList
-                        [ ( [ "A" ]
-                          , String.ExtraExtra.multilineInput """
-                        module A exposing (Foo)
+    Test.test "union type exposed without `(..)` does not let an importing module use its constructor unqualified" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.fromList
+                [ ( [ "A" ]
+                  , String.ExtraExtra.multilineInput """
+                module A exposing (Foo)
 
-                        type Foo
-                            = Foo Int
-                        """
-                          )
-                        , ( [ "Main" ]
-                          , String.ExtraExtra.multilineInput """
-                        module Main exposing (main)
+                type Foo
+                    = Foo Int
+                """
+                  )
+                , ( [ "Main" ]
+                  , String.ExtraExtra.multilineInput """
+                module Main exposing (main)
 
-                        import A exposing (Foo)
+                import A exposing (Foo)
 
-                        main =
-                            Foo 1
-                        """
-                          )
-                        ]
-            in
-            getDeclType modules [ "Main" ] "main"
-                |> Result.map Type.toString
-                |> Expect.equal
-                    (Err
-                        (CouldntInfer
-                            { moduleName = [ "Main" ]
-                            , declarationNames = []
-                            , details =
-                                VarNotFound
-                                    { usedIn = [ "Main" ]
-                                    , varName = "Foo"
-                                    }
+                main =
+                    Foo 1
+                """
+                  )
+                ]
+    in
+    getDeclType modules [ "Main" ] "main"
+        |> Result.map Type.toString
+        |> Expect.equal
+            (Err
+                (CouldntInfer
+                    { moduleName = [ "Main" ]
+                    , declarationNames = []
+                    , details =
+                        VarNotFound
+                            { usedIn = [ "Main" ]
+                            , varName = "Foo"
                             }
-                        )
-                    )
+                    }
+                )
+            )
 
 
 duplicateImportAliasRegression : Test
 duplicateImportAliasRegression =
-    Test.test "two different modules imported under the same alias resolve a qualified type and constructor to whichever one actually declares it (regression test)" <|
-        \() ->
-            let
-                modules : Dict ModuleName String
-                modules =
-                    Dict.fromList
-                        [ ( [ "A" ]
-                          , String.ExtraExtra.multilineInput """
-                        module A exposing (Placeholder)
+    Test.test "two different modules imported under the same alias resolve a qualified type and constructor to whichever one actually declares it (regression test)" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.fromList
+                [ ( [ "A" ]
+                  , String.ExtraExtra.multilineInput """
+                module A exposing (Placeholder)
 
-                        type alias Placeholder =
-                            Int
-                        """
-                          )
-                        , ( [ "B" ]
-                          , String.ExtraExtra.multilineInput """
-                        module B exposing (Bar(..), Baz)
+                type alias Placeholder =
+                    Int
+                """
+                  )
+                , ( [ "B" ]
+                  , String.ExtraExtra.multilineInput """
+                module B exposing (Bar(..), Baz)
 
-                        type alias Baz =
-                            { x : Int }
+                type alias Baz =
+                    { x : Int }
 
-                        type Bar
-                            = Only
-                        """
-                          )
-                        , ( [ "Main" ]
-                          , String.ExtraExtra.multilineInput """
-                        module Main exposing (value, useBaz)
+                type Bar
+                    = Only
+                """
+                  )
+                , ( [ "Main" ]
+                  , String.ExtraExtra.multilineInput """
+                module Main exposing (value, useBaz)
 
-                        import A as M
-                        import B as M
+                import A as M
+                import B as M
 
-                        useBaz : M.Baz -> Int
-                        useBaz r =
-                            r.x
+                useBaz : M.Baz -> Int
+                useBaz r =
+                    r.x
 
-                        value : M.Bar
-                        value =
-                            M.Only
-                        """
-                          )
-                        ]
-            in
-            Expect.all
-                [ \() ->
-                    getDeclType modules [ "Main" ] "useBaz"
-                        |> Result.map Type.toString
-                        |> Expect.equal (Ok "B.Baz -> Int")
-                , \() ->
-                    getDeclType modules [ "Main" ] "value"
-                        |> Result.map Type.toString
-                        |> Expect.equal (Ok "B.Bar")
+                value : M.Bar
+                value =
+                    M.Only
+                """
+                  )
                 ]
-                ()
+    in
+    Expect.all
+        [ \() ->
+            getDeclType modules [ "Main" ] "useBaz"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "B.Baz -> Int")
+        , \() ->
+            getDeclType modules [ "Main" ] "value"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "B.Bar")
+        ]
+        ()
 
 
 importWithSpecificExposes : Test
 importWithSpecificExposes =
-    Test.test "a lambda parameter isn't confused with an unrelated value from a dependency imported only for its type" <|
-        \() ->
-            let
-                decoderModule : Elm.Docs.Module
-                decoderModule =
-                    { name = "Json.Decode"
-                    , comment = ""
-                    , unions = [ { name = "Decoder", comment = "", args = [ "a" ], tags = [] } ]
-                    , aliases = []
-                    , values =
-                        [ { name = "value"
-                          , comment = ""
-                          , tipe = Elm.Type.Type "Json.Decode.Decoder" [ Elm.Type.Type "Basics.Int" [] ]
-                          }
-                        ]
-                    , binops = []
-                    }
+    Test.test "a lambda parameter isn't confused with an unrelated value from a dependency imported only for its type" <| \() ->
+    let
+        decoderModule : Elm.Docs.Module
+        decoderModule =
+            { name = "Json.Decode"
+            , comment = ""
+            , unions = [ { name = "Decoder", comment = "", args = [ "a" ], tags = [] } ]
+            , aliases = []
+            , values =
+                [ { name = "value"
+                  , comment = ""
+                  , tipe = Elm.Type.Type "Json.Decode.Decoder" [ Elm.Type.Type "Basics.Int" [] ]
+                  }
+                ]
+            , binops = []
+            }
 
-                pkg : Dependency
-                pkg =
-                    { name = "elm/json"
-                    , dependencies = []
-                    , modules = [ decoderModule ]
-                    }
+        pkg : Dependency
+        pkg =
+            { name = "elm/json"
+            , dependencies = []
+            , modules = [ decoderModule ]
+            }
 
-                modules : Dict ModuleName String
-                modules =
-                    Dict.singleton [ "Main" ] <|
-                        String.ExtraExtra.multilineInput """
-                    module Main exposing (attributeToString)
+        modules : Dict ModuleName String
+        modules =
+            Dict.singleton [ "Main" ] <|
+                String.ExtraExtra.multilineInput """
+            module Main exposing (attributeToString)
 
-                    import Json.Decode exposing (Decoder)
+            import Json.Decode exposing (Decoder)
 
-                    attributeToString : ( String, String ) -> String
-                    attributeToString ( name, value ) =
-                        value
-                    """
-            in
-            getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "( String, String ) -> String")
+            attributeToString : ( String, String ) -> String
+            attributeToString ( name, value ) =
+                value
+            """
+    in
+    getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "( String, String ) -> String")
 
 
 extensibleRecordRegression : Test
 extensibleRecordRegression =
-    Test.test "extensible record nesting" <|
-        \() ->
-            let
-                modules : Dict ModuleName String
-                modules =
-                    Dict.singleton [ "Main" ] <|
-                        String.ExtraExtra.multilineInput """
-                        module Main exposing ( Entity, applyForce )
+    Test.test "extensible record nesting" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.singleton [ "Main" ] <|
+                String.ExtraExtra.multilineInput """
+                module Main exposing ( Entity, applyForce )
 
-                        import Dict exposing (Dict)
+                import Dict exposing (Dict)
 
-                        type alias Entity comparable a =
-                            { a
-                                | x : Float
-                                , y : Float
-                                , id : comparable
-                            }
+                type alias Entity comparable a =
+                    { a
+                        | x : Float
+                        , y : Float
+                        , id : comparable
+                    }
 
-                        applyForce : Dict comparable (Entity comparable a) -> Dict comparable (Entity comparable a)
-                        applyForce entities =
-                            Dict.map (\\_ ent -> { ent | x = ent.x, y = ent.y }) entities
-                        """
-            in
-            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "applyForce"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "(Dict.Dict comparable (Main.Entity comparable a)) -> Dict.Dict comparable (Main.Entity comparable a)")
+                applyForce : Dict comparable (Entity comparable a) -> Dict comparable (Entity comparable a)
+                applyForce entities =
+                    Dict.map (\\_ ent -> { ent | x = ent.x, y = ent.y }) entities
+                """
+    in
+    getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "applyForce"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "(Dict.Dict comparable (Main.Entity comparable a)) -> Dict.Dict comparable (Main.Entity comparable a)")

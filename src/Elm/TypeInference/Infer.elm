@@ -24,14 +24,13 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.Signature exposing (Signature)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
-import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.State as State exposing (StateM)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.ExternalTypes as ExternalTypes
 import Elm.TypeInference.Type.Internal as TypeI
     exposing
@@ -54,7 +53,7 @@ type alias Ctx =
     , typeAliases : Dict ( PackageName, FullModuleName, VarName ) TypeAlias
     , index : ModuleLookup.Index
     , -- see `Elm.TypeInference.inferCorrectCode` vs `inferAndCheck`
-      checks : Bool
+      canSkipChecks : Bool
     }
 
 
@@ -63,8 +62,7 @@ type alias Ctx =
 unifyConfig : Ctx -> Unify.UnifyConfig
 unifyConfig ctx =
     { typeAliases = ctx.typeAliases
-    , checks = ctx.checks
-    , internalChecks = not ctx.checks
+    , canSkipChecks = ctx.canSkipChecks
     , moduleName = ctx.thisModuleName
     , declarationNames = []
     }
@@ -91,7 +89,7 @@ type alias Inferred =
     ( Id, List TypeEquation )
 
 
-inferMany : (a -> TIState Inferred) -> List a -> TIState ( List Id, List TypeEquation )
+inferMany : (a -> StateM Inferred) -> List a -> StateM ( List Id, List TypeEquation )
 inferMany f items =
     State.traverse f items
         |> State.map
@@ -117,7 +115,7 @@ functionType argIds resultId =
 
 {-| Resolves a value or operator symbol to its type.
 -}
-lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> TIState MonoType
+lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> StateM MonoType
 lookupVarOrOperator ctx maybeModuleName name =
     State.do (ModuleLookup.findModuleOfVar ctx.index ctx.modules ctx.thisModule maybeModuleName name) <| \( package, moduleName ) ->
     let
@@ -146,7 +144,7 @@ signature.
 aliasImplementation :
     Id
     -> Node Expression.FunctionImplementation
-    -> TIState Expression.FunctionImplementation
+    -> StateM Expression.FunctionImplementation
 aliasImplementation declId implNode =
     let
         impl : Expression.FunctionImplementation
@@ -158,7 +156,7 @@ aliasImplementation declId implNode =
     State.pure impl
 
 
-inferFnImplementation : Ctx -> Id -> Expression.FunctionImplementation -> TIState (List TypeEquation)
+inferFnImplementation : Ctx -> Id -> Expression.FunctionImplementation -> StateM (List TypeEquation)
 inferFnImplementation ctx declId impl =
     State.withScopedEnv <|
         (State.do (inferMany (inferPattern ctx) impl.arguments) <| \( argIds, argEqs ) ->
@@ -173,7 +171,7 @@ inferFnImplementation ctx declId impl =
         )
 
 
-annotationScheme : Ctx -> Maybe (Node Signature) -> TIState (Maybe Type)
+annotationScheme : Ctx -> Maybe (Node Signature) -> StateM (Maybe Type)
 annotationScheme ctx maybeSigNode =
     case maybeSigNode of
         Nothing ->
@@ -199,7 +197,7 @@ that then corrupts every other same-named-variable signature processed
 afterwards (see the `e2e/tests/histogram-force-comparable` regression fixture).
 
 -}
-signatureEquations : Ctx -> Id -> Maybe (Node Signature) -> TIState (List TypeEquation)
+signatureEquations : Ctx -> Id -> Maybe (Node Signature) -> StateM (List TypeEquation)
 signatureEquations ctx declId maybeSigNode =
     maybeSigNode
         |> Maybe.map
@@ -225,7 +223,7 @@ signatureEquations ctx declId maybeSigNode =
 
 {-| Top-level function declaration. Adds a binding to `globalEnv`.
 -}
-topLevelMember : Ctx -> Node Declaration -> Expression.Function -> TIState BindingGroup.Member
+topLevelMember : Ctx -> Node Declaration -> Expression.Function -> StateM BindingGroup.Member
 topLevelMember ctx declNode fn =
     State.do (State.idForNode declNode) <| \declId ->
     State.do (aliasImplementation declId fn.declaration) <| \impl ->
@@ -248,7 +246,7 @@ topLevelMember ctx declNode fn =
 
 {-| A `let..in` function declaration. Adds a binding to lexical `lexicalEnv`
 -}
-letFunctionMember : Ctx -> Node LetDeclaration -> Expression.Function -> TIState BindingGroup.Member
+letFunctionMember : Ctx -> Node LetDeclaration -> Expression.Function -> StateM BindingGroup.Member
 letFunctionMember ctx declNode fn =
     State.do (State.idForNode declNode) <| \declId ->
     State.do (aliasImplementation declId fn.declaration) <| \impl ->
@@ -273,7 +271,7 @@ letFunctionMember ctx declNode fn =
 -- EXPRESSIONS
 
 
-inferExpr : Ctx -> Node Expression -> TIState Inferred
+inferExpr : Ctx -> Node Expression -> StateM Inferred
 inferExpr ctx exprNode =
     State.do (State.idForNode exprNode) <| \exprId ->
     let
@@ -281,15 +279,15 @@ inferExpr ctx exprNode =
         type_ =
             TypeI.id_ exprId
 
-        f : Node Expression -> TIState Inferred
+        f : Node Expression -> StateM Inferred
         f =
             inferExpr ctx
 
-        finish : List TypeEquation -> TIState Inferred
+        finish : List TypeEquation -> StateM Inferred
         finish eqs =
             State.pure ( exprId, eqs )
 
-        impossibleExpr : TIState Inferred
+        impossibleExpr : StateM Inferred
         impossibleExpr =
             State.error (toError ctx (ImpossibleExpr exprNode))
     in
@@ -627,7 +625,7 @@ inferExpr ctx exprNode =
 inferRecordSetters :
     Ctx
     -> List (Node Expression.RecordSetter)
-    -> TIState ( Dict VarName MonoType, List TypeEquation )
+    -> StateM ( Dict VarName MonoType, List TypeEquation )
 inferRecordSetters ctx fieldSetters =
     fieldSetters
         |> State.traverse
@@ -657,7 +655,7 @@ inferRecordSetters ctx fieldSetters =
 {-| Solve decls in `let..in` in dependency order.
 `let` functions and `let` destructurings are available at the same time.
 -}
-solveLetDeclarations : Ctx -> List (Node LetDeclaration) -> TIState ()
+solveLetDeclarations : Ctx -> List (Node LetDeclaration) -> StateM ()
 solveLetDeclarations ctx declarations =
     let
         indexed : List ( Int, Node LetDeclaration )
@@ -717,7 +715,7 @@ solveLetDeclarations ctx declarations =
         sccs =
             SCC.stronglyConnectedComponents (List.map Tuple.first indexed) edges
 
-        inferDestructuring : Node LetDeclaration -> Node Pattern -> Node Expression -> TIState ()
+        inferDestructuring : Node LetDeclaration -> Node Pattern -> Node Expression -> StateM ()
         inferDestructuring declNode patternNode exprNode =
             State.do (State.idForNode declNode) <| \declId ->
             State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
@@ -736,7 +734,7 @@ solveLetDeclarations ctx declarations =
             in
             Unify.unifyMany (unifyConfig ctx) droppedEqs
 
-        solveGroup : List Int -> TIState ()
+        solveGroup : List Int -> StateM ()
         solveGroup groupIndices =
             let
                 groupDecls : List (Node LetDeclaration)
@@ -778,7 +776,7 @@ solveLetDeclarations ctx declarations =
 -- PATTERNS
 
 
-inferPattern : Ctx -> Node Pattern -> TIState Inferred
+inferPattern : Ctx -> Node Pattern -> StateM Inferred
 inferPattern ctx patternNode =
     State.do (State.idForNode patternNode) <| \patternId ->
     let
@@ -786,11 +784,11 @@ inferPattern ctx patternNode =
         type_ =
             TypeI.id_ patternId
 
-        p : Node Pattern -> TIState Inferred
+        p : Node Pattern -> StateM Inferred
         p =
             inferPattern ctx
 
-        finish : List TypeEquation -> TIState Inferred
+        finish : List TypeEquation -> StateM Inferred
         finish eqs =
             State.pure ( patternId, eqs )
     in
@@ -820,7 +818,7 @@ inferPattern ctx patternNode =
 
         TuplePattern patterns ->
             let
-                impossiblePattern : TIState Inferred
+                impossiblePattern : StateM Inferred
                 impossiblePattern =
                     State.error (toError ctx (ImpossiblePattern patternNode))
             in

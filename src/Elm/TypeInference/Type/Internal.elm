@@ -22,11 +22,10 @@ import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
-import Elm.TypeInference.Type as Public
+import Elm.TypeInference.Type as Public exposing (PackageName, VarName)
 import Elm.TypeInference.TypeVar as TypeVar
     exposing
         ( SuperType(..)
@@ -45,10 +44,6 @@ import Set exposing (Set)
 
 type alias Id =
     Int
-
-
-type alias PackageName =
-    Public.PackageName
 
 
 type alias TypeResolver =
@@ -274,7 +269,7 @@ so that they're there in order of first appearance,
 SO THAT `normalize` can give us `a -> b -> a` instead of `b -> a -> b`.
 
 Used to decide which variables to quantify in `generalize` (those not already
-free in the environment) and in `State.generalizeWith` (those above the current
+free in the environment) and in `State.generalize` (those above the current
 let-rank).
 
 -}
@@ -361,7 +356,7 @@ Global environment is supposed to only ever hold closed schemes (no free
 typevars), for State.lookupGlobalEnv to be able to instantiate them directly
 without substitution.
 
-Note that State.generalizeWith (used for let-bound locals) uses let-rank to
+Note that State.generalize (used for let-bound locals) uses let-rank to
 decide what to close over.
 
 -}

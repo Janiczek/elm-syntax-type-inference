@@ -12,11 +12,10 @@ module Elm.TypeInference.Dependencies exposing
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
-import Elm.TypeInference.State as State exposing (TIState)
-import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.State as State exposing (StateM)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
@@ -189,7 +188,7 @@ fromDocsFields resolver fields =
 {-| Put the docs.json data into `globalEnv`.
 The returned type aliases are later used in Unify's alias expansion.
 -}
-register : Dependencies -> TIState (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
+register : Dependencies -> StateM (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
 register deps =
     deps
         |> Dict.toList
@@ -201,7 +200,7 @@ registerPackage :
     Dependencies
     -> PackageName
     -> DependencyPackage
-    -> TIState (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
+    -> StateM (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
 registerPackage deps pkgName pkg =
     let
         resolver : Resolver
@@ -217,7 +216,7 @@ registerModule :
     PackageName
     -> Resolver
     -> Elm.Docs.Module
-    -> TIState (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
+    -> StateM (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
 registerModule pkgName resolver mod =
     let
         fullModuleName : FullModuleName
@@ -231,7 +230,7 @@ registerModule pkgName resolver mod =
             , details = details
             }
 
-        addBinding : VarName -> Elm.Type.Type -> TIState ()
+        addBinding : VarName -> Elm.Type.Type -> StateM ()
         addBinding name tipe =
             State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <|
                 \monoType ->
@@ -248,7 +247,7 @@ registerModule pkgName resolver mod =
                                 |> State.map (List.filterMap identity >> Dict.fromList)
 
 
-registerUnion : PackageName -> FullModuleName -> Resolver -> Elm.Docs.Union -> TIState ()
+registerUnion : PackageName -> FullModuleName -> Resolver -> Elm.Docs.Union -> StateM ()
 registerUnion pkgName fullModuleName resolver union =
     let
         toError : ErrorDetails -> Error
@@ -299,7 +298,7 @@ registerAlias :
     -> FullModuleName
     -> Resolver
     -> Elm.Docs.Alias
-    -> TIState (Maybe ( ( PackageName, FullModuleName, VarName ), TypeAlias ))
+    -> StateM (Maybe ( ( PackageName, FullModuleName, VarName ), TypeAlias ))
 registerAlias pkgName fullModuleName resolver alias_ =
     let
         toError : ErrorDetails -> Error
@@ -312,7 +311,7 @@ registerAlias pkgName fullModuleName resolver alias_ =
     State.do (State.fromResult (Result.mapError toError (fromDocsType resolver alias_.tipe))) <|
         \aliasMono ->
             let
-                registerConstructor : TIState ()
+                registerConstructor : StateM ()
                 registerConstructor =
                     case alias_.tipe of
                         Elm.Type.Record fields Nothing ->

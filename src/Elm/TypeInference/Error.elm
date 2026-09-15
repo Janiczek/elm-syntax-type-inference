@@ -17,9 +17,8 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.Range as Range exposing (Range)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.Type
-import Elm.TypeInference.Type as Type exposing (Type)
+import Elm.TypeInference.Type as Type exposing (Type, VarName)
 import Elm.Writer
 
 

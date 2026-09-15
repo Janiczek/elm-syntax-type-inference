@@ -4,7 +4,7 @@ import Elm.Syntax.Expression exposing (Expression(..), Function, LetDeclaration(
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Pattern.Extra
-import Elm.Syntax.VarName exposing (VarName)
+import Elm.TypeInference.Type exposing (VarName)
 import List.ExtraExtra
 import Set exposing (Set)
 

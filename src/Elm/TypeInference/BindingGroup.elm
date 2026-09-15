@@ -3,7 +3,7 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 {-| Solve a binding group (SCC of mutually-referencing bindings).
 -}
 
-import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, Type)
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
@@ -17,15 +17,15 @@ type alias Member =
     , maybeAnnotation : Maybe Type
     , -- top-level decls get installed into `globalEnv`
       -- let..in bindings get installed into `lexicalEnv`
-      install : Type -> TIState ()
+      install : Type -> StateM ()
     , -- monadic action to generate equations. Must be run after members'
       -- placeholders/annotations have been installed as they can reference each
       -- other.
-      equations : TIState (List TypeEquation)
+      equations : StateM (List TypeEquation)
     }
 
 
-solveGroup : UnifyConfig -> List Member -> TIState ()
+solveGroup : UnifyConfig -> List Member -> StateM ()
 solveGroup cfg members =
     State.do
         (State.withDeeperLetRank
@@ -63,7 +63,7 @@ solveGroup cfg members =
                         State.pure ()
 
                     Nothing ->
-                        State.do (State.generalizeWith (Type.id_ member.id)) <| \scheme ->
+                        State.do (State.generalize (Type.id_ member.id)) <| \scheme ->
                         member.install scheme
             )
             members

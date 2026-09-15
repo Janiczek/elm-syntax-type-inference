@@ -1,70 +1,48 @@
 module Elm.TypeInference.State exposing
-    ( TIState, State, GlobalKey, init, empty
-    , pure, error, fromResult, run
-    , map, map2
-    , do, andThen, traverse
+    ( GlobalKey
+    , State
+    , StateM
+    , addBinding
+    , addGlobalBinding
+    , aliasNodeId
+    , andThen
+    , do
+    , empty
+    , error
+    , existsInEnv
+    , fromResult
+    , generalize
+    , getGlobalEnv
     , getNextIdAndTick
-    , getNodeIds, idForNode, aliasNodeId
-    , getSubst, modifySubst
-    , addBinding, existsInEnv, lookupEnv, withScopedEnv
-    , addGlobalBinding, lookupGlobalEnv, getGlobalEnv
-    , withDeeperLetRank, setIdToCurrentLetRank, generalizeWith, instantiate
+    , getNodeIds
+    , getSubst
+    , idForNode
+    , init
+    , instantiate
+    , lookupEnv
+    , lookupGlobalEnv
+    , map
+    , map2
+    , modifySubst
+    , pure
+    , run
+    , setIdToCurrentLetRank
+    , test_initFull
+    , traverse
+    , withDeeperLetRank
+    , withScopedEnv
     )
 
-{-| State useful during various phases of the type inference algorithm.
-
-
-# General
-
-@docs TIState, State, GlobalKey, init, empty
-
-
-# Utilities
-
-@docs pure, error, fromResult, run
-@docs map, map2
-@docs do, andThen, traverse
-
-
-# Next ID
-
-@docs getNextIdAndTick
-
-
-# Node IDs: the `Range -> Id` dict we're building up
-
-@docs getNodeIds, idForNode, aliasNodeId
-
-
-# The accumulated solution
-
-@docs getSubst, modifySubst
-
-
-# Lexical env: scoping (lambda args, let..in, case branches)
-
-@docs addBinding, existsInEnv, lookupEnv, withScopedEnv
-
-
-# Global env: top-level declarations, constructors, ports, (later) dependencies
-
-@docs addGlobalBinding, lookupGlobalEnv, getGlobalEnv
-
-
-# Generalization
-
-@docs withDeeperLetRank, setIdToCurrentLetRank, generalizeWith, instantiate
-
+{-| State monad for the type inference.
 -}
 
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, SubstitutionMap)
-import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, Type(..))
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.VarSet as VarSet
@@ -75,10 +53,12 @@ import RangeLike exposing (RangeLike)
 -- GENERAL
 
 
-{-| Key into `globalEnv`: we need to qualify by package as well because of
-situations where full qualified module names are not unique (eg.
-`stil4m/elm-syntax` has its own `Char.Extra` while a project using it might use
-`Char.Extra` from `elmcraft/core-extra`).
+{-| Key into `globalEnv`.
+
+We need to qualify by package as well because of situations where full qualified
+module names are not unique (eg. `stil4m/elm-syntax` has its own `Char.Extra`
+while a project using it might use `Char.Extra` from `elmcraft/core-extra`).
+
 -}
 type alias GlobalKey =
     ( PackageName, FullModuleName, VarName )
@@ -87,51 +67,46 @@ type alias GlobalKey =
 type alias State =
     { {- ID counter, making sure every expression gets its own unique ID
          number. As long as we only expose `getNextIdAndTick` as a way to get
-         the ID, they'll automatically increment.
+         a new ID, they'll automatically increment.
       -}
       nextId : Id
     , {- Type ID for each AST node of the module being inferred. Ends up being
-         its TypeLookupTable. Inference runs one module at a time, so no module
-         name needs to be part of the key.
+         its TypeLookupTable. Inference runs one module at a time, so we don't
+         need to specify the module name.
       -}
       nodeIds : Dict RangeLike Id
-    , {- Environment holding types for lexical bindings: lambda args, let..in,
-         case branch patterns. Scoped in and out via `withScopedEnv`, unlike
-         `globalEnv` below.
+    , {- Types for lexical bindings: lambda args, let..in, case branch patterns.
+         Scoped into and out of via `withScopedEnv`.
       -}
       lexicalEnv : Dict VarName Type
-    , {- Top-level declarations, constructors, ports, and (later) dependency
-         values.
-         Never scoped away: once binding group solves and generalizes, the final
-         type stays here forever.
+    , {- Top-level declarations, constructors, ports, and dependency values.
+         Once a binding group gets added, it's here forever.
       -}
       globalEnv : Dict GlobalKey Type
-    , {- The solution accumulated so far.
-         Never scoped away, a constraint discovered inside a lambda about an
-         outer binding must survive the lambda.
-      -}
+    , -- Map from typevars to types (being built).
       subst : SubstitutionMap
-    , -- Enclosing let-rank. Fresh vars are stamped with this; generalization
-      -- quantifies vars whose stamp is strictly deeper.
+    , -- Enclosing let-rank.
       letRank : LetRank
     }
 
 
-type alias TIState a =
+{-| State monad. A function from state to something + a new state.
+-}
+type alias StateM a =
     State -> ( Result Error a, State )
 
 
-pure : a -> TIState a
+pure : a -> StateM a
 pure a =
     \s -> ( Ok a, s )
 
 
-error : Error -> TIState a
+error : Error -> StateM a
 error error_ =
     \s -> ( Err error_, s )
 
 
-fromResult : Result Error a -> TIState a
+fromResult : Result Error a -> StateM a
 fromResult result =
     case result of
         Err err ->
@@ -141,45 +116,45 @@ fromResult result =
             pure value
 
 
-run : State -> TIState a -> ( Result Error a, State )
+run : State -> StateM a -> ( Result Error a, State )
 run state stateFn =
     stateFn state
 
 
-map : (a -> b) -> TIState a -> TIState b
+map : (a -> b) -> StateM a -> StateM b
 map userFn stateFn =
-    \state ->
-        stateFn state
-            |> Tuple.mapFirst (Result.map userFn)
-
-
-andMap : TIState a -> TIState (a -> b) -> TIState b
-andMap aM fnM =
-    \state ->
+    \state1 ->
         let
-            ( fnResult, fnState ) =
-                fnM state
+            ( value, state2 ) =
+                stateFn state1
         in
-        case fnResult of
-            Err errFn ->
-                ( Err errFn, fnState )
+        ( case value of
+            Ok ok ->
+                Ok (userFn ok)
 
-            Ok fn ->
-                let
-                    ( aResult, aState ) =
-                        aM fnState
-                in
-                ( Result.map fn aResult, aState )
+            Err err ->
+                Err err
+        , state2
+        )
 
 
-map2 : (a -> b -> c) -> TIState a -> TIState b -> TIState c
+map2 : (a -> b -> c) -> StateM a -> StateM b -> StateM c
 map2 userFn aM bM =
-    pure userFn
-        |> andMap aM
-        |> andMap bM
+    \state ->
+        case aM state of
+            ( Err err, aState ) ->
+                ( Err err, aState )
+
+            ( Ok a, aState ) ->
+                case bM aState of
+                    ( Err err, bState ) ->
+                        ( Err err, bState )
+
+                    ( Ok b, bState ) ->
+                        ( Ok (userFn a b), bState )
 
 
-andThen : (a -> TIState b) -> TIState a -> TIState b
+andThen : (a -> StateM b) -> StateM a -> StateM b
 andThen userFn stateFn =
     \state ->
         let
@@ -194,21 +169,19 @@ andThen userFn stateFn =
                 userFn a nextState
 
 
-do : TIState a -> (a -> TIState b) -> TIState b
+do : StateM a -> (a -> StateM b) -> StateM b
 do m fn =
     andThen fn m
 
 
-{-| Tail-recursive: the naive
-`List.foldr (map2 (::)) (pure [])` recurses once per element when the composed
-action is _run_, which blows the stack on large projects.
+{-| Tail-recursive instead of List.foldr (which blew the stack in the past).
 -}
-traverse : (a -> TIState b) -> List a -> TIState (List b)
+traverse : (a -> StateM b) -> List a -> StateM (List b)
 traverse f list =
     \state -> traverseHelp f [] list state
 
 
-traverseHelp : (a -> TIState b) -> List b -> List a -> State -> ( Result Error (List b), State )
+traverseHelp : (a -> StateM b) -> List b -> List a -> State -> ( Result Error (List b), State )
 traverseHelp f acc list state =
     case list of
         [] ->
@@ -223,38 +196,44 @@ traverseHelp f acc list state =
                     traverseHelp f (b :: acc) rest newState
 
 
-get : TIState State
+get : StateM State
 get =
     \state -> ( Ok state, state )
 
 
-modify : (State -> State) -> TIState ()
+modify : (State -> State) -> StateM ()
 modify fn =
     \state -> ( Ok (), fn state )
 
 
-
--- OUR API
-
-
 empty : State
 empty =
-    init
-        { lexicalEnv = Dict.empty
-        , globalEnv = Dict.empty
-        }
+    { nextId = 0
+    , nodeIds = Dict.empty
+    , lexicalEnv = Dict.empty
+    , globalEnv = Dict.empty
+    , subst = SubstitutionMap.empty
+    , letRank = 0
+    }
 
 
-{-| `lexicalEnv` is a test hook: you can populate it with types without having
-actual definitions present. `globalEnv` is how a module's inference is seeded
-with the dependencies and with the interfaces of the modules it imports.
--}
-init :
+init : Dict GlobalKey Type -> State
+init globalEnv =
+    { nextId = 0
+    , nodeIds = Dict.empty
+    , lexicalEnv = Dict.empty
+    , globalEnv = globalEnv
+    , subst = SubstitutionMap.empty
+    , letRank = 0
+    }
+
+
+test_initFull :
     { lexicalEnv : Dict VarName Type
     , globalEnv : Dict GlobalKey Type
     }
     -> State
-init env =
+test_initFull env =
     { nextId = 0
     , nodeIds = Dict.empty
     , lexicalEnv = env.lexicalEnv
@@ -264,7 +243,7 @@ init env =
     }
 
 
-getNextIdAndTick : TIState Id
+getNextIdAndTick : StateM Id
 getNextIdAndTick =
     \state ->
         ( Ok state.nextId
@@ -279,14 +258,8 @@ getNextIdAndTick =
 
 
 {-| Run `action` one let-rank deeper, then restore the let-rank.
-
-Fresh vars are stamped with the current let-rank (`getNextIdAndTick`), and
-`generalizeWith` quantifies vars deeper than the let-rank at generalization time.
-So a binding group's constraint generation and solving runs inside `withDeeperLetRank`,
-and its generalization runs after it returns.
-
 -}
-withDeeperLetRank : TIState a -> TIState a
+withDeeperLetRank : StateM a -> StateM a
 withDeeperLetRank action =
     \state ->
         let
@@ -313,7 +286,7 @@ withDeeperLetRank action =
 
 {-| Move a previously allocated id to the current let-rank.
 -}
-setIdToCurrentLetRank : Id -> TIState ()
+setIdToCurrentLetRank : Id -> StateM ()
 setIdToCurrentLetRank id =
     do get <| \state ->
     modifySubst (SubstitutionMap.setIdLetRank id state.letRank)
@@ -323,7 +296,7 @@ setIdToCurrentLetRank id =
 -- NODE IDS
 
 
-getNodeIds : TIState (Dict RangeLike Id)
+getNodeIds : StateM (Dict RangeLike Id)
 getNodeIds =
     get
         |> map .nodeIds
@@ -331,7 +304,7 @@ getNodeIds =
 
 {-| Give the node a fresh type ID and remember it under the node's range.
 -}
-idForNode : Node a -> TIState Id
+idForNode : Node a -> StateM Id
 idForNode node =
     do getNextIdAndTick <| \theId ->
     do (aliasNodeId (Node.range node) theId) <| \() ->
@@ -346,7 +319,7 @@ Needed for when elm-syntax gives two nodes the same range:
   - similarly for `LetDeclaration`
 
 -}
-aliasNodeId : Range -> Id -> TIState ()
+aliasNodeId : Range -> Id -> StateM ()
 aliasNodeId range theId =
     modify
         (\state ->
@@ -364,16 +337,13 @@ aliasNodeId range theId =
 -- THE ACCUMULATED SOLUTION
 
 
-getSubst : TIState SubstitutionMap
+getSubst : StateM SubstitutionMap
 getSubst =
     get
         |> map .subst
 
 
-{-| The store only ever grows, so there is nothing to merge: every writer
-threads the same store forward.
--}
-modifySubst : (SubstitutionMap -> SubstitutionMap) -> TIState ()
+modifySubst : (SubstitutionMap -> SubstitutionMap) -> StateM ()
 modifySubst fn =
     modify
         (\state ->
@@ -387,11 +357,11 @@ modifySubst fn =
         )
 
 
-{-| Substitute a `MonoType`, writing back any newly-discovered ground
-resolutions / path-compressed chains into `state.subst` so later lookups
-benefit too.
+{-| Substitute a `MonoType`.
+Remember the substitution map advancement (newly discovered ground resolutions,
+or path compression) into the state.
 -}
-substituteMono : MonoType -> TIState MonoType
+substituteMono : MonoType -> StateM MonoType
 substituteMono monoType =
     \state ->
         let
@@ -409,9 +379,9 @@ substituteMono monoType =
         )
 
 
-{-| Same as `substituteMono`, but for a whole (possibly quantified) `Type`.
+{-| Same as `substituteMono`, but for a whole `Type` scheme.
 -}
-substitute : Type -> TIState Type
+substitute : Type -> StateM Type
 substitute type_ =
     \state ->
         let
@@ -433,13 +403,13 @@ substitute type_ =
 -- LEXICAL ENV
 
 
-getLexicalEnv : TIState (Dict VarName Type)
+getLexicalEnv : StateM (Dict VarName Type)
 getLexicalEnv =
     get
         |> map .lexicalEnv
 
 
-modifyLexicalEnv : (Dict VarName Type -> Dict VarName Type) -> TIState ()
+modifyLexicalEnv : (Dict VarName Type -> Dict VarName Type) -> StateM ()
 modifyLexicalEnv fn =
     modify
         (\state ->
@@ -453,21 +423,15 @@ modifyLexicalEnv fn =
         )
 
 
-addBinding : VarName -> Type -> TIState ()
+addBinding : VarName -> Type -> StateM ()
 addBinding var type_ =
-    {- Diehl removes the key from the dict first... but I think we don't
-       need to do that as on collision the new item wins.
-    -}
     modifyLexicalEnv (Dict.insert var type_)
 
 
-{-| Run `action`, then restore `lexicalEnv` back.
-Leave `nextId`, `nodeIds`, `globalEnv` and `subst` updated.
-
+{-| Run `action`, then restore `lexicalEnv` back, but update the rest.
 This makes args, let bindings etc. not leak into the rest of the program.
-
 -}
-withScopedEnv : TIState a -> TIState a
+withScopedEnv : StateM a -> StateM a
 withScopedEnv action =
     \state ->
         let
@@ -485,16 +449,16 @@ withScopedEnv action =
         )
 
 
-existsInEnv : VarName -> TIState Bool
+existsInEnv : VarName -> StateM Bool
 existsInEnv varName =
     getLexicalEnv
         |> map (Dict.member varName)
 
 
-{-| Look up a lexical binding (let..in var, lambda arg, ...), substituting all
-typevars that we can.
+{-| Look up a var in lexical env (let..in var, lambda arg, ...), substituting
+all typevars that we can.
 -}
-lookupEnv : FullModuleName -> VarName -> TIState MonoType
+lookupEnv : FullModuleName -> VarName -> StateM MonoType
 lookupEnv thisModule var =
     do getLexicalEnv <| \env ->
     case Dict.get var env of
@@ -518,13 +482,13 @@ lookupEnv thisModule var =
 -- GLOBAL ENV
 
 
-getGlobalEnv : TIState (Dict GlobalKey Type)
+getGlobalEnv : StateM (Dict GlobalKey Type)
 getGlobalEnv =
     get
         |> map .globalEnv
 
 
-addGlobalBinding : GlobalKey -> Type -> TIState ()
+addGlobalBinding : GlobalKey -> Type -> StateM ()
 addGlobalBinding key type_ =
     modify
         (\state ->
@@ -539,15 +503,8 @@ addGlobalBinding key type_ =
 
 
 {-| Look up a global name (top-level/constructor/port/dependency).
-
-`globalEnv` only ever holds closed schemes (top-level `solveGroup` always
-generalizes against an empty outer lexical env, and annotations/constructors/
-ports/dependency types are closed by construction via `Type.closeOver`), so
-unlike `lookupEnv` there is nothing to substitute here: a closed scheme has no
-free vars left for `state.subst` to resolve.
-
 -}
-lookupGlobalEnv : PackageName -> FullModuleName -> VarName -> TIState MonoType
+lookupGlobalEnv : PackageName -> FullModuleName -> VarName -> StateM MonoType
 lookupGlobalEnv package moduleName var =
     do getGlobalEnv <| \env ->
     case Dict.get ( package, moduleName, var ) env of
@@ -566,18 +523,13 @@ lookupGlobalEnv package moduleName var =
             instantiate type_
 
 
-{-| Give a scheme's quantified variables fresh ids.
+{-| Give a scheme's quantified variables fresh IDs.
 
-Deliberately **not** `SubstitutionMap.substituteMono`: that follows chains, and
-here the renaming's targets share an id space with its domain. A scheme reaches
-us from whichever module defined it (or from a dependency's docs), while the
-fresh ids come from the module currently being inferred -- so a fresh id can
-land exactly on another of this same scheme's bound ids, and a chain-following
-substitution would rename through it and collapse two distinct quantified
-variables into one. `Type.mapVarsMono` replaces each variable once.
+This allows let-polymorphism: each of `id`s in `(id 0, id "x")` is its own
+separate `someID -> someID`, and they don't touch each other.
 
 -}
-instantiate : Type -> TIState MonoType
+instantiate : Type -> StateM MonoType
 instantiate (Forall boundVars monoType) =
     case boundVars of
         [] ->
@@ -608,12 +560,8 @@ instantiate (Forall boundVars monoType) =
                 |> pure
 
 
-
--- GENERALIZATION
-
-
-generalizeWith : MonoType -> TIState Type
-generalizeWith monoType =
+generalize : MonoType -> StateM Type
+generalize monoType =
     do (substituteMono monoType) <| \substitutedMono ->
     do get <| \state ->
     let

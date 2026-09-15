@@ -36,7 +36,7 @@ otherwise-unknown unqualified value can only come from `Basics`.
 
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.VarName exposing (VarName)
+import Elm.TypeInference.Type exposing (VarName)
 
 
 elmCorePackage : String

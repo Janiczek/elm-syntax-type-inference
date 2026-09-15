@@ -26,7 +26,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
-import Elm.Syntax.VarName exposing (VarName)
+import Elm.TypeInference.Type exposing (VarName)
 import Set exposing (Set)
 
 

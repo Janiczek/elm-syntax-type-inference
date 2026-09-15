@@ -24,7 +24,7 @@ Once created, `substitute*` functions are the way to consume it.
 
 import Bitwise
 import Dict exposing (Dict)
-import Elm.Syntax.VarName exposing (VarName)
+import Elm.TypeInference.Type exposing (VarName)
 import Elm.TypeInference.Type.Internal as Type
     exposing
         ( Id
@@ -44,7 +44,7 @@ type alias SubstitutionMap =
       unionFindRanks : Dict VarKey Int
     , -- Let-rank of each generated id at the moment it was created.
       -- Lowered to min(side1,side2) on unify.
-      -- Important for "business logic": `State.generalizeWith` quantifies vars above current let-rank.
+      -- Important for "business logic": `State.generalize` quantifies vars above current let-rank.
       letRanks : Dict Id LetRank
     }
 

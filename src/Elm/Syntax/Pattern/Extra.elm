@@ -2,7 +2,7 @@ module Elm.Syntax.Pattern.Extra exposing (varNames)
 
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Pattern exposing (Pattern(..))
-import Elm.Syntax.VarName exposing (VarName)
+import Elm.TypeInference.Type exposing (VarName)
 import List.ExtraExtra
 
 

@@ -2,11 +2,10 @@ module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
-import Elm.TypeInference.State as State exposing (TIState)
+import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as Type exposing (MonoType(..))
 import Elm.TypeInference.TypeVar as TypeVar
     exposing
@@ -26,19 +25,17 @@ type alias TypeAliases =
     Dict ( PackageName, FullModuleName, VarName ) TypeAlias
 
 
-{-| `checks == False` (from `inferCorrectCode`) uses the "code already compiles"
-invariant and skips some checks.
+{-| `canSkipChecks == True` (from `inferCorrectCode`) uses the "code already
+compiles" invariant and skips some checks. Intended for elm-review.
 
-`checks == True` (from `inferAndCheck`) is used in tests. `internalChecks`
-keeps the fast path for production inference while turning a violated
-"already-correct code" invariant into a diagnostic instead of silently
-returning an incorrect type.
+`canSkipChecks == False` (from `inferAndCheck`) is mainly used in tests. The
+fast path turns a violated "already-correct code" invariant into a diagnostic
+instead of silently returning an incorrect type.
 
 -}
 type alias UnifyConfig =
     { typeAliases : TypeAliases
-    , checks : Bool
-    , internalChecks : Bool
+    , canSkipChecks : Bool
     , moduleName : FullModuleName
     , declarationNames : List VarName
     }
@@ -46,20 +43,13 @@ type alias UnifyConfig =
 
 {-| Solve the equations left to right, each under the solution the ones before
 it produced.
-
-There's no substitution to pass in or get back: the union-find store lives in
-`TIState` and only ever grows, so every equation -- including the ones the
-structural cases below recurse into -- is solved against everything learned so
-far.
-
 -}
-unifyMany : UnifyConfig -> List ( MonoType, MonoType ) -> TIState ()
+unifyMany : UnifyConfig -> List ( MonoType, MonoType ) -> StateM ()
 unifyMany cfg eqs =
     \state -> unifyManyHelp cfg eqs state
 
 
-{-| Could be a State.foldl with State.substituteEquation and unifyMono,
-but we optimized it to reduce GC pressure.
+{-| Intentionally not a State.foldl to reduce GC pressure.
 -}
 unifyManyHelp : UnifyConfig -> List ( MonoType, MonoType ) -> State.State -> ( Result Error (), State.State )
 unifyManyHelp cfg eqs state =
@@ -85,7 +75,15 @@ unifyManyHelp cfg eqs state =
                     , letRank = state.letRank
                     }
             in
-            case unifyMono cfg (SubstitutionMap.isGround flags1) st1 (SubstitutionMap.isGround flags2) st2 state1 of
+            case
+                unifyMono
+                    cfg
+                    (SubstitutionMap.isGround flags1)
+                    st1
+                    (SubstitutionMap.isGround flags2)
+                    st2
+                    state1
+            of
                 ( Err err, newState ) ->
                     ( Err err, newState )
 
@@ -95,11 +93,9 @@ unifyManyHelp cfg eqs state =
 
 {-| Expand alias (substitute its args) recursively, then collapse extensible records.
 
-Valid Elm aliases can't form an infinite cycle, but `inferAndCheck` is by
-definition for code that might not be valid, so the recursion is bounded by
-`fuel` rather than trusted to terminate. Running out leaves the type
-unexpanded, which at worst produces a type mismatch -- unlike a hang, which
-would take down the whole elm-review run.
+Because of `inferAndCheck` we have possibility of infinite cycles. We use `fuel`
+to stop the expansion after a while and provide a type mismatch instead of a
+hang.
 
 -}
 expandAlias : TypeAliases -> MonoType -> MonoType
@@ -108,8 +104,8 @@ expandAlias typeAliases type_ =
         |> Type.collapseExtensible
 
 
-{-| Deeper than any real alias chain; a type nesting aliases 1000 deep would
-already be unprintable.
+{-| This should be enough (any real alias chain like that should be
+unreadable/unusable in real code).
 -}
 maxAliasDepth : Int
 maxAliasDepth =
@@ -130,14 +126,15 @@ expandAliasHelp fuel typeAliases type_ =
 
                     Just alias_ ->
                         case zipAliasArgs alias_.args ut.args of
-                            -- A partially applied or malformed alias. Expanding
-                            -- anyway would truncate and leave the body's
-                            -- remaining parameters unsubstituted -- and an
-                            -- unsubstituted name-keyed typeclass var then leaks
-                            -- out and becomes indistinguishable from an
-                            -- unrelated same-named var elsewhere (the bug class
-                            -- `e2e/tests/histogram-force-comparable` exists
-                            -- for). Leaving the alias opaque is strictly safer.
+                            {- Imagine:
+
+                               type alias Pair first second =
+                                   ( first, second )
+
+                               x : Pair Int
+                               x = ( 1, "oops" )
+
+                            -}
                             Nothing ->
                                 type_
 
@@ -307,7 +304,7 @@ Zipping `Dict.values` by sorted position (what this used to do) pairs unrelated
 fields whenever the key sets disagree, and truncates to the shorter list --
 silently producing wrong types. Two `Record`s with different key sets can reach
 here even on code that already compiles, via `collapseExtensible` /
-`recordVsExtensible`, so this must be correct in both `checks` modes.
+`recordVsExtensible`, so this must be correct in both `canSkipChecks` modes.
 
 -}
 zipRecordFields : Dict VarName MonoType -> Dict VarName MonoType -> Maybe (List ( MonoType, MonoType ))
@@ -327,7 +324,7 @@ call (`optimizations-plan.md` Step 1's groundness tracking) -- don't recompute
 them here with `Type.isParametricMono`, that would cost the same O(size) walk
 this is meant to save.
 -}
-unifyMono : UnifyConfig -> Bool -> MonoType -> Bool -> MonoType -> TIState ()
+unifyMono : UnifyConfig -> Bool -> MonoType -> Bool -> MonoType -> StateM ()
 unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
     if rawT1 == rawT2 then
         -- Always on, sound without the invariant: `_Utils_eq` starts
@@ -336,26 +333,22 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
         -- common).
         State.pure ()
 
-    else if not cfg.checks && isGround1 && isGround2 then
+    else if cfg.canSkipChecks && isGround1 && isGround2 then
         -- Cash in the "code already compiles" invariant: two ground
         -- types reached here only because upstream code already
         -- agreed they unify, so skip the full structural walk below
         -- (and even alias expansion: a ground alias arg can't expand
         -- to something non-ground, since an alias's only free vars
         -- are its args).
-        if cfg.internalChecks then
-            let
-                ( pubT1, pubT2 ) =
-                    Type.toPublicPair rawT1 rawT2
-            in
-            State.error
-                { moduleName = FullModuleName.toModuleName cfg.moduleName
-                , declarationNames = cfg.declarationNames
-                , details = InternalInconsistency pubT1 pubT2
-                }
-
-        else
-            State.pure ()
+        let
+            ( pubT1, pubT2 ) =
+                Type.toPublicPair rawT1 rawT2
+        in
+        State.error
+            { moduleName = FullModuleName.toModuleName cfg.moduleName
+            , declarationNames = cfg.declarationNames
+            , details = InternalInconsistency pubT1 pubT2
+            }
 
     else
         let
@@ -367,11 +360,11 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             t2 =
                 expandAlias cfg.typeAliases rawT2
 
-            noSubstitutionNeeded : TIState ()
+            noSubstitutionNeeded : StateM ()
             noSubstitutionNeeded =
                 State.pure ()
 
-            typeMismatch : () -> TIState ()
+            typeMismatch : () -> StateM ()
             typeMismatch () =
                 let
                     ( pubT1, pubT2 ) =
@@ -383,7 +376,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     , details = TypeMismatch pubT1 pubT2
                     }
 
-            recordBindings : Dict VarName MonoType -> Dict VarName MonoType -> TIState ()
+            recordBindings : Dict VarName MonoType -> Dict VarName MonoType -> StateM ()
             recordBindings bindings1 bindings2 =
                 if Dict.size bindings1 /= Dict.size bindings2 then
                     typeMismatch ()
@@ -402,7 +395,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     { extensionTypevar : MonoType
                     , fields : Dict VarName MonoType
                     }
-                -> TIState ()
+                -> StateM ()
             recordVsExtensible recordFields er =
                 let
                     ( residual, matchedEqs, matchedCount ) =
@@ -571,29 +564,28 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                 else
-                    State.do State.getNextIdAndTick <|
-                        \tailId ->
-                            let
-                                tail : MonoType
-                                tail =
-                                    Type.id_ tailId
-                            in
-                            unifyMany
-                                cfg
-                                (( r1.extensionTypevar
-                                 , ExtensibleRecord
+                    State.do State.getNextIdAndTick <| \tailId ->
+                    let
+                        tail : MonoType
+                        tail =
+                            Type.id_ tailId
+                    in
+                    unifyMany
+                        cfg
+                        (( r1.extensionTypevar
+                         , ExtensibleRecord
+                            { extensionTypevar = tail
+                            , fields = onlyIn2
+                            }
+                         )
+                            :: ( r2.extensionTypevar
+                               , ExtensibleRecord
                                     { extensionTypevar = tail
-                                    , fields = onlyIn2
+                                    , fields = onlyIn1
                                     }
-                                 )
-                                    :: ( r2.extensionTypevar
-                                       , ExtensibleRecord
-                                            { extensionTypevar = tail
-                                            , fields = onlyIn1
-                                            }
-                                       )
-                                    :: sharedEqs
-                                )
+                               )
+                            :: sharedEqs
+                        )
 
             ( ExtensibleRecord er, Record r ) ->
                 recordVsExtensible r.fields er
@@ -639,7 +631,7 @@ and unbound -- exactly what union-find needs to link or bind without creating a
 cycle.
 
 -}
-bind : UnifyConfig -> TypeVar -> MonoType -> TIState ()
+bind : UnifyConfig -> TypeVar -> MonoType -> StateM ()
 bind cfg typeVar type_ =
     if type_ == TypeVar typeVar then
         State.pure ()
@@ -709,20 +701,19 @@ bind cfg typeVar type_ =
                             -- eg. Comparable and Appendable
                             -- introduce fresh var with combined constraint
                             -- point both at it
-                            State.do State.getNextIdAndTick <|
-                                \freshId ->
-                                    let
-                                        fresh : TypeVar
-                                        fresh =
-                                            ( Generated freshId, m )
-                                    in
-                                    State.modifySubst
-                                        (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                            >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
-                                        )
+                            State.do State.getNextIdAndTick <| \freshId ->
+                            let
+                                fresh : TypeVar
+                                fresh =
+                                    ( Generated freshId, m )
+                            in
+                            State.modifySubst
+                                (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                    >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                                )
 
             _ ->
-                if not cfg.checks || accepts cfg.typeAliases super type_ then
+                if cfg.canSkipChecks || accepts cfg.typeAliases super type_ then
                     State.modifySubst (SubstitutionMap.bindRoot typeVar type_)
 
                 else

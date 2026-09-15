@@ -1,8 +1,8 @@
-module TypeLookupTable exposing (TypeLookupTable, fromList, get)
+module TypeLookupTable exposing (TypeLookupTable, get)
 
-{-| Types inferred for source ranges in a given Elm module (its name is not tracked here).
+{-|
 
-@docs TypeLookupTable, fromList, get
+@docs TypeLookupTable, get
 
 -}
 
@@ -13,20 +13,10 @@ import RangeLike
 import TypeLookupTable.Internal as Internal
 
 
-{-| TODO docs
+{-| Types for Ranges belonging to declarations or expressions from a parsed Elm module.
 -}
 type alias TypeLookupTable =
     Internal.TypeLookupTable
-
-
-{-| TODO docs
--}
-fromList : List ( Range, Type ) -> TypeLookupTable
-fromList list =
-    list
-        |> List.map (\( range, type_ ) -> ( RangeLike.fromRange range, type_ ))
-        |> Dict.fromList
-        |> Internal.TLT
 
 
 {-| Look up the inferred type for a source range.

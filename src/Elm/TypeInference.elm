@@ -36,7 +36,6 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.Type as SyntaxType
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
-import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
@@ -45,9 +44,9 @@ import Elm.TypeInference.Infer as Infer
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
-import Elm.TypeInference.State as State exposing (GlobalKey, TIState)
+import Elm.TypeInference.State as State exposing (GlobalKey, StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type exposing (PackageName)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeResolver)
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
@@ -73,7 +72,7 @@ inferCorrectCode :
     }
     -> Result Error (Dict ModuleName TypeLookupTable)
 inferCorrectCode =
-    infer { checks = False }
+    infer { canSkipChecks = True }
 
 
 {-| Infers types of code that might not typecheck.
@@ -86,18 +85,18 @@ inferAndCheck :
     }
     -> Result Error (Dict ModuleName TypeLookupTable)
 inferAndCheck =
-    infer { checks = True }
+    infer { canSkipChecks = False }
 
 
 infer :
-    { checks : Bool }
+    { canSkipChecks : Bool }
     ->
         { directDependencies : List PackageName
         , allDependencies : List Dependency
         , files : Dict ModuleName File
         }
     -> Result Error (Dict ModuleName TypeLookupTable)
-infer checks { directDependencies, allDependencies, files } =
+infer canSkipChecks { directDependencies, allDependencies, files } =
     dependencyEnv
         { directDependencies = directDependencies
         , allDependencies = allDependencies
@@ -107,7 +106,7 @@ infer checks { directDependencies, allDependencies, files } =
                 let
                     project : { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
                     project =
-                        inferProject checks depEnv files
+                        inferProject canSkipChecks depEnv files
                 in
                 case Dict.values project.errors of
                     [] ->
@@ -169,16 +168,14 @@ dependencyEnv { directDependencies, allDependencies } =
                 |> List.filter (\pkg -> List.member pkg.name directDependencies)
                 |> Dependencies.fromList
     in
-    (State.do (Dependencies.register deps) <|
-        \depAliases ->
-            State.do State.getGlobalEnv <|
-                \globalEnv ->
-                    State.pure <|
-                        DependencyEnv
-                            { globalEnv = globalEnv
-                            , typeAliases = depAliases
-                            , index = ModuleLookup.buildIndex directVisibleDeps
-                            }
+    (State.do (Dependencies.register deps) <| \depAliases ->
+    State.do State.getGlobalEnv <| \globalEnv ->
+    State.pure <|
+        DependencyEnv
+            { globalEnv = globalEnv
+            , typeAliases = depAliases
+            , index = ModuleLookup.buildIndex directVisibleDeps
+            }
     )
         |> State.run State.empty
         |> Tuple.first
@@ -194,7 +191,7 @@ Inference runs one module at a time (Elm forbids import cycles, so a module can
 always be inferred once its imports are done). A `ModuleInterface` is everything the
 importing module needs: it replaces having the imported `File`s around.
 
-The types in here are id-space independent: `State.generalizeWith` substitutes
+The types in here are id-space independent: `State.generalize` substitutes
 before quantifying vars younger than the enclosing let, and
 `State.lookupGlobalEnv` re-instantiates with fresh ids on every lookup. So an
 interface stays valid no matter which `State` consumes it.
@@ -227,11 +224,11 @@ module's dependents are inferred against its annotations
 
 -}
 inferProject :
-    { checks : Bool }
+    { canSkipChecks : Bool }
     -> DependencyEnv
     -> Dict ModuleName File
     -> { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
-inferProject checks depEnv files =
+inferProject canSkipChecks depEnv files =
     let
         modules : List ProjectModule
         modules =
@@ -305,7 +302,7 @@ inferProject checks depEnv files =
                     |> List.ExtraExtra.fastConcatMap (List.filterMap (\name -> Dict.get name byName))
         in
         order
-            |> List.foldl (inferOne checks depEnv)
+            |> List.foldl (inferOne canSkipChecks depEnv)
                 { tables = Dict.empty
                 , errors = Dict.empty
                 , interfaces = Dict.empty
@@ -327,8 +324,8 @@ type alias ProjectAcc =
     }
 
 
-inferOne : { checks : Bool } -> DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
-inferOne checks depEnv m acc =
+inferOne : { canSkipChecks : Bool } -> DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
+inferOne canSkipChecks depEnv m acc =
     let
         imported : Dict FullModuleName ModuleInterface
         imported =
@@ -344,7 +341,7 @@ inferOne checks depEnv m acc =
                     )
                     Dict.empty
     in
-    case inferModule_ checks depEnv imported m.file of
+    case inferModule_ canSkipChecks depEnv imported m.file of
         Ok { table, interface } ->
             { acc
                 | tables = Dict.insert m.key table acc.tables
@@ -426,37 +423,33 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
 
 
 inferModule_ :
-    { checks : Bool }
+    { canSkipChecks : Bool }
     -> DependencyEnv
     -> Dict FullModuleName ModuleInterface
     -> File
     -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
-inferModule_ { checks } depEnv importedInterfaces file =
+inferModule_ canSkipChecks depEnv importedInterfaces file =
     let
         ctx : ModuleCtx
         ctx =
             moduleCtx depEnv importedInterfaces file
     in
-    (State.do (gatherTypeAliases ctx file) <|
-        \ownAliases ->
-            let
-                outgoingAliases : Dict GlobalKey TypeAlias
-                outgoingAliases =
-                    Dict.union ownAliases ctx.inheritedAliases
+    (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
+    let
+        outgoingAliases : Dict GlobalKey TypeAlias
+        outgoingAliases =
+            Dict.union ownAliases ctx.inheritedAliases
 
-                typeAliases : Dict GlobalKey TypeAlias
-                typeAliases =
-                    Dict.union outgoingAliases ctx.depTypeAliases
-            in
-            State.do (registerConstructorsAndPorts ctx file) <|
-                \() ->
-                    State.do (solveModule { checks = checks } ctx typeAliases file) <|
-                        \() ->
-                            State.do (moduleResult ctx outgoingAliases) <|
-                                \result ->
-                                    State.pure result
+        typeAliases : Dict GlobalKey TypeAlias
+        typeAliases =
+            Dict.union outgoingAliases ctx.depTypeAliases
+    in
+    State.do (registerConstructorsAndPorts ctx file) <| \() ->
+    State.do (solveModule canSkipChecks ctx typeAliases file) <| \() ->
+    State.do (moduleResult ctx outgoingAliases) <| \result ->
+    State.pure result
     )
-        |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = ctx.globalEnv })
+        |> State.run (State.init ctx.globalEnv)
         |> Tuple.first
 
 
@@ -467,17 +460,13 @@ interfaceFromAnnotations_ depEnv importedInterfaces file =
         ctx =
             moduleCtx depEnv importedInterfaces file
     in
-    (State.do (gatherTypeAliases ctx file) <|
-        \ownAliases ->
-            State.do (registerConstructorsAndPorts ctx file) <|
-                \() ->
-                    State.do (registerAnnotations ctx file) <|
-                        \() ->
-                            State.do (moduleResult ctx (Dict.union ownAliases ctx.inheritedAliases)) <|
-                                \result ->
-                                    State.pure result.interface
+    (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
+    State.do (registerConstructorsAndPorts ctx file) <| \() ->
+    State.do (registerAnnotations ctx file) <| \() ->
+    State.do (moduleResult ctx (Dict.union ownAliases ctx.inheritedAliases)) <| \result ->
+    State.pure result.interface
     )
-        |> State.run (State.init { lexicalEnv = Dict.empty, globalEnv = ctx.globalEnv })
+        |> State.run (State.init ctx.globalEnv)
         |> Tuple.first
         |> Result.withDefault
             { moduleIndex = ctx.thisIndex
@@ -490,55 +479,52 @@ moduleResult :
     ModuleCtx
     -> Dict GlobalKey TypeAlias
     ->
-        TIState
+        StateM
             { table : TypeLookupTable
             , interface : ModuleInterface
             }
 moduleResult ctx outgoingAliases =
     -- TODO translate from TypeI.Type to Type.Type before inserting into the dict
-    State.do State.getNodeIds <|
-        \nodeIds ->
-            State.do State.getSubst <|
-                \substitutionMap ->
-                    State.do State.getGlobalEnv <|
-                        \globalEnv ->
-                            let
-                                ( typesByRange, _ ) =
-                                    nodeIds
-                                        |> Dict.foldl
-                                            (\rangeLike id ( accDict, accSubst ) ->
-                                                let
-                                                    ( monoType, _, accSubst1 ) =
-                                                        SubstitutionMap.substituteMono accSubst (TypeI.id_ id)
-                                                in
-                                                ( Dict.insert rangeLike (TypeI.toPublicType { alreadyNormalized = False } monoType) accDict
-                                                , accSubst1
-                                                )
-                                            )
-                                            ( Dict.empty, substitutionMap )
+    State.do State.getNodeIds <| \nodeIds ->
+    State.do State.getSubst <| \substitutionMap ->
+    State.do State.getGlobalEnv <| \globalEnv ->
+    let
+        ( typesByRange, _ ) =
+            nodeIds
+                |> Dict.foldl
+                    (\rangeLike id ( accDict, accSubst ) ->
+                        let
+                            ( monoType, _, accSubst1 ) =
+                                SubstitutionMap.substituteMono accSubst (TypeI.id_ id)
+                        in
+                        ( Dict.insert rangeLike (TypeI.toPublicType { alreadyNormalized = False } monoType) accDict
+                        , accSubst1
+                        )
+                    )
+                    ( Dict.empty, substitutionMap )
 
-                                exposedValues : Dict VarName TypeI.Type
-                                exposedValues =
-                                    ctx.thisIndex.exposedValues
-                                        |> Set.foldl
-                                            (\name acc ->
-                                                case Dict.get ( "", ctx.thisModuleName, name ) globalEnv of
-                                                    Just scheme ->
-                                                        Dict.insert name scheme acc
+        exposedValues : Dict VarName TypeI.Type
+        exposedValues =
+            ctx.thisIndex.exposedValues
+                |> Set.foldl
+                    (\name acc ->
+                        case Dict.get ( "", ctx.thisModuleName, name ) globalEnv of
+                            Just scheme ->
+                                Dict.insert name scheme acc
 
-                                                    Nothing ->
-                                                        acc
-                                            )
-                                            Dict.empty
-                            in
-                            State.pure
-                                { table = TypeLookupTable.Internal.TLT typesByRange
-                                , interface =
-                                    { moduleIndex = ctx.thisIndex
-                                    , values = exposedValues
-                                    , typeAliases = outgoingAliases
-                                    }
-                                }
+                            Nothing ->
+                                acc
+                    )
+                    Dict.empty
+    in
+    State.pure
+        { table = TypeLookupTable.Internal.TLT typesByRange
+        , interface =
+            { moduleIndex = ctx.thisIndex
+            , values = exposedValues
+            , typeAliases = outgoingAliases
+            }
+        }
 
 
 
@@ -546,12 +532,12 @@ moduleResult ctx outgoingAliases =
 
 
 solveModule :
-    { checks : Bool }
+    { canSkipChecks : Bool }
     -> ModuleCtx
     -> Dict GlobalKey TypeAlias
     -> File
-    -> TIState ()
-solveModule { checks } ctx typeAliases file =
+    -> StateM ()
+solveModule { canSkipChecks } ctx typeAliases file =
     let
         topLevelFunctions : List ( VarName, ( Node Declaration, Expression.Function ) )
         topLevelFunctions =
@@ -622,7 +608,7 @@ solveModule { checks } ctx typeAliases file =
             , thisModuleName = ctx.thisModuleName
             , typeAliases = typeAliases
             , index = ctx.index
-            , checks = checks
+            , canSkipChecks = canSkipChecks
             }
     in
     sccs
@@ -634,8 +620,7 @@ solveModule { checks } ctx typeAliases file =
                     |> State.andThen
                         (BindingGroup.solveGroup
                             { typeAliases = typeAliases
-                            , checks = checks
-                            , internalChecks = not checks
+                            , canSkipChecks = canSkipChecks
                             , moduleName = ctx.thisModuleName
                             , declarationNames = group
                             }
@@ -648,7 +633,7 @@ solveModule { checks } ctx typeAliases file =
 -- REGISTERING A MODULE'S DECLARATIONS
 
 
-gatherTypeAliases : ModuleCtx -> File -> TIState (Dict GlobalKey TypeAlias)
+gatherTypeAliases : ModuleCtx -> File -> StateM (Dict GlobalKey TypeAlias)
 gatherTypeAliases ctx file =
     let
         resolver : TypeResolver
@@ -672,7 +657,7 @@ gatherTypeAliases ctx file =
                                 , details = details
                                 }
 
-                            type_ : TIState MonoType
+                            type_ : StateM MonoType
                             type_ =
                                 typeAlias.typeAnnotation
                                     |> Node.value
@@ -683,7 +668,7 @@ gatherTypeAliases ctx file =
 
                             -- A record type alias also gets a constructor function
                             -- (eg. `type alias Foo = { a : Int }` lets you write `Foo 1`).
-                            registerConstructor : MonoType -> TIState ()
+                            registerConstructor : MonoType -> StateM ()
                             registerConstructor aliasMono =
                                 case Node.value typeAlias.typeAnnotation of
                                     TypeAnnotation.Record fields ->
@@ -712,17 +697,15 @@ gatherTypeAliases ctx file =
                                     _ ->
                                         State.pure ()
                         in
-                        State.do type_ <|
-                            \type__ ->
-                                State.do (registerConstructor type__) <|
-                                    \() ->
-                                        State.pure <|
-                                            Just
-                                                ( ( "", moduleName, Node.value typeAlias.name )
-                                                , { args = List.map Node.value typeAlias.generics
-                                                  , type_ = type__
-                                                  }
-                                                )
+                        State.do type_ <| \type__ ->
+                        State.do (registerConstructor type__) <| \() ->
+                        State.pure <|
+                            Just
+                                ( ( "", moduleName, Node.value typeAlias.name )
+                                , { args = List.map Node.value typeAlias.generics
+                                  , type_ = type__
+                                  }
+                                )
 
                     _ ->
                         State.pure Nothing
@@ -730,7 +713,7 @@ gatherTypeAliases ctx file =
         |> State.map (Maybe.Extra.values >> Dict.fromList)
 
 
-registerConstructorsAndPorts : ModuleCtx -> File -> TIState ()
+registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
 registerConstructorsAndPorts ctx file =
     file.declarations
         |> State.traverse
@@ -752,7 +735,7 @@ registerConstructorsAndPorts ctx file =
 them in `globalEnv`. Annotations that don't resolve are skipped rather than
 failing the whole module -- this is already the degradation path.
 -}
-registerAnnotations : ModuleCtx -> File -> TIState ()
+registerAnnotations : ModuleCtx -> File -> StateM ()
 registerAnnotations ctx file =
     file.declarations
         |> State.traverse
@@ -786,7 +769,7 @@ registerCustomType :
     TypeResolver
     -> FullModuleName
     -> SyntaxType.Type
-    -> TIState ()
+    -> StateM ()
 registerCustomType resolver moduleName customType =
     let
         typeName : String
@@ -851,7 +834,7 @@ registerCustomType resolver moduleName customType =
         |> State.map (always ())
 
 
-registerPort : TypeResolver -> FullModuleName -> Signature -> TIState ()
+registerPort : TypeResolver -> FullModuleName -> Signature -> StateM ()
 registerPort resolver moduleName sig =
     let
         toError : ErrorDetails -> Error

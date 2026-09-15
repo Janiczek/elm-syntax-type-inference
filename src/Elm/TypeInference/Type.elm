@@ -1,6 +1,6 @@
 module Elm.TypeInference.Type exposing
     ( Type(..), toString, toTypeAnnotation
-    , PackageName
+    , PackageName, VarName
     )
 
 {-| A data structure representing the Elm types.
@@ -8,7 +8,7 @@ module Elm.TypeInference.Type exposing
 This module is not named `Elm.Type` because that already exists in elm/project-metadata-utils.
 
 @docs Type, toString, toTypeAnnotation
-@docs PackageName
+@docs PackageName, VarName
 
 -}
 
@@ -24,6 +24,12 @@ Comes from elm.json dependency keys.
 Empty string for the user's project.
 -}
 type alias PackageName =
+    String
+
+
+{-| An alias for var names (eg. "foobar" in `\foobar -> foobar + 1`).
+-}
+type alias VarName =
     String
 
 
