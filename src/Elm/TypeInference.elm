@@ -367,7 +367,6 @@ inferOne canSkipChecks depEnv m acc =
 -}
 type alias ModuleCtx =
     { thisIndex : ModuleIndex
-    , thisModuleName : FullModuleName
     , modules : Dict FullModuleName ModuleIndex
     , resolver : TypeResolver
     , index : ModuleLookup.Index
@@ -412,7 +411,6 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
                 importedInterfaces
     in
     { thisIndex = thisIndex
-    , thisModuleName = thisIndex.moduleName
     , modules = modules
     , resolver = ModuleLookup.typeResolverFor depEnv.index modules thisIndex
     , index = depEnv.index
@@ -508,7 +506,7 @@ moduleResult ctx outgoingAliases =
             ctx.thisIndex.exposedValues
                 |> Set.foldl
                     (\name acc ->
-                        case Dict.get ( "", ctx.thisModuleName, name ) globalEnv of
+                        case Dict.get ( "", ctx.thisIndex.moduleName, name ) globalEnv of
                             Just scheme ->
                                 Dict.insert name scheme acc
 
@@ -587,7 +585,7 @@ solveModule { canSkipChecks } ctx typeAliases file =
                                         -- Only this module's own declarations
                                         -- are being ordered here; everything
                                         -- else is already in `globalEnv`.
-                                        if resolvedModule == ctx.thisModuleName && Set.member resolvedName nodeSet then
+                                        if resolvedModule == ctx.thisIndex.moduleName && Set.member resolvedName nodeSet then
                                             Just resolvedName
 
                                         else
@@ -605,7 +603,6 @@ solveModule { canSkipChecks } ctx typeAliases file =
         inferCtx =
             { modules = ctx.modules
             , thisModule = ctx.thisIndex
-            , thisModuleName = ctx.thisModuleName
             , typeAliases = typeAliases
             , index = ctx.index
             , canSkipChecks = canSkipChecks
@@ -621,7 +618,7 @@ solveModule { canSkipChecks } ctx typeAliases file =
                         (BindingGroup.solveGroup
                             { typeAliases = typeAliases
                             , canSkipChecks = canSkipChecks
-                            , moduleName = ctx.thisModuleName
+                            , moduleName = ctx.thisIndex.moduleName
                             , declarationNames = group
                             }
                         )
@@ -642,7 +639,7 @@ gatherTypeAliases ctx file =
 
         moduleName : FullModuleName
         moduleName =
-            ctx.thisModuleName
+            ctx.thisIndex.moduleName
     in
     file.declarations
         |> State.traverse
@@ -720,10 +717,10 @@ registerConstructorsAndPorts ctx file =
             (\declNode ->
                 case Node.value declNode of
                     Declaration.CustomTypeDeclaration customType ->
-                        registerCustomType ctx.resolver ctx.thisModuleName customType
+                        registerCustomType ctx.resolver ctx.thisIndex.moduleName customType
 
                     Declaration.PortDeclaration sig ->
-                        registerPort ctx.resolver ctx.thisModuleName sig
+                        registerPort ctx.resolver ctx.thisIndex.moduleName sig
 
                     _ ->
                         State.pure ()
@@ -756,7 +753,7 @@ registerAnnotations ctx file =
 
                                     Ok monoType ->
                                         State.addGlobalBinding
-                                            ( "", ctx.thisModuleName, Elm.Syntax.Expression.Extra.functionName fn )
+                                            ( "", ctx.thisIndex.moduleName, Elm.Syntax.Expression.Extra.functionName fn )
                                             (TypeI.closeOver monoType)
 
                     _ ->

@@ -11,7 +11,7 @@ module Elm.TypeInference.Infer exposing
 
 Top-level and `let`-bound functions need to be gathered into binding groups and
 solved together for mutual recursion and let-polymorphism.
-See `topLevelMember` and `letFunctionMember`.
+See `topLevelMember` (entry point) and `letFunctionMember` (not exposed).
 
 -}
 
@@ -49,7 +49,6 @@ import Result.Extra
 type alias Ctx =
     { modules : Dict FullModuleName ModuleIndex
     , thisModule : ModuleIndex
-    , thisModuleName : FullModuleName
     , typeAliases : Dict ( PackageName, FullModuleName, VarName ) TypeAlias
     , index : ModuleLookup.Index
     , -- see `Elm.TypeInference.inferCorrectCode` vs `inferAndCheck`
@@ -63,7 +62,7 @@ unifyConfig : Ctx -> Unify.UnifyConfig
 unifyConfig ctx =
     { typeAliases = ctx.typeAliases
     , canSkipChecks = ctx.canSkipChecks
-    , moduleName = ctx.thisModuleName
+    , moduleName = ctx.thisModule.moduleName
     , declarationNames = []
     }
 
@@ -79,7 +78,7 @@ everything else carries the module with an empty group.
 -}
 toError : Ctx -> ErrorDetails -> Error
 toError ctx details =
-    { moduleName = FullModuleName.toModuleName ctx.thisModuleName
+    { moduleName = FullModuleName.toModuleName ctx.thisModule.moduleName
     , declarationNames = []
     , details = details
     }
@@ -236,7 +235,7 @@ topLevelMember ctx declNode fn =
     State.pure
         { id = declId
         , annotation = annotation
-        , install = State.addGlobalBinding ( "", ctx.thisModuleName, varName )
+        , install = State.addGlobalBinding ( "", ctx.thisModule.moduleName, varName )
         , equations =
             State.map2 (++)
                 (signatureEquations ctx declId fn.signature)
@@ -335,7 +334,7 @@ inferExpr ctx exprNode =
                 )
             <| \isLexical ->
             if isLexical then
-                State.do (State.lookupEnv ctx.thisModuleName varName) <| \varType ->
+                State.do (State.lookupEnv ctx.thisModule.moduleName varName) <| \varType ->
                 finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
 
             else
@@ -352,7 +351,7 @@ inferExpr ctx exprNode =
                         finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
 
                     Ok Nothing ->
-                        State.do (State.lookupEnv ctx.thisModuleName varName) <| \varType ->
+                        State.do (State.lookupEnv ctx.thisModule.moduleName varName) <| \varType ->
                         finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
 
                     Err details ->
@@ -578,7 +577,7 @@ inferExpr ctx exprNode =
             State.do (State.existsInEnv recordVar) <| \isLexical ->
             State.do
                 (if isLexical then
-                    State.lookupEnv ctx.thisModuleName recordVar
+                    State.lookupEnv ctx.thisModule.moduleName recordVar
 
                  else
                     lookupVarOrOperator ctx Nothing recordVar
