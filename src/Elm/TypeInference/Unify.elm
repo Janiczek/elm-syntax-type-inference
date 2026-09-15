@@ -276,30 +276,16 @@ zipRecordFields bindings1 bindings2 =
         bindings1
         bindings2
         (Just [])
-        |> Maybe.map List.reverse
 
 
-{-| `isGround1`/`isGround2` come for free from the caller's `substituteMono`
-call (`optimizations-plan.md` Step 1's groundness tracking) -- don't recompute
-them here with `Type.isParametricMono`, that would cost the same O(size) walk
-this is meant to save.
--}
 unifyMono : UnifyConfig -> Bool -> MonoType -> Bool -> MonoType -> StateM ()
 unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
     if rawT1 == rawT2 then
-        -- Always on, sound without the invariant: `_Utils_eq` starts
-        -- with a reference check, so this is O(1) whenever the two
-        -- sides are physically shared (which the ground cache makes
-        -- common).
         State.pure ()
 
     else if cfg.canSkipChecks && isGround1 && isGround2 then
-        -- Cash in the "code already compiles" invariant: two ground
-        -- types reached here only because upstream code already
-        -- agreed they unify, so skip the full structural walk below
-        -- (and even alias expansion: a ground alias arg can't expand
-        -- to something non-ground, since an alias's only free vars
-        -- are its args).
+        -- Two ground types, we can assume they agree!
+        -- (As the Elm compiler presumably already checked they agree.)
         let
             ( pubT1, pubT2 ) =
                 Type.toPublicPair rawT1 rawT2
@@ -359,7 +345,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             recordVsExtensible recordFields er =
                 let
                     ( residual, matchedEqs, matchedCount ) =
-                        Dict.foldr
+                        Dict.foldl
                             (\k v ( res, eqs, n ) ->
                                 case Dict.get k er.fields of
                                     Just ev ->
@@ -478,7 +464,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
                 {- Fields that only one side mentions must be added to the other
                    side's required fields.
-                   Both sides' extensible record typevars (the r in { r | ... })
+                   Both sides' extension typevars (the r in { r | ... })
                    now need to be the same var.
 
                    ie.
@@ -489,7 +475,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                    - sum : { commonVar | x : Float, y : Float } -> Float
                 -}
                 let
-                    ( onlyIn1, onlyIn2, sharedEqsReversed ) =
+                    ( onlyIn1, onlyIn2, sharedEqs ) =
                         Dict.merge
                             (\k v ( o1, o2, eqs ) ->
                                 ( Dict.insert k v o1
@@ -512,10 +498,6 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                             r1.fields
                             r2.fields
                             ( Dict.empty, Dict.empty, [] )
-
-                    sharedEqs : List ( MonoType, MonoType )
-                    sharedEqs =
-                        List.reverse sharedEqsReversed
                 in
                 if Dict.isEmpty onlyIn1 && Dict.isEmpty onlyIn2 then
                     {- Same field set on both sides -> the `r` in `{r | ...}`
@@ -524,29 +506,28 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                 else
-                    State.do State.getNextIdAndTick <|
-                        \tailId ->
-                            let
-                                tail : MonoType
-                                tail =
-                                    Type.id_ tailId
-                            in
-                            unifyMany
-                                cfg
-                                (( r1.extensionTypevar
-                                 , ExtensibleRecord
+                    State.do State.getNextIdAndTick <| \tailId ->
+                    let
+                        tail : MonoType
+                        tail =
+                            Type.id_ tailId
+                    in
+                    unifyMany
+                        cfg
+                        (( r1.extensionTypevar
+                         , ExtensibleRecord
+                            { extensionTypevar = tail
+                            , fields = onlyIn2
+                            }
+                         )
+                            :: ( r2.extensionTypevar
+                               , ExtensibleRecord
                                     { extensionTypevar = tail
-                                    , fields = onlyIn2
+                                    , fields = onlyIn1
                                     }
-                                 )
-                                    :: ( r2.extensionTypevar
-                                       , ExtensibleRecord
-                                            { extensionTypevar = tail
-                                            , fields = onlyIn1
-                                            }
-                                       )
-                                    :: sharedEqs
-                                )
+                               )
+                            :: sharedEqs
+                        )
 
             ( ExtensibleRecord er, Record r ) ->
                 recordVsExtensible r.fields er
@@ -585,12 +566,8 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                 typeMismatch ()
 
 
-{-| Merge `typeVar`'s equivalence class with `type_`.
-
-Both sides arrive already substituted, so `typeVar` is the root of its class
-and unbound -- exactly what union-find needs to link or bind without creating a
-cycle.
-
+{-| Binds an unbound typeVar root with a given monotype.
+Both are already substituted.
 -}
 bind : UnifyConfig -> TypeVar -> MonoType -> StateM ()
 bind cfg typeVar type_ =
@@ -629,16 +606,8 @@ bind cfg typeVar type_ =
 
                     Just m ->
                         if m == super && m == otherSuper then
-                            -- Same constraint, so either could represent the
-                            -- class -- except that a `Named` var is not unique
-                            -- the way a `Generated` one is: two unrelated
-                            -- declarations can both write `a` in a signature,
-                            -- and an alias body can mention one free. Making
-                            -- such a var the
-                            -- representative would bind it for _every_
-                            -- same-named var in the project. Generated ids
-                            -- can't collide, so they always win; between two
-                            -- of a kind, union-find rank decides.
+                            -- Either could be chosen as then parent (linked to),
+                            -- but we prefer Generated ids as they can't collide.
                             State.modifySubst <|
                                 case ( Tuple.first typeVar, Tuple.first otherVar ) of
                                     ( Named _, Generated _ ) ->
@@ -651,8 +620,7 @@ bind cfg typeVar type_ =
                                         SubstitutionMap.union typeVar otherVar
 
                         else if m == otherSuper then
-                            -- otherVar is strictly more constrained than
-                            -- typeVar; it has to be the representative.
+                            -- otherVar is more constrained -> it will be the `parent` representative.
                             State.modifySubst (SubstitutionMap.linkTo { child = typeVar, parent = otherVar })
 
                         else if m == super then
@@ -662,17 +630,16 @@ bind cfg typeVar type_ =
                             -- eg. Comparable and Appendable
                             -- introduce fresh var with combined constraint
                             -- point both at it
-                            State.do State.getNextIdAndTick <|
-                                \freshId ->
-                                    let
-                                        fresh : TypeVar
-                                        fresh =
-                                            ( Generated freshId, m )
-                                    in
-                                    State.modifySubst
-                                        (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                            >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
-                                        )
+                            State.do State.getNextIdAndTick <| \freshId ->
+                            let
+                                fresh : TypeVar
+                                fresh =
+                                    ( Generated freshId, m )
+                            in
+                            State.modifySubst
+                                (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                    >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                                )
 
             _ ->
                 if cfg.canSkipChecks || accepts cfg.typeAliases super type_ then
@@ -783,10 +750,6 @@ accepts typeAliases super type_ =
             isComparable typeAliases type_ && isAppendable typeAliases type_
 
 
-{-| `type_` may contain aliases anywhere in its structure (eg. a tuple element
-that's a `type alias ModuleName = List String`), not just at the top: expand
-before every pattern match, not just once on the way in.
--}
 isComparable : TypeAliases -> MonoType -> Bool
 isComparable typeAliases type_ =
     case expandAlias typeAliases type_ of
