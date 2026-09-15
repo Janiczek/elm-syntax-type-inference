@@ -7,12 +7,12 @@ module Elm.TypeInference.Type.Internal exposing
     , collapseExtensible
     , collapsePrimitive
     , external
-    , freeVarsMono
     , fromTypeAnnotation
     , fromTypeAnnotationError
     , id_
     , mapVarsMono
     , mono
+    , monoTypeVars
     , number_
     , toPublicPair
     , toPublicType
@@ -65,10 +65,21 @@ number_ theId =
     TypeVar ( Generated theId, Number )
 
 
+{-| A more truthful / detailed representation of types.
+For example, it deals with type schemes (these `forall`s)!
+
+These are mainly helpful for let polymorphism and not much more. Stupid feature.
+It brings baggage like generalization and instantiation, so that your
+`id : x -> x` can be used for two calls `(id 0, id "x")` separately without
+throwing an error that type of 0 !== type of "x".
+
+-}
 type Type
     = Forall (List TypeVar) MonoType
 
 
+{-| At least monotypes always only deal with monotypes...
+-}
 type MonoType
     = TypeVar TypeVar
     | Function
@@ -256,21 +267,28 @@ recurse f type_ =
                 }
 
 
-freeVarsMono : MonoType -> VarSet
-freeVarsMono type_ =
-    freeVarsMonoHelp type_ VarSet.empty
+{-| Collect every type variable occurring in a monotype.
 
+Returns them backwards to later insert into VarSet backwards,
+so that they're there in order of first appearance,
+SO THAT `normalize` can give us `a -> b -> a` instead of `b -> a -> b`.
 
-{-| Note: this walks the type backwards to insert into VarSet in a specific
-order (the order of first appearance, to play nice with `normalize` - #0, #1,
-a, b, ...)
+Used to decide which variables to quantify in `generalize` (those not already
+free in the environment) and in `State.generalizeWith` (those above the current
+let-rank).
+
 -}
-freeVarsMonoHelp : MonoType -> VarSet -> VarSet
-freeVarsMonoHelp type_ acc =
+monoTypeVars : MonoType -> VarSet
+monoTypeVars type_ =
+    monoTypeVarsHelp type_ VarSet.empty
+
+
+monoTypeVarsHelp : MonoType -> VarSet -> VarSet
+monoTypeVarsHelp type_ acc =
     let
         inFields : Dict VarName MonoType -> VarSet -> VarSet
         inFields fields acc_ =
-            Dict.foldr (\_ fieldType -> freeVarsMonoHelp fieldType) acc_ fields
+            Dict.foldr (\_ fieldType -> monoTypeVarsHelp fieldType) acc_ fields
     in
     case type_ of
         TypeVar typeVar ->
@@ -278,8 +296,8 @@ freeVarsMonoHelp type_ acc =
 
         Function { from, to } ->
             acc
-                |> freeVarsMonoHelp to
-                |> freeVarsMonoHelp from
+                |> monoTypeVarsHelp to
+                |> monoTypeVarsHelp from
 
         Int ->
             acc
@@ -297,21 +315,21 @@ freeVarsMonoHelp type_ acc =
             acc
 
         List listItemType ->
-            freeVarsMonoHelp listItemType acc
+            monoTypeVarsHelp listItemType acc
 
         Unit ->
             acc
 
         Tuple2 t1 t2 ->
             acc
-                |> freeVarsMonoHelp t2
-                |> freeVarsMonoHelp t1
+                |> monoTypeVarsHelp t2
+                |> monoTypeVarsHelp t1
 
         Tuple3 t1 t2 t3 ->
             acc
-                |> freeVarsMonoHelp t3
-                |> freeVarsMonoHelp t2
-                |> freeVarsMonoHelp t1
+                |> monoTypeVarsHelp t3
+                |> monoTypeVarsHelp t2
+                |> monoTypeVarsHelp t1
 
         Record { fields } ->
             inFields fields acc
@@ -319,10 +337,10 @@ freeVarsMonoHelp type_ acc =
         ExtensibleRecord r ->
             acc
                 |> inFields r.fields
-                |> freeVarsMonoHelp r.extensionTypevar
+                |> monoTypeVarsHelp r.extensionTypevar
 
         UserDefinedType r ->
-            List.foldr freeVarsMonoHelp acc r.args
+            List.foldr monoTypeVarsHelp acc r.args
 
         WebGLShader r ->
             acc
@@ -331,32 +349,68 @@ freeVarsMonoHelp type_ acc =
                 |> inFields r.attributes
 
 
+{-|
+
+     a -> List b
+     --> Forall [ a, b ] (a -> List b)
+
+Useful for types that can't interact with a lexical environment, eg. type
+annotations, constructors, aliases, ports, dependency types.
+
+Global environment is supposed to only ever hold closed schemes (no free
+typevars), for State.lookupGlobalEnv to be able to instantiate them directly
+without substitution.
+
+Note that State.generalizeWith (used for let-bound locals) uses let-rank to
+decide what to close over.
+
+-}
 closeOver : MonoType -> Type
 closeOver monoType =
     monoType
         |> generalize VarSet.empty
 
 
+{-| Put bound vars into the Forall.
+
+    generalize {a} (a -> b)
+    --> Forall [b] (a -> b)
+
+Meaning `a` stays free (belongs to the environment) but `b` is bound.
+
+-}
 generalize : VarSet -> MonoType -> Type
 generalize envFreeVars monoType =
     let
         boundIds : List TypeVar
         boundIds =
             VarSet.diff
-                (freeVarsMono monoType)
+                (monoTypeVars monoType)
                 envFreeVars
                 |> VarSet.toList
     in
     Forall boundIds monoType
 
 
+{-| Rename IDs to be as minimal as possible.
+
+     a -> x
+     --> a -> b
+
+     b -> c -> b
+     --> a -> b -> a
+
+     number3 -> number4
+     --> number -> number1
+
+-}
 normalize : Type -> Type
 normalize ((Forall boundVars monoType) as type_) =
     let
         allVars : List TypeVar
         allVars =
             VarSet.union
-                (freeVarsMono monoType)
+                (monoTypeVars monoType)
                 (VarSet.fromList boundVars)
                 |> VarSet.toList
 
@@ -462,14 +516,10 @@ mapVars fn (Forall boundVars monoType) =
     Forall (List.map fn boundVars) (mapVarsMono fn monoType)
 
 
-{-| Replace every var **once**, simultaneously -- no chain following.
+{-| Map every var **once**, simultaneously, without chain-following.
 
-That matters for `State.instantiate`: the fresh vars it maps a scheme's bound
-vars to are drawn from the id counter of the module being inferred, while the
-scheme's own bound ids come from whichever module defined it. The two id spaces
-overlap, so a fresh id can collide with another bound id of the same scheme. A
-chain-following substitution would then rename twice and collapse two distinct
-quantified variables into one.
+This atomicity is important for instantiation; two overlapping ID spaces could
+interact weirdly otherwise.
 
 -}
 mapVarsMono : (TypeVar -> TypeVar) -> MonoType -> MonoType
@@ -482,6 +532,15 @@ mapVarsMono fn type_ =
             recurse (mapVarsMono fn) type_
 
 
+{-|
+
+    0 -> a
+    1 -> b
+    25 -> z
+    26 -> aa
+    27 -> ab
+
+-}
 ordToName : Int -> String
 ordToName n =
     let
@@ -504,7 +563,7 @@ ordToName n =
                 String.fromChar <| charFromInt i
 
             else
-                go (i // radix) ++ (String.fromChar <| charFromInt (modBy radix i))
+                go ((i // radix) - 1) ++ (String.fromChar <| charFromInt (modBy radix i))
     in
     go n
 
@@ -667,18 +726,16 @@ toPublicType { alreadyNormalized } origMono =
                 in
                 normalizedMono
     in
-    toPublicTypeAux mono_
+    toPublicTypeNormalized mono_
 
 
 {-| Convert two `MonoType`s to public `Type`s with a shared normalization.
 
 Normalizing each side independently would name distinct variables identically
-(`a` on both sides) and suggest sharing where there is none -- or rename a
-shared variable differently on each side. Normalizing `Tuple2 t1 t2` once and
-splitting keeps one naming scope for both, so equal vars stay equal and
-distinct vars stay distinct across the pair.
+(`a` on both sides) and suggest sharing where there is none, or rename a
+shared variable differently on each side.
 
-Used for type-error payloads, which always come in pairs.
+Used for type errors, where types come in pairs.
 
 -}
 toPublicPair : MonoType -> MonoType -> ( Public.Type, Public.Type )
@@ -694,13 +751,14 @@ toPublicPair t1 t2 =
             )
 
         _ ->
+            -- Shouldn't happen
             ( toPublicType { alreadyNormalized = False } t1
             , toPublicType { alreadyNormalized = False } t2
             )
 
 
-toPublicTypeAux : MonoType -> Public.Type
-toPublicTypeAux mono_ =
+toPublicTypeNormalized : MonoType -> Public.Type
+toPublicTypeNormalized mono_ =
     let
         f : MonoType -> Public.Type
         f =
@@ -761,10 +819,10 @@ toPublicTypeAux mono_ =
                             TypeVar.toString var
 
                         _ ->
-                            -- Should be impossible for compiling code;
-                            -- could happen for manually created MonoType values
-                            -- TODO should we be more explicit in the type definition? ie. TypeVar instead of MonoType in the extensible record thingy
-                            "<elm-syntax-type-inference bug: non-var as extensible record base [2]>"
+                            -- Should be impossible to trigger for users of the
+                            -- library, as they don't have access to MonoType
+                            -- constructors.
+                            "<elm-syntax-type-inference bug: non-var as extensible record base>"
                 , fields = fields |> Dict.map (\_ v -> f v)
                 }
 

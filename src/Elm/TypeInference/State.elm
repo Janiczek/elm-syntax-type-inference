@@ -619,7 +619,7 @@ generalizeWith monoType =
     let
         boundIds : List TypeVar
         boundIds =
-            Type.freeVarsMono substitutedMono
+            Type.monoTypeVars substitutedMono
                 |> VarSet.toList
                 |> List.filter
                     (\var -> SubstitutionMap.letRankOf var state.subst > state.letRank)
