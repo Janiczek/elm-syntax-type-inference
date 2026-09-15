@@ -347,9 +347,7 @@ importCouldExposeValue import_ varName =
 
         ExposesExplicit e ->
             Set.member varName e.values
-                || -- Could a type in the list have brought this value in
-                   -- without naming it? Only the declarations can tell, so
-                   -- say "maybe".
+                || -- The `exposing (Foo(..))` doesn't say what's inside the `..` so we can't say for sure
                    (couldBeConstructorName varName
                         && (e.hasOpenedUnion || Set.member varName e.opaqueTypes)
                    )
@@ -381,11 +379,6 @@ couldBeConstructorName varName =
 
 
 {-| Every module aliased to the given name, in import order.
-
-The same alias can be given to more than one import (e.g. `import Svg as S` and
-`import Internal.Svg as S`); Elm allows that as long as each individual
-reference stays unambiguous, so callers have to try them all.
-
 -}
 modulesWithAlias : ModuleIndex -> String -> List FullModuleName
 modulesWithAlias index wantedAlias =
