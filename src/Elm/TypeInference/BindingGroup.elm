@@ -27,51 +27,46 @@ type alias Member =
 
 solveGroup : UnifyConfig -> List Member -> TIState ()
 solveGroup cfg members =
-    State.do State.enterLevel <|
-        \() ->
-            State.do
+    State.do
+        (State.withDeeperLetRank
+            (State.do
                 (State.traverse
                     (\member ->
-                        State.do (State.setIdLevel member.id) <|
-                            \() ->
-                                case member.maybeAnnotation of
-                                    Just scheme ->
-                                        member.install scheme
+                        State.do (State.setIdToCurrentLetRank member.id) <| \() ->
+                        case member.maybeAnnotation of
+                            Just scheme ->
+                                member.install scheme
 
-                                    Nothing ->
-                                        member.install (Type.mono (Type.id_ member.id))
+                            Nothing ->
+                                member.install (Type.mono (Type.id_ member.id))
                     )
                     members
                 )
-            <|
-                \_ ->
-                    State.do (State.traverse .equations members) <|
-                        \eqLists ->
-                            let
-                                droppedEqs : List ( MonoType, MonoType )
-                                droppedEqs =
-                                    eqLists
-                                        |> List.concat
-                                        |> List.map TypeEquation.dropLabel
-                            in
-                            State.do (Unify.unifyMany cfg droppedEqs) <|
-                                \() ->
-                                    State.do State.leaveLevel <|
-                                        \() ->
-                                            State.do
-                                                (State.traverse
-                                                    (\member ->
-                                                        case member.maybeAnnotation of
-                                                            Just _ ->
-                                                                State.pure ()
+             <| \_ ->
+             State.do (State.traverse .equations members) <| \eqLists ->
+             let
+                 droppedEqs : List ( MonoType, MonoType )
+                 droppedEqs =
+                     eqLists
+                         |> List.concat
+                         |> List.map TypeEquation.dropLabel
+             in
+             Unify.unifyMany cfg droppedEqs
+            )
+        )
+    <| \() ->
+    State.do
+        (State.traverse
+            (\member ->
+                case member.maybeAnnotation of
+                    Just _ ->
+                        State.pure ()
 
-                                                            Nothing ->
-                                                                State.do (State.generalizeWith (Type.id_ member.id)) <|
-                                                                    \scheme ->
-                                                                        member.install scheme
-                                                    )
-                                                    members
-                                                )
-                                            <|
-                                                \_ ->
-                                                    State.pure ()
+                    Nothing ->
+                        State.do (State.generalizeWith (Type.id_ member.id)) <| \scheme ->
+                        member.install scheme
+            )
+            members
+        )
+    <| \_ ->
+    State.pure ()

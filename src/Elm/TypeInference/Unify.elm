@@ -85,7 +85,7 @@ unifyManyHelp cfg eqs state =
                     , lexicalEnv = state.lexicalEnv
                     , globalEnv = state.globalEnv
                     , subst = subst2
-                    , currentLevel = state.currentLevel
+                    , letRank = state.letRank
                     }
             in
             case unifyMono cfg (SubstitutionMap.resultIsGround flags1) st1 (SubstitutionMap.resultIsGround flags2) st2 state1 of

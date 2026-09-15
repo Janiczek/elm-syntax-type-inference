@@ -8,7 +8,7 @@ module Elm.TypeInference.State exposing
     , getSubst, modifySubst, substituteEquation
     , addBinding, existsInEnv, lookupEnv, withScopedEnv
     , addGlobalBinding, lookupGlobalEnv, getGlobalEnv
-    , enterLevel, leaveLevel, setIdLevel, generalizeWith, instantiate
+    , withDeeperLetRank, setIdToCurrentLetRank, generalizeWith, instantiate
     )
 
 {-| State useful during various phases of the type inference algorithm.
@@ -53,7 +53,7 @@ module Elm.TypeInference.State exposing
 
 # Generalization
 
-@docs enterLevel, leaveLevel, setIdLevel, generalizeWith, instantiate
+@docs withDeeperLetRank, setIdToCurrentLetRank, generalizeWith, instantiate
 
 -}
 
@@ -63,7 +63,7 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.VarName exposing (VarName)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
-import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (SubstitutionMap)
+import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, SubstitutionMap)
 import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, PackageName, Type(..))
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.VarSet as VarSet
@@ -110,9 +110,9 @@ type alias State =
          outer binding must survive the lambda.
       -}
       subst : SubstitutionMap
-    , -- Enclosing let-depth. Fresh vars are stamped with this; generalization
+    , -- Enclosing let-rank. Fresh vars are stamped with this; generalization
       -- quantifies vars whose stamp is strictly deeper.
-      currentLevel : Int
+      letRank : LetRank
     }
 
 
@@ -285,7 +285,7 @@ init env =
     , lexicalEnv = env.lexicalEnv
     , globalEnv = env.globalEnv
     , subst = SubstitutionMap.empty
-    , currentLevel = 0
+    , letRank = 0
     }
 
 
@@ -297,46 +297,51 @@ getNextIdAndTick =
           , nodeIds = state.nodeIds
           , lexicalEnv = state.lexicalEnv
           , globalEnv = state.globalEnv
-          , subst = SubstitutionMap.stampId state.nextId state.currentLevel state.subst
-          , currentLevel = state.currentLevel
+          , subst = SubstitutionMap.stampIdAtLetRank state.nextId state.letRank state.subst
+          , letRank = state.letRank
           }
         )
 
 
-enterLevel : TIState ()
-enterLevel =
-    modify
-        (\state ->
-            { nextId = state.nextId
-            , nodeIds = state.nodeIds
-            , lexicalEnv = state.lexicalEnv
-            , globalEnv = state.globalEnv
-            , subst = state.subst
-            , currentLevel = state.currentLevel + 1
-            }
-        )
+{-| Run `action` one let-rank deeper, then restore the let-rank.
 
+Fresh vars are stamped with the current let-rank (`getNextIdAndTick`), and
+`generalizeWith` quantifies vars deeper than the let-rank at generalization time.
+So a binding group's constraint generation and solving runs inside `withDeeperLetRank`,
+and its generalization runs after it returns.
 
-leaveLevel : TIState ()
-leaveLevel =
-    modify
-        (\state ->
-            { nextId = state.nextId
-            , nodeIds = state.nodeIds
-            , lexicalEnv = state.lexicalEnv
-            , globalEnv = state.globalEnv
-            , subst = state.subst
-            , currentLevel = state.currentLevel - 1
-            }
-        )
-
-
-{-| Move a previously allocated id to the current let-depth.
 -}
-setIdLevel : Id -> TIState ()
-setIdLevel id =
+withDeeperLetRank : TIState a -> TIState a
+withDeeperLetRank action =
+    \state ->
+        let
+            ( result, newState ) =
+                action
+                    { nextId = state.nextId
+                    , nodeIds = state.nodeIds
+                    , lexicalEnv = state.lexicalEnv
+                    , globalEnv = state.globalEnv
+                    , subst = state.subst
+                    , letRank = state.letRank + 1
+                    }
+        in
+        ( result
+        , { nextId = newState.nextId
+          , nodeIds = newState.nodeIds
+          , lexicalEnv = newState.lexicalEnv
+          , globalEnv = newState.globalEnv
+          , subst = newState.subst
+          , letRank = state.letRank
+          }
+        )
+
+
+{-| Move a previously allocated id to the current let-rank.
+-}
+setIdToCurrentLetRank : Id -> TIState ()
+setIdToCurrentLetRank id =
     do get <| \state ->
-    modifySubst (SubstitutionMap.setIdLevel id state.currentLevel)
+    modifySubst (SubstitutionMap.setIdLetRank id state.letRank)
 
 
 
@@ -375,7 +380,7 @@ aliasNodeId range theId =
             , lexicalEnv = state.lexicalEnv
             , globalEnv = state.globalEnv
             , subst = state.subst
-            , currentLevel = state.currentLevel
+            , letRank = state.letRank
             }
         )
 
@@ -402,7 +407,7 @@ modifySubst fn =
             , lexicalEnv = state.lexicalEnv
             , globalEnv = state.globalEnv
             , subst = fn state.subst
-            , currentLevel = state.currentLevel
+            , letRank = state.letRank
             }
         )
 
@@ -416,7 +421,7 @@ setSubst subst =
             , lexicalEnv = state.lexicalEnv
             , globalEnv = state.globalEnv
             , subst = subst
-            , currentLevel = state.currentLevel
+            , letRank = state.letRank
             }
         )
 
@@ -438,7 +443,7 @@ substituteMono monoType =
           , lexicalEnv = state.lexicalEnv
           , globalEnv = state.globalEnv
           , subst = subst1
-          , currentLevel = state.currentLevel
+          , letRank = state.letRank
           }
         )
 
@@ -471,7 +476,7 @@ substituteEquation t1 t2 =
           , lexicalEnv = state.lexicalEnv
           , globalEnv = state.globalEnv
           , subst = subst2
-          , currentLevel = state.currentLevel
+          , letRank = state.letRank
           }
         )
 
@@ -491,7 +496,7 @@ substitute type_ =
           , lexicalEnv = state.lexicalEnv
           , globalEnv = state.globalEnv
           , subst = subst1
-          , currentLevel = state.currentLevel
+          , letRank = state.letRank
           }
         )
 
@@ -515,7 +520,7 @@ modifyLexicalEnv fn =
             , lexicalEnv = fn state.lexicalEnv
             , globalEnv = state.globalEnv
             , subst = state.subst
-            , currentLevel = state.currentLevel
+            , letRank = state.letRank
             }
         )
 
@@ -547,7 +552,7 @@ withScopedEnv action =
           , lexicalEnv = state.lexicalEnv
           , globalEnv = newState.globalEnv
           , subst = newState.subst
-          , currentLevel = newState.currentLevel
+          , letRank = newState.letRank
           }
         )
 
@@ -600,7 +605,7 @@ addGlobalBinding key type_ =
             , lexicalEnv = state.lexicalEnv
             , globalEnv = Dict.insert key type_ state.globalEnv
             , subst = state.subst
-            , currentLevel = state.currentLevel
+            , letRank = state.letRank
             }
         )
 
@@ -689,6 +694,6 @@ generalizeWith monoType =
             Type.freeVarsMono substitutedMono
                 |> VarSet.toList
                 |> List.filter
-                    (\var -> SubstitutionMap.levelOf var state.subst > state.currentLevel)
+                    (\var -> SubstitutionMap.letRankOf var state.subst > state.letRank)
     in
     pure (Forall boundIds substitutedMono)

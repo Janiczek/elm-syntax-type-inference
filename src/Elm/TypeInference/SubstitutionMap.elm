@@ -10,7 +10,7 @@ module Elm.TypeInference.SubstitutionMap exposing
     , substituteMonoTracked
     , substituteTracked
     , Flags, resultIsGround
-    , stampId, setIdLevel, levelOf
+    , LetRank, stampIdAtLetRank, setIdLetRank, letRankOf
     )
 
 {-| The accumulated solution: a union-find store mapping type variables to the
@@ -54,7 +54,7 @@ lookup.)
 @docs substituteMonoTracked
 @docs substituteTracked
 @docs Flags, resultIsGround
-@docs stampId, setIdLevel, levelOf
+@docs LetRank, stampIdAtLetRank, setIdLetRank, letRankOf
 
 -}
 
@@ -71,15 +71,26 @@ import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.VarSet as VarSet
 
 
+{-| How deeply nested inside `let`/binding groups a type variable was created.
+
+Fresh vars are stamped with the enclosing let-rank; generalization quantifies
+vars stamped strictly higher than the rank at generalization time. (Following
+OCaml.)
+
+-}
+type alias LetRank =
+    Int
+
+
 type alias SubstitutionMap =
     { slots : Dict Key Slot
     , -- Union by rank, to keep `find` chains short.
       ranks : Dict Key Int
-    , -- Let-depth of each generated id at the moment it was created (OCaml
-      -- ranks). Lowered to the min of the two sides on unify, so
-      -- generalization can quantify "vars younger than the enclosing let"
-      -- without scanning the lexical environment.
-      levels : Dict Id Int
+    , -- Let-rank of each generated id at the moment it was created. Lowered
+      -- to the min of the two sides on unify, so generalization can quantify
+      -- "vars younger than the enclosing let" without scanning the lexical
+      -- environment.
+      letRanks : Dict Id LetRank
     }
 
 
@@ -106,7 +117,7 @@ empty : SubstitutionMap
 empty =
     { slots = Dict.empty
     , ranks = Dict.empty
-    , levels = Dict.empty
+    , letRanks = Dict.empty
     }
 
 
@@ -126,7 +137,7 @@ fromList list =
             Dict.empty
             list
     , ranks = Dict.empty
-    , levels = Dict.empty
+    , letRanks = Dict.empty
     }
 
 
@@ -163,7 +174,7 @@ findHelp store path var =
                             store.slots
                             path
                   , ranks = store.ranks
-                  , levels = store.levels
+                  , letRanks = store.letRanks
                   }
                 )
 
@@ -177,9 +188,9 @@ bindRoot : TypeVar -> MonoType -> SubstitutionMap -> SubstitutionMap
 bindRoot var type_ store =
     { slots = Dict.insert (key var) (Bound type_) store.slots
     , ranks = store.ranks
-    , levels = store.levels
+    , letRanks = store.letRanks
     }
-        |> adjustLevels (levelOf var store) type_
+        |> lowerLetRanksTo (letRankOf var store) type_
 
 
 {-| Point one root at another, with the direction chosen by the caller.
@@ -195,9 +206,9 @@ linkTo { child, parent } store =
     -- common path (`union`) free of extra dictionary work.
     { slots = Dict.insert (key child) (Link parent) store.slots
     , ranks = store.ranks
-    , levels = store.levels
+    , letRanks = store.letRanks
     }
-        |> setVarLevel parent (min (levelOf child store) (levelOf parent store))
+        |> setVarLetRank parent (min (letRankOf child store) (letRankOf parent store))
 
 
 {-| Merge two distinct unbound roots, letting rank pick the representative.
@@ -221,30 +232,30 @@ union a b store =
         rankB =
             rankOf store keyB
 
-        mergedLevel : Int
-        mergedLevel =
-            min (levelOf a store) (levelOf b store)
+        mergedLetRank : LetRank
+        mergedLetRank =
+            min (letRankOf a store) (letRankOf b store)
     in
     if rankA < rankB then
         { slots = Dict.insert keyA (Link b) store.slots
         , ranks = store.ranks
-        , levels = store.levels
+        , letRanks = store.letRanks
         }
-            |> setVarLevel b mergedLevel
+            |> setVarLetRank b mergedLetRank
 
     else if rankB < rankA then
         { slots = Dict.insert keyB (Link a) store.slots
         , ranks = store.ranks
-        , levels = store.levels
+        , letRanks = store.letRanks
         }
-            |> setVarLevel a mergedLevel
+            |> setVarLetRank a mergedLetRank
 
     else
         { slots = Dict.insert keyB (Link a) store.slots
         , ranks = Dict.insert keyA (rankA + 1) store.ranks
-        , levels = store.levels
+        , letRanks = store.letRanks
         }
-            |> setVarLevel a mergedLevel
+            |> setVarLetRank a mergedLetRank
 
 
 rankOf : SubstitutionMap -> Key -> Int
@@ -253,71 +264,71 @@ rankOf store k =
         |> Maybe.withDefault 0
 
 
-{-| Record the let-depth of a freshly allocated generated id.
+{-| Record the let-rank of a freshly allocated generated id.
 -}
-stampId : Id -> Int -> SubstitutionMap -> SubstitutionMap
-stampId id level store =
+stampIdAtLetRank : Id -> LetRank -> SubstitutionMap -> SubstitutionMap
+stampIdAtLetRank id letRank store =
     { slots = store.slots
     , ranks = store.ranks
-    , levels = Dict.insert id level store.levels
+    , letRanks = Dict.insert id letRank store.letRanks
     }
 
 
-{-| Overwrite an id's let-depth. Used when a binding-group placeholder was
-allocated before `enterLevel`.
+{-| Overwrite an id's let-rank. Used when a binding-group placeholder was
+allocated before `State.withDeeperLetRank`.
 -}
-setIdLevel : Id -> Int -> SubstitutionMap -> SubstitutionMap
-setIdLevel =
-    stampId
+setIdLetRank : Id -> LetRank -> SubstitutionMap -> SubstitutionMap
+setIdLetRank =
+    stampIdAtLetRank
 
 
-levelOf : TypeVar -> SubstitutionMap -> Int
-levelOf var store =
+letRankOf : TypeVar -> SubstitutionMap -> LetRank
+letRankOf var store =
     case Tuple.first var of
         TypeVar.Generated id ->
-            Dict.get id store.levels
+            Dict.get id store.letRanks
                 |> Maybe.withDefault 0
 
         TypeVar.Named _ ->
             0
 
 
-setVarLevel : TypeVar -> Int -> SubstitutionMap -> SubstitutionMap
-setVarLevel var level store =
+setVarLetRank : TypeVar -> LetRank -> SubstitutionMap -> SubstitutionMap
+setVarLetRank var letRank store =
     case Tuple.first var of
         TypeVar.Generated id ->
             { slots = store.slots
             , ranks = store.ranks
-            , levels = Dict.insert id level store.levels
+            , letRanks = Dict.insert id letRank store.letRanks
             }
 
         TypeVar.Named _ ->
             store
 
 
-{-| Lower every unbound generated var in `type_` whose level is above
-`target`. The type is assumed already substituted, so remaining `TypeVar`s are
+{-| Lower every unbound generated var in `type_` whose let-rank is above
+`targetLetRank`. The type is assumed already substituted, so remaining `TypeVar`s are
 roots.
 -}
-adjustLevels : Int -> MonoType -> SubstitutionMap -> SubstitutionMap
-adjustLevels target type_ store =
+lowerLetRanksTo : LetRank -> MonoType -> SubstitutionMap -> SubstitutionMap
+lowerLetRanksTo targetLetRank type_ store =
     let
         inFields : Dict VarName MonoType -> SubstitutionMap -> SubstitutionMap
         inFields fields acc =
-            Dict.foldl (\_ fieldType inner -> adjustLevels target fieldType inner) acc fields
+            Dict.foldl (\_ fieldType inner -> lowerLetRanksTo targetLetRank fieldType inner) acc fields
     in
     case type_ of
         TypeVar var ->
-            if levelOf var store > target then
-                setVarLevel var target store
+            if letRankOf var store > targetLetRank then
+                setVarLetRank var targetLetRank store
 
             else
                 store
 
         Function { from, to } ->
             store
-                |> adjustLevels target from
-                |> adjustLevels target to
+                |> lowerLetRanksTo targetLetRank from
+                |> lowerLetRanksTo targetLetRank to
 
         Int ->
             store
@@ -335,32 +346,32 @@ adjustLevels target type_ store =
             store
 
         List listItemType ->
-            adjustLevels target listItemType store
+            lowerLetRanksTo targetLetRank listItemType store
 
         Unit ->
             store
 
         Tuple2 t1 t2 ->
             store
-                |> adjustLevels target t1
-                |> adjustLevels target t2
+                |> lowerLetRanksTo targetLetRank t1
+                |> lowerLetRanksTo targetLetRank t2
 
         Tuple3 t1 t2 t3 ->
             store
-                |> adjustLevels target t1
-                |> adjustLevels target t2
-                |> adjustLevels target t3
+                |> lowerLetRanksTo targetLetRank t1
+                |> lowerLetRanksTo targetLetRank t2
+                |> lowerLetRanksTo targetLetRank t3
 
         Record { fields } ->
             inFields fields store
 
         ExtensibleRecord r ->
             store
-                |> adjustLevels target r.extensionTypevar
+                |> lowerLetRanksTo targetLetRank r.extensionTypevar
                 |> inFields r.fields
 
         UserDefinedType r ->
-            List.foldl (adjustLevels target) store r.args
+            List.foldl (lowerLetRanksTo targetLetRank) store r.args
 
         WebGLShader r ->
             store
@@ -400,7 +411,7 @@ substituteTracked store (Forall boundVars monoType) =
                                 ( True
                                 , { slots = Dict.remove (key var) acc.slots
                                   , ranks = acc.ranks
-                                  , levels = acc.levels
+                                  , letRanks = acc.letRanks
                                   }
                                 )
 
@@ -500,7 +511,7 @@ substituteMonoTracked store monoType =
                             , groundAndChanged
                             , { slots = Dict.insert k (Ground groundType) store1.slots
                               , ranks = store1.ranks
-                              , levels = store1.levels
+                              , letRanks = store1.letRanks
                               }
                             )
 
@@ -736,7 +747,7 @@ resolveBound store k bound =
           Bitwise.or flags changedFlag
         , { slots = Dict.insert k slot store1.slots
           , ranks = store1.ranks
-          , levels = store1.levels
+          , letRanks = store1.letRanks
           }
         )
 
