@@ -70,10 +70,10 @@ unifyManyHelp cfg eqs state =
         ( t1, t2 ) :: rest ->
             let
                 ( st1, flags1, subst1 ) =
-                    SubstitutionMap.substituteMonoTracked state.subst t1
+                    SubstitutionMap.substituteMono state.subst t1
 
                 ( st2, flags2, subst2 ) =
-                    SubstitutionMap.substituteMonoTracked subst1 t2
+                    SubstitutionMap.substituteMono subst1 t2
 
                 state1 : State.State
                 state1 =
@@ -85,7 +85,7 @@ unifyManyHelp cfg eqs state =
                     , letRank = state.letRank
                     }
             in
-            case unifyMono cfg (SubstitutionMap.resultIsGround flags1) st1 (SubstitutionMap.resultIsGround flags2) st2 state1 of
+            case unifyMono cfg (SubstitutionMap.isGround flags1) st1 (SubstitutionMap.isGround flags2) st2 state1 of
                 ( Err err, newState ) ->
                     ( Err err, newState )
 
@@ -685,7 +685,7 @@ bind cfg typeVar type_ =
                             -- representative would bind it for _every_
                             -- same-named var in the project. Generated ids
                             -- can't collide, so they always win; between two
-                            -- of a kind, rank decides.
+                            -- of a kind, union-find rank decides.
                             State.modifySubst <|
                                 case ( Tuple.first typeVar, Tuple.first otherVar ) of
                                     ( Named _, Generated _ ) ->

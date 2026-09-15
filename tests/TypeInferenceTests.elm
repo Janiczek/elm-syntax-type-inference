@@ -13,6 +13,7 @@ import Elm.TypeInference.Type as Type exposing (PackageName, Type(..))
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType)
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
+import Elm.TypeInference.VarSet as VarSet
 import Expect
 import String.ExtraExtra
 import Test exposing (Test)
@@ -38,6 +39,7 @@ suite =
         , unifyAliasSuite
         , comparableAliasedTupleRegression
         , substitutionMapCompressionSuite
+        , linkToRankSuite
         , composeCycleRegression
         , instantiateIdCollisionRegression
         , bindingGroupSuite
@@ -1787,9 +1789,13 @@ unifyAliasSuite =
                     ]
                     |> Result.map
                         (\subst ->
-                            SubstitutionMap.substituteMonoPure
-                                subst
-                                (TypeI.Tuple2 (generatedVar 0) (generatedVar 1))
+                            let
+                                ( res, _, _ ) =
+                                    SubstitutionMap.substituteMono
+                                        subst
+                                        (TypeI.Tuple2 (generatedVar 0) (generatedVar 1))
+                            in
+                            res
                         )
                     |> Expect.equal (Ok (TypeI.Tuple2 TypeI.Float TypeI.Float))
         , Test.test "two different uses of the same alias don't leak into each other" <|
@@ -1804,9 +1810,14 @@ unifyAliasSuite =
                     ]
                     |> Result.map
                         (\subst ->
-                            ( SubstitutionMap.substituteMonoPure subst (generatedVar 0)
-                            , SubstitutionMap.substituteMonoPure subst (generatedVar 2)
-                            )
+                            let
+                                ( res0, _, _ ) =
+                                    SubstitutionMap.substituteMono subst (generatedVar 0)
+
+                                ( res2, _, _ ) =
+                                    SubstitutionMap.substituteMono subst (generatedVar 2)
+                            in
+                            ( res0, res2 )
                         )
                     |> Expect.equal (Ok ( TypeI.Float, TypeI.Char ))
         , Test.test "a Pair Float does not unify with (Float, Char)" <|
@@ -1861,7 +1872,7 @@ comparableAliasedTupleRegression =
 
 
 {-| `optimizations-plan.md` Step 1: path compression must not jump _over_ a
-quantified var. `SubstitutionMap.substituteTracked` removes the scheme's bound ids
+quantified var. `SubstitutionMap.substitute` removes the scheme's bound ids
 from the map's domain before substituting the body, precisely so a chain
 resolution stops there instead of continuing on to whatever the bound var
 would otherwise point at outside the map. This assumes a quantified var is
@@ -1890,13 +1901,232 @@ substitutionMapCompressionSuite =
     Test.describe "SubstitutionMap: path compression stops at quantified vars"
         [ Test.test "substituting outside any scheme resolves the whole chain" <|
             \() ->
-                SubstitutionMap.substituteMonoPure subst (TypeI.TypeVar a)
+                let
+                    ( res, _, _ ) =
+                        SubstitutionMap.substituteMono subst (TypeI.TypeVar a)
+                in
+                res
                     |> Expect.equal TypeI.Int
         , Test.test "substituting a scheme quantified over `b` stops the chain at `b`" <|
             \() ->
-                SubstitutionMap.substituteTracked subst (TypeI.Forall [ b ] (TypeI.TypeVar a))
+                SubstitutionMap.substitute subst (TypeI.Forall [ b ] (TypeI.TypeVar a))
                     |> Tuple.first
                     |> Expect.equal (TypeI.Forall [ b ] (TypeI.TypeVar b))
+        ]
+
+
+{-| `linkTo` deliberately skips union-find rank bookkeeping (perf heuristic only)
+but must still maintain let-ranks (generalization correctness).
+
+Naming convention below: `letRank*` = generalization scope depth,
+`unionFindRank*` = tree-height heuristic. They are unrelated.
+
+-}
+linkToRankSuite : Test
+linkToRankSuite =
+    let
+        childVar : TypeVar
+        childVar =
+            ( TypeVar.Generated 10, TypeVar.Normal )
+
+        parentVar : TypeVar
+        parentVar =
+            ( TypeVar.Generated 11, TypeVar.Normal )
+
+        resolve : SubstitutionMap.SubstitutionMap -> TypeVar -> MonoType
+        resolve subst var =
+            SubstitutionMap.substituteMono subst (TypeI.TypeVar var)
+                |> (\( res, _, _ ) -> res)
+
+        unionFindRankOfVar : SubstitutionMap.SubstitutionMap -> TypeVar -> Int
+        unionFindRankOfVar subst var =
+            SubstitutionMap.unionFindRankOf subst (VarSet.varKey var)
+    in
+    Test.describe "SubstitutionMap: linkTo rank handling"
+        [ Test.test "linkTo resolves child to parent" <|
+            \() ->
+                SubstitutionMap.empty
+                    |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
+                    |> (\subst -> resolve subst childVar)
+                    |> Expect.equal (TypeI.TypeVar parentVar)
+        , Test.test "linkTo leaves union-find ranks at 0 (intentionally skipped)" <|
+            \() ->
+                let
+                    subst : SubstitutionMap.SubstitutionMap
+                    subst =
+                        SubstitutionMap.empty
+                            |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
+                in
+                ( unionFindRankOfVar subst childVar
+                , unionFindRankOfVar subst parentVar
+                )
+                    |> Expect.equal ( 0, 0 )
+        , Test.test "linkTo lowers parent let-rank to min when child is outer" <|
+            \() ->
+                let
+                    childLetRank : Int
+                    childLetRank =
+                        0
+
+                    parentLetRank : Int
+                    parentLetRank =
+                        5
+
+                    subst : SubstitutionMap.SubstitutionMap
+                    subst =
+                        SubstitutionMap.empty
+                            |> SubstitutionMap.stampIdAtLetRank 10 childLetRank
+                            |> SubstitutionMap.stampIdAtLetRank 11 parentLetRank
+                            |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
+                in
+                SubstitutionMap.letRankOf parentVar subst
+                    |> Expect.equal (min childLetRank parentLetRank)
+        , Test.test "linkTo lowers parent let-rank to min when parent is outer" <|
+            \() ->
+                let
+                    childLetRank : Int
+                    childLetRank =
+                        7
+
+                    parentLetRank : Int
+                    parentLetRank =
+                        2
+
+                    subst : SubstitutionMap.SubstitutionMap
+                    subst =
+                        SubstitutionMap.empty
+                            |> SubstitutionMap.stampIdAtLetRank 10 childLetRank
+                            |> SubstitutionMap.stampIdAtLetRank 11 parentLetRank
+                            |> SubstitutionMap.linkTo { child = childVar, parent = parentVar }
+                in
+                SubstitutionMap.letRankOf parentVar subst
+                    |> Expect.equal (min childLetRank parentLetRank)
+        , Test.test "linkTo chain resolves to ultimate parent despite union-find ranks staying 0" <|
+            \() ->
+                let
+                    middleVar : TypeVar
+                    middleVar =
+                        ( TypeVar.Generated 11, TypeVar.Normal )
+
+                    outerVar : TypeVar
+                    outerVar =
+                        ( TypeVar.Generated 12, TypeVar.Normal )
+
+                    subst : SubstitutionMap.SubstitutionMap
+                    subst =
+                        SubstitutionMap.empty
+                            |> SubstitutionMap.linkTo { child = childVar, parent = middleVar }
+                            |> SubstitutionMap.linkTo { child = middleVar, parent = outerVar }
+                in
+                ( resolve subst childVar
+                , ( unionFindRankOfVar subst childVar
+                  , unionFindRankOfVar subst middleVar
+                  , unionFindRankOfVar subst outerVar
+                  )
+                )
+                    |> Expect.equal
+                        ( TypeI.TypeVar outerVar
+                        , ( 0, 0, 0 )
+                        )
+        , Test.test "union bumps union-find rank on equal merge and merges let-ranks to min" <|
+            \() ->
+                let
+                    aVar : TypeVar
+                    aVar =
+                        ( TypeVar.Generated 20, TypeVar.Normal )
+
+                    bVar : TypeVar
+                    bVar =
+                        ( TypeVar.Generated 21, TypeVar.Normal )
+
+                    subst : SubstitutionMap.SubstitutionMap
+                    subst =
+                        SubstitutionMap.empty
+                            |> SubstitutionMap.stampIdAtLetRank 20 3
+                            |> SubstitutionMap.stampIdAtLetRank 21 7
+                            |> SubstitutionMap.union aVar bVar
+                in
+                -- Equal union-find ranks: `union a b` links b -> a and bumps a to 1.
+                ( resolve subst bVar
+                , SubstitutionMap.letRankOf aVar subst
+                , unionFindRankOfVar subst aVar
+                )
+                    |> Expect.equal ( TypeI.TypeVar aVar, 3, 1 )
+        , Test.test "union lets taller union-find tree win (contrast: linkTo direction is forced)" <|
+            \() ->
+                let
+                    aVar : TypeVar
+                    aVar =
+                        ( TypeVar.Generated 20, TypeVar.Normal )
+
+                    bVar : TypeVar
+                    bVar =
+                        ( TypeVar.Generated 21, TypeVar.Normal )
+
+                    cVar : TypeVar
+                    cVar =
+                        ( TypeVar.Generated 22, TypeVar.Normal )
+
+                    subst : SubstitutionMap.SubstitutionMap
+                    subst =
+                        SubstitutionMap.empty
+                            |> SubstitutionMap.union aVar bVar
+                            |> SubstitutionMap.union aVar cVar
+                in
+                -- After the first union a has union-find rank 1, c has 0,
+                -- so the second union must attach c under a.
+                resolve subst cVar
+                    |> Expect.equal (TypeI.TypeVar aVar)
+        , Test.test "unify Normal with Number keeps the more constrained parent" <|
+            \() ->
+                let
+                    normalMono : MonoType
+                    normalMono =
+                        TypeI.TypeVar ( TypeVar.Generated 30, TypeVar.Normal )
+
+                    numberMono : MonoType
+                    numberMono =
+                        TypeI.TypeVar ( TypeVar.Generated 31, TypeVar.Number )
+                in
+                runUnify Dict.empty [ ( normalMono, numberMono ) ]
+                    |> Result.map
+                        (\subst ->
+                            ( resolve subst ( TypeVar.Generated 30, TypeVar.Normal )
+                            , resolve subst ( TypeVar.Generated 31, TypeVar.Number )
+                            )
+                        )
+                    |> Expect.equal (Ok ( numberMono, numberMono ))
+        , Test.test "unify Comparable with Appendable resolves both to one fresh CompAppend var" <|
+            \() ->
+                let
+                    comparableMono : MonoType
+                    comparableMono =
+                        TypeI.TypeVar ( TypeVar.Generated 30, TypeVar.Comparable )
+
+                    appendableMono : MonoType
+                    appendableMono =
+                        TypeI.TypeVar ( TypeVar.Generated 31, TypeVar.Appendable )
+                in
+                runUnify Dict.empty [ ( comparableMono, appendableMono ) ]
+                    |> Result.map
+                        (\subst ->
+                            let
+                                resA : MonoType
+                                resA =
+                                    resolve subst ( TypeVar.Generated 30, TypeVar.Comparable )
+
+                                resB : MonoType
+                                resB =
+                                    resolve subst ( TypeVar.Generated 31, TypeVar.Appendable )
+                            in
+                            case ( resA, resB ) of
+                                ( TypeI.TypeVar ( TypeVar.Generated freshIdA, superA ), TypeI.TypeVar ( TypeVar.Generated freshIdB, superB ) ) ->
+                                    ( freshIdA == freshIdB, superA, superB )
+
+                                _ ->
+                                    ( False, TypeVar.Normal, TypeVar.Normal )
+                        )
+                    |> Expect.equal (Ok ( True, TypeVar.CompAppend, TypeVar.CompAppend ))
         ]
 
 
@@ -1954,9 +2184,14 @@ composeCycleRegression =
             runUnify Dict.empty [ ( a, b ), ( b, a ) ]
                 |> Result.map
                     (\subst ->
-                        ( SubstitutionMap.substituteMonoPure subst a
-                        , SubstitutionMap.substituteMonoPure subst b
-                        )
+                        let
+                            ( resA, _, _ ) =
+                                SubstitutionMap.substituteMono subst a
+
+                            ( resB, _, _ ) =
+                                SubstitutionMap.substituteMono subst b
+                        in
+                        ( resA, resB )
                     )
                 |> Expect.equal (Ok ( a, a ))
 

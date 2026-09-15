@@ -395,7 +395,7 @@ substituteMono : MonoType -> TIState MonoType
 substituteMono monoType =
     \state ->
         let
-            ( monoType_, subst1 ) =
+            ( monoType_, _, subst1 ) =
                 SubstitutionMap.substituteMono state.subst monoType
         in
         ( Ok monoType_
@@ -416,7 +416,7 @@ substitute type_ =
     \state ->
         let
             ( type__, subst1 ) =
-                SubstitutionMap.substituteTracked state.subst type_
+                SubstitutionMap.substitute state.subst type_
         in
         ( Ok type__
         , { nextId = state.nextId

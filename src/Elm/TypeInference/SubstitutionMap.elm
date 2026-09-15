@@ -4,17 +4,16 @@ module Elm.TypeInference.SubstitutionMap exposing
     , SubstitutionMap
     , bindRoot
     , empty
+    , isGround
     , letRankOf
     , linkTo
-    , resultIsGround
     , setIdLetRank
     , stampIdAtLetRank
+    , substitute
     , substituteMono
-    , substituteMonoPure
-    , substituteMonoTracked
-    , substituteTracked
     , test_fromList
     , union
+    , unionFindRankOf
     )
 
 {-| A dict mapping type variables to the inferred types.
@@ -39,11 +38,13 @@ import Elm.TypeInference.VarSet as VarSet exposing (VarKey)
 type alias SubstitutionMap =
     { -- Each var's data
       slots : Dict VarKey Slot
-    , -- Union-find rank per root (missing = 0): approx tree height,
-      -- bumped on equal-rank merge to keep `find` chains short.
-      ranks : Dict VarKey Int
+    , -- Union-find rank per root (missing = 0): approximate tree height,
+      -- bumped on equal-union-find-rank merge to keep `find` chains short.
+      -- Performance heuristic.
+      unionFindRanks : Dict VarKey Int
     , -- Let-rank of each generated id at the moment it was created.
       -- Lowered to min(side1,side2) on unify.
+      -- Important for "business logic": `State.generalizeWith` quantifies vars above current let-rank.
       letRanks : Dict Id LetRank
     }
 
@@ -51,14 +52,18 @@ type alias SubstitutionMap =
 empty : SubstitutionMap
 empty =
     { slots = Dict.empty
-    , ranks = Dict.empty
+    , unionFindRanks = Dict.empty
     , letRanks = Dict.empty
     }
 
 
 {-| How deeply nested inside `let`/binding groups a type variable was created.
-Thet let-rank of newly created vars is remembered into SubstitutionMap.letRanks.
-Generalization only touches vars above the current rank.
+The let-rank of newly created vars is remembered into SubstitutionMap.letRanks.
+Generalization only touches vars above the current let-rank.
+
+This is unrelated to the union-find rank (`unionFindRanks`), which only
+approximates tree height to keep `find` chains short.
+
 -}
 type alias LetRank =
     Int
@@ -130,28 +135,38 @@ both a b =
 -- UNION-FIND
 
 
-findHelp : SubstitutionMap -> List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
-findHelp store path var =
-    case Dict.get (VarSet.varKey var) store.slots of
-        Just (Link next) ->
-            findHelp store (var :: path) next
+{-| Follow `Link`s to the root + compress the path.
 
-        _ ->
-            if List.isEmpty path then
-                -- No chain walked; skip work
-                ( var, store )
+Ignores union-find ranks; they are only a merge heuristic, not needed for lookup.
 
-            else
-                ( var
-                , { slots =
-                        List.foldl
-                            (\pathVar acc -> Dict.insert (VarSet.varKey pathVar) (Link var) acc)
-                            store.slots
-                            path
-                  , ranks = store.ranks
-                  , letRanks = store.letRanks
-                  }
-                )
+-}
+findRoot : SubstitutionMap -> TypeVar -> ( TypeVar, SubstitutionMap )
+findRoot store var =
+    let
+        go : List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
+        go path current =
+            case Dict.get (VarSet.varKey current) store.slots of
+                Just (Link next) ->
+                    go (current :: path) next
+
+                _ ->
+                    if List.isEmpty path then
+                        -- No chain walked; skip work
+                        ( current, store )
+
+                    else
+                        ( current
+                        , { slots =
+                                List.foldl
+                                    (\pathVar acc -> Dict.insert (VarSet.varKey pathVar) (Link current) acc)
+                                    store.slots
+                                    path
+                          , unionFindRanks = store.unionFindRanks
+                          , letRanks = store.letRanks
+                          }
+                        )
+    in
+    go [] var
 
 
 {-| Bind a root variable to a non-variable type.
@@ -162,80 +177,79 @@ The caller must have run the occurs check first (`Unify.bind` does).
 bindRoot : TypeVar -> MonoType -> SubstitutionMap -> SubstitutionMap
 bindRoot var type_ store =
     { slots = Dict.insert (VarSet.varKey var) (Bound type_) store.slots
-    , ranks = store.ranks
+    , unionFindRanks = store.unionFindRanks
     , letRanks = store.letRanks
     }
         |> lowerLetRanksTo (letRankOf var store) type_
 
 
-{-| Point one root at another, with the direction chosen by the caller.
+{-| Point one root at another.
 
-Used when the two variables carry different typeclass constraints and the more
-constrained one has to win, regardless of rank.
+Used when the two variables carry different typeclass constraints
+and the more constrained one has to win.
 
 -}
 linkTo : { child : TypeVar, parent : TypeVar } -> SubstitutionMap -> SubstitutionMap
 linkTo { child, parent } store =
-    -- No rank bookkeeping: constraints only differ between two vars rarely, so
-    -- leaving these classes at rank 0 costs nothing measurable and keeps the
-    -- common path (`union`) free of extra dictionary work.
     { slots = Dict.insert (VarSet.varKey child) (Link parent) store.slots
-    , ranks = store.ranks
+    , unionFindRanks = store.unionFindRanks
     , letRanks = store.letRanks
     }
         |> setVarLetRank parent (min (letRankOf child store) (letRankOf parent store))
 
 
-{-| Merge two distinct unbound roots, letting rank pick the representative.
+{-| Merge two distinct unbound roots, letting union-find rank pick the representative.
 -}
 union : TypeVar -> TypeVar -> SubstitutionMap -> SubstitutionMap
 union a b store =
     let
-        keyA : Key
+        keyA : VarKey
         keyA =
             VarSet.varKey a
 
-        keyB : Key
+        keyB : VarKey
         keyB =
             VarSet.varKey b
 
-        rankA : Int
-        rankA =
-            rankOf store keyA
+        unionFindRankA : Int
+        unionFindRankA =
+            unionFindRankOf store keyA
 
-        rankB : Int
-        rankB =
-            rankOf store keyB
+        unionFindRankB : Int
+        unionFindRankB =
+            unionFindRankOf store keyB
 
         mergedLetRank : LetRank
         mergedLetRank =
             min (letRankOf a store) (letRankOf b store)
     in
-    if rankA < rankB then
+    if unionFindRankA < unionFindRankB then
         { slots = Dict.insert keyA (Link b) store.slots
-        , ranks = store.ranks
+        , unionFindRanks = store.unionFindRanks
         , letRanks = store.letRanks
         }
             |> setVarLetRank b mergedLetRank
 
-    else if rankB < rankA then
+    else if unionFindRankB < unionFindRankA then
         { slots = Dict.insert keyB (Link a) store.slots
-        , ranks = store.ranks
+        , unionFindRanks = store.unionFindRanks
         , letRanks = store.letRanks
         }
             |> setVarLetRank a mergedLetRank
 
     else
         { slots = Dict.insert keyB (Link a) store.slots
-        , ranks = Dict.insert keyA (rankA + 1) store.ranks
+        , unionFindRanks = Dict.insert keyA (unionFindRankA + 1) store.unionFindRanks
         , letRanks = store.letRanks
         }
             |> setVarLetRank a mergedLetRank
 
 
-rankOf : SubstitutionMap -> VarKey -> Int
-rankOf store k =
-    Dict.get k store.ranks
+{-| Union-find rank of a root (missing = 0). Tree-height heuristic only.
+-}
+unionFindRankOf : SubstitutionMap -> VarKey -> Int
+unionFindRankOf store k =
+    Dict.get k store.unionFindRanks
         |> Maybe.withDefault 0
 
 
@@ -244,7 +258,7 @@ rankOf store k =
 stampIdAtLetRank : Id -> LetRank -> SubstitutionMap -> SubstitutionMap
 stampIdAtLetRank id letRank store =
     { slots = store.slots
-    , ranks = store.ranks
+    , unionFindRanks = store.unionFindRanks
     , letRanks = Dict.insert id letRank store.letRanks
     }
 
@@ -273,7 +287,7 @@ setVarLetRank var letRank store =
     case Tuple.first var of
         TypeVar.Generated id ->
             { slots = store.slots
-            , ranks = store.ranks
+            , unionFindRanks = store.unionFindRanks
             , letRanks = Dict.insert id letRank store.letRanks
             }
 
@@ -356,23 +370,17 @@ lowerLetRanksTo targetLetRank type_ store =
 
 
 
--- SUBSTITUTION (ZONKING)
+-- SUBSTITUTION
 
 
 {-| Substitute a whole (possibly quantified) `Type`.
-
-A scheme's quantified vars must not resolve through the store: they're bound
-here, not free. They shouldn't be in the store's domain at all, but rather than
-assume it, this walks a copy with them removed -- and throws that copy away
-afterwards, so the store itself is never corrupted by the exclusion.
-
 -}
-substituteTracked : SubstitutionMap -> Type -> ( Type, SubstitutionMap )
-substituteTracked store (Forall boundVars monoType) =
+substitute : SubstitutionMap -> Type -> ( Type, SubstitutionMap )
+substitute store (Forall boundVars monoType) =
     case boundVars of
         [] ->
             let
-                ( monoType_, store1 ) =
+                ( monoType_, _, store1 ) =
                     substituteMono store monoType
             in
             ( Forall [] monoType_, store1 )
@@ -385,7 +393,7 @@ substituteTracked store (Forall boundVars monoType) =
                             if Dict.member (VarSet.varKey var) acc.slots then
                                 ( True
                                 , { slots = Dict.remove (VarSet.varKey var) acc.slots
-                                  , ranks = acc.ranks
+                                  , unionFindRanks = acc.unionFindRanks
                                   , letRanks = acc.letRanks
                                   }
                                 )
@@ -398,69 +406,33 @@ substituteTracked store (Forall boundVars monoType) =
             in
             if didIntersect then
                 let
-                    ( monoType_, _ ) =
+                    ( monoType_, _, _ ) =
                         substituteMono restricted monoType
                 in
                 ( Forall boundVars monoType_, store )
 
             else
                 let
-                    ( monoType_, store1 ) =
+                    ( monoType_, _, store1 ) =
                         substituteMono store monoType
                 in
                 ( Forall boundVars monoType_, store1 )
 
 
-{-| `Tuple.first << substituteMono`, for the one-shot renaming maps
-(`State.instantiate`) that have no chains and nothing worth caching.
+{-| Substitute all typevars in the given monotype for their inferred types.
+During this traversal we remember newly discovered ground resolutions,
+and chains get path-compressed.
 -}
-substituteMonoPure : SubstitutionMap -> MonoType -> MonoType
-substituteMonoPure store monoType =
-    Tuple.first (substituteMono store monoType)
-
-
-{-| Substitute, threading back an updated store: newly-discovered ground
-resolutions get cached, and chains get path-compressed.
--}
-substituteMono : SubstitutionMap -> MonoType -> ( MonoType, SubstitutionMap )
+substituteMono : SubstitutionMap -> MonoType -> ( MonoType, Flags, SubstitutionMap )
 substituteMono store monoType =
-    let
-        ( result, _, store1 ) =
-            substituteMonoTracked store monoType
-    in
-    ( result, store1 )
-
-
-{-| Was the substituted type var-free? See [`substituteMonoTracked`](#substituteMonoTracked).
--}
-resultIsGround : Flags -> Bool
-resultIsGround =
-    isGround
-
-
-{-| Same as `substituteMono`, but also returns flags describing the result.
-
-`isGround` falls out of the walk for free -- don't recompute it with
-`Type.isParametricMono`, that would cost the same O(size) this is meant to
-save. `isChanged` is what keeps structural sharing alive: rebuilding every
-constructor even when nothing under it moved throws away the physical identity
-that makes `Unify.unifyMono`'s `rawT1 == rawT2` fast path (a reference check
-first) actually hit, and for records it rebuilds a whole `Dict` for nothing.
-
--}
-substituteMonoTracked : SubstitutionMap -> MonoType -> ( MonoType, Flags, SubstitutionMap )
-substituteMonoTracked store monoType =
     case monoType of
         -- The main interesting part
         TypeVar var ->
             let
-                k : Key
+                k : VarKey
                 k =
                     VarSet.varKey var
             in
-            -- One dictionary lookup covers the cache, the unbound case and the
-            -- directly-bound case; `find` is inlined so only a real link chain
-            -- pays for a walk.
             case Dict.get k store.slots of
                 Nothing ->
                     -- Unbound root.
@@ -478,10 +450,10 @@ substituteMonoTracked store monoType =
                 Just (Bound bound) ->
                     resolveBound store k bound
 
-                Just (Link next) ->
+                Just (Link _) ->
                     let
                         ( root, store1 ) =
-                            findHelp store [ var ] next
+                            findRoot store var
                     in
                     case Dict.get (VarSet.varKey root) store1.slots of
                         Just (Bound bound) ->
@@ -491,14 +463,13 @@ substituteMonoTracked store monoType =
                             ( groundType
                             , groundAndChanged
                             , { slots = Dict.insert k (Ground groundType) store1.slots
-                              , ranks = store1.ranks
+                              , unionFindRanks = store1.unionFindRanks
                               , letRanks = store1.letRanks
                               }
                             )
 
                         _ ->
-                            -- Unbound root: the best we can say is which var
-                            -- this one has merged into.
+                            -- Unbound root: the best we can say is which var this one has merged into.
                             ( TypeVar root
                             , changedFlag
                             , store1
@@ -508,10 +479,10 @@ substituteMonoTracked store monoType =
         Function { from, to } ->
             let
                 ( from_, f1, s1 ) =
-                    substituteMonoTracked store from
+                    substituteMono store from
 
                 ( to_, f2, s2 ) =
-                    substituteMonoTracked s1 to
+                    substituteMono s1 to
 
                 flags : Flags
                 flags =
@@ -541,7 +512,7 @@ substituteMonoTracked store monoType =
         List listItemType ->
             let
                 ( listItemType_, flags, s1 ) =
-                    substituteMonoTracked store listItemType
+                    substituteMono store listItemType
             in
             if isChanged flags then
                 ( List listItemType_, flags, s1 )
@@ -555,10 +526,10 @@ substituteMonoTracked store monoType =
         Tuple2 t1 t2 ->
             let
                 ( t1_, f1, s1 ) =
-                    substituteMonoTracked store t1
+                    substituteMono store t1
 
                 ( t2_, f2, s2 ) =
-                    substituteMonoTracked s1 t2
+                    substituteMono s1 t2
 
                 flags : Flags
                 flags =
@@ -573,13 +544,13 @@ substituteMonoTracked store monoType =
         Tuple3 t1 t2 t3 ->
             let
                 ( t1_, f1, s1 ) =
-                    substituteMonoTracked store t1
+                    substituteMono store t1
 
                 ( t2_, f2, s2 ) =
-                    substituteMonoTracked s1 t2
+                    substituteMono s1 t2
 
                 ( t3_, f3, s3 ) =
-                    substituteMonoTracked s2 t3
+                    substituteMono s2 t3
 
                 flags : Flags
                 flags =
@@ -594,7 +565,7 @@ substituteMonoTracked store monoType =
         Record { fields } ->
             let
                 ( fields_, flags, s1 ) =
-                    substituteFieldsTracked store fields
+                    substituteRecordFields store fields
             in
             if isChanged flags then
                 ( Record { fields = fields_ }, flags, s1 )
@@ -605,10 +576,10 @@ substituteMonoTracked store monoType =
         ExtensibleRecord r ->
             let
                 ( extensionTypevar_, f1, s1 ) =
-                    substituteMonoTracked store r.extensionTypevar
+                    substituteMono store r.extensionTypevar
 
                 ( fields_, f2, s2 ) =
-                    substituteFieldsTracked s1 r.fields
+                    substituteRecordFields s1 r.fields
 
                 flags : Flags
                 flags =
@@ -654,7 +625,7 @@ substituteMonoTracked store monoType =
         UserDefinedType r ->
             let
                 ( args_, flags, s1 ) =
-                    substituteArgsTracked store r.args
+                    substituteTypeArgs store r.args
             in
             if isChanged flags then
                 ( UserDefinedType
@@ -673,13 +644,13 @@ substituteMonoTracked store monoType =
         WebGLShader r ->
             let
                 ( attributes_, f1, s1 ) =
-                    substituteFieldsTracked store r.attributes
+                    substituteRecordFields store r.attributes
 
                 ( uniforms_, f2, s2 ) =
-                    substituteFieldsTracked s1 r.uniforms
+                    substituteRecordFields s1 r.uniforms
 
                 ( varyings_, f3, s3 ) =
-                    substituteFieldsTracked s2 r.varyings
+                    substituteRecordFields s2 r.varyings
 
                 flags : Flags
                 flags =
@@ -699,16 +670,15 @@ substituteMonoTracked store monoType =
                 ( monoType, flags, s3 )
 
 
-{-| The bound type can itself mention unresolved vars, so resolve it, then
-either cache the answer (ground: can never change) or path-compress the chain
-straight to it (not ground: still has to be walked again later, but no longer
-through the whole chain).
+{-| Resolve as much as you can from a Bound type.
+If we manage to get to a Ground type, cache the answer.
+If not, at least compress the path you walked (it will still have to be walked again later).
 -}
 resolveBound : SubstitutionMap -> VarKey -> MonoType -> ( MonoType, Flags, SubstitutionMap )
 resolveBound store k bound =
     let
         ( resolved, flags, store1 ) =
-            substituteMonoTracked store bound
+            substituteMono store bound
     in
     if resolved == bound then
         -- Skip work, nothing to update.
@@ -728,24 +698,23 @@ resolveBound store k bound =
                     Bound resolved
         in
         ( resolved
-        , -- Resolving a var to what it's bound to is always a change.
-          Bitwise.or flags changedFlag
+        , Bitwise.or flags changedFlag
         , { slots = Dict.insert k slot store1.slots
-          , ranks = store1.ranks
+          , unionFindRanks = store1.unionFindRanks
           , letRanks = store1.letRanks
           }
         )
 
 
-substituteFieldsTracked : SubstitutionMap -> Dict VarName MonoType -> ( Dict VarName MonoType, Flags, SubstitutionMap )
-substituteFieldsTracked store fields =
+substituteRecordFields : SubstitutionMap -> Dict VarName MonoType -> ( Dict VarName MonoType, Flags, SubstitutionMap )
+substituteRecordFields store fields =
     let
         ( reversed, flags, store1 ) =
             Dict.foldl
                 (\name type_ ( accList, accFlags, accSubst ) ->
                     let
                         ( type__, fieldFlags, accSubst1 ) =
-                            substituteMonoTracked accSubst type_
+                            substituteMono accSubst type_
                     in
                     ( ( name, type__ ) :: accList, both accFlags fieldFlags, accSubst1 )
                 )
@@ -761,15 +730,15 @@ substituteFieldsTracked store fields =
         ( fields, flags, store1 )
 
 
-substituteArgsTracked : SubstitutionMap -> List MonoType -> ( List MonoType, Flags, SubstitutionMap )
-substituteArgsTracked store args =
+substituteTypeArgs : SubstitutionMap -> List MonoType -> ( List MonoType, Flags, SubstitutionMap )
+substituteTypeArgs store args =
     let
         ( args_, flags, store1 ) =
             List.foldr
                 (\type_ ( accArgs, accFlags, accSubst ) ->
                     let
                         ( type__, argFlags, accSubst1 ) =
-                            substituteMonoTracked accSubst type_
+                            substituteMono accSubst type_
                     in
                     ( type__ :: accArgs, both accFlags argFlags, accSubst1 )
                 )
@@ -788,6 +757,9 @@ substituteArgsTracked store args =
 
 
 {-| Test-only helper. Can produce cycles (doesn't validate).
+
+Leaves both union-find ranks and let-ranks empty (all zero).
+
 -}
 test_fromList : List ( TypeVar, MonoType ) -> SubstitutionMap
 test_fromList list =
@@ -796,7 +768,7 @@ test_fromList list =
             (\( var, type_ ) acc -> Dict.insert (VarSet.varKey var) (test_slotFor type_) acc)
             Dict.empty
             list
-    , ranks = Dict.empty
+    , unionFindRanks = Dict.empty
     , letRanks = Dict.empty
     }
 

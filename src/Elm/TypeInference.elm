@@ -508,7 +508,7 @@ moduleResult ctx outgoingAliases =
                                         |> Dict.foldl
                                             (\rangeLike id ( accDict, accSubst ) ->
                                                 let
-                                                    ( monoType, accSubst1 ) =
+                                                    ( monoType, _, accSubst1 ) =
                                                         SubstitutionMap.substituteMono accSubst (TypeI.id_ id)
                                                 in
                                                 ( Dict.insert rangeLike (TypeI.toPublicType { alreadyNormalized = False } monoType) accDict
