@@ -59,8 +59,6 @@ resolverFor deps selfPackage =
 
         addModule : PackageName -> Elm.Docs.Module -> Dict String (List PackageName) -> Dict String (List PackageName)
         addModule pkgName mod acc =
-            -- appending, not prepending: an `AmbiguousModuleOwner` error should
-            -- list the candidates in search order
             Dict.update mod.name
                 (\existing -> Just (Maybe.withDefault [] existing ++ [ pkgName ]))
                 acc
@@ -185,9 +183,6 @@ fromDocsFields resolver fields =
         fields
 
 
-{-| Put the docs.json data into `globalEnv`.
-The returned type aliases are later used in Unify's alias expansion.
--}
 register : Dependencies -> StateM (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
 register deps =
     deps
@@ -232,19 +227,15 @@ registerModule pkgName resolver mod =
 
         addBinding : VarName -> Elm.Type.Type -> StateM ()
         addBinding name tipe =
-            State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <|
-                \monoType ->
-                    State.addGlobalBinding ( pkgName, fullModuleName, name ) (TypeI.closeOver monoType)
+            State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <| \monoType ->
+            State.addGlobalBinding ( pkgName, fullModuleName, name ) (TypeI.closeOver monoType)
     in
-    State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <|
-        \_ ->
-            State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <|
-                \_ ->
-                    State.do (State.traverse (registerUnion pkgName fullModuleName resolver) mod.unions) <|
-                        \_ ->
-                            mod.aliases
-                                |> State.traverse (registerAlias pkgName fullModuleName resolver)
-                                |> State.map (List.filterMap identity >> Dict.fromList)
+    State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
+    State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
+    State.do (State.traverse (registerUnion pkgName fullModuleName resolver) mod.unions) <| \_ ->
+    mod.aliases
+        |> State.traverse (registerAlias pkgName fullModuleName resolver)
+        |> State.map (List.filterMap identity >> Dict.fromList)
 
 
 registerUnion : PackageName -> FullModuleName -> Resolver -> Elm.Docs.Union -> StateM ()
@@ -278,15 +269,14 @@ registerUnion pkgName fullModuleName resolver union =
     union.tags
         |> State.traverse
             (\( ctorName, argTypeStrings ) ->
-                State.do (State.fromResult (Result.mapError toError (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings))) <|
-                    \argTypes ->
-                        let
-                            ctorType : MonoType
-                            ctorType =
-                                argTypes
-                                    |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
-                        in
-                        State.addGlobalBinding ( pkgName, fullModuleName, ctorName ) (TypeI.closeOver ctorType)
+                State.do (State.fromResult (Result.mapError toError (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings))) <| \argTypes ->
+                let
+                    ctorType : MonoType
+                    ctorType =
+                        argTypes
+                            |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
+                in
+                State.addGlobalBinding ( pkgName, fullModuleName, ctorName ) (TypeI.closeOver ctorType)
             )
         |> State.map (always ())
 
@@ -308,32 +298,29 @@ registerAlias pkgName fullModuleName resolver alias_ =
             , details = details
             }
     in
-    State.do (State.fromResult (Result.mapError toError (fromDocsType resolver alias_.tipe))) <|
-        \aliasMono ->
-            let
-                registerConstructor : StateM ()
-                registerConstructor =
-                    case alias_.tipe of
-                        Elm.Type.Record fields Nothing ->
-                            State.do (State.fromResult (Result.mapError toError (fromDocsFields resolver fields))) <|
-                                \resolvedFields ->
-                                    let
-                                        ctorType : MonoType
-                                        ctorType =
-                                            List.foldr
-                                                (\( _, fieldT ) acc -> Function { from = fieldT, to = acc })
-                                                aliasMono
-                                                resolvedFields
-                                    in
-                                    State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (TypeI.closeOver ctorType)
+    State.do (State.fromResult (Result.mapError toError (fromDocsType resolver alias_.tipe))) <| \aliasMono ->
+    let
+        registerConstructor : StateM ()
+        registerConstructor =
+            case alias_.tipe of
+                Elm.Type.Record fields Nothing ->
+                    State.do (State.fromResult (Result.mapError toError (fromDocsFields resolver fields))) <| \resolvedFields ->
+                    let
+                        ctorType : MonoType
+                        ctorType =
+                            List.foldr
+                                (\( _, fieldT ) acc -> Function { from = fieldT, to = acc })
+                                aliasMono
+                                resolvedFields
+                    in
+                    State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (TypeI.closeOver ctorType)
 
-                        _ ->
-                            State.pure ()
-            in
-            State.do registerConstructor <|
-                \() ->
-                    State.pure <|
-                        Just
-                            ( ( pkgName, fullModuleName, alias_.name )
-                            , { args = List.map TypeVar.parse alias_.args, type_ = aliasMono }
-                            )
+                _ ->
+                    State.pure ()
+    in
+    State.do registerConstructor <| \() ->
+    State.pure <|
+        Just
+            ( ( pkgName, fullModuleName, alias_.name )
+            , { args = List.map TypeVar.parse alias_.args, type_ = aliasMono }
+            )
