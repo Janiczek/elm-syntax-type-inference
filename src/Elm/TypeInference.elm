@@ -616,11 +616,7 @@ solveModule { canSkipChecks } ctx typeAliases file =
                     |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember inferCtx declNode fn)
                     |> State.andThen
                         (BindingGroup.solveGroup
-                            { typeAliases = typeAliases
-                            , canSkipChecks = canSkipChecks
-                            , moduleName = ctx.thisIndex.moduleName
-                            , declarationNames = group
-                            }
+                            (Infer.unifyConfigForGroup inferCtx group)
                         )
             )
         |> State.map (always ())

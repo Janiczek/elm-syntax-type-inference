@@ -1,6 +1,7 @@
 module Elm.TypeInference.Infer exposing
     ( Ctx
     , topLevelMember
+    , unifyConfigForGroup
     )
 
 {-| A traversal over elm-syntax AST
@@ -56,14 +57,17 @@ type alias Ctx =
     }
 
 
-{-| Bundle `Ctx`'s pieces `Unify` needs into its own config record.
--}
 unifyConfig : Ctx -> Unify.UnifyConfig
 unifyConfig ctx =
+    unifyConfigForGroup ctx []
+
+
+unifyConfigForGroup : Ctx -> List VarName -> Unify.UnifyConfig
+unifyConfigForGroup ctx declarationNames =
     { typeAliases = ctx.typeAliases
     , canSkipChecks = ctx.canSkipChecks
     , moduleName = ctx.thisModule.moduleName
-    , declarationNames = []
+    , declarationNames = declarationNames
     }
 
 
@@ -112,11 +116,10 @@ functionType argIds resultId =
             (TypeI.id_ resultId)
 
 
-{-| Resolves a value or operator symbol to its type.
+{-| Resolves an already-located global name to its type. Follows chains.
 -}
-lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> StateM MonoType
-lookupVarOrOperator ctx maybeModuleName name =
-    State.do (ModuleLookup.findModuleOfVar ctx.index ctx.modules ctx.thisModule maybeModuleName name) <| \( package, moduleName ) ->
+resolveGlobalVar : Ctx -> PackageName -> FullModuleName -> VarName -> StateM MonoType
+resolveGlobalVar ctx package moduleName name =
     let
         ( aliasedPackage, aliasedModuleName, aliasedName ) =
             if package == "" then
@@ -129,6 +132,14 @@ lookupVarOrOperator ctx maybeModuleName name =
                 ( package, moduleName, name )
     in
     State.lookupGlobalEnv aliasedPackage aliasedModuleName aliasedName
+
+
+{-| Resolves a value or operator symbol to its type.
+-}
+lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> StateM MonoType
+lookupVarOrOperator ctx maybeModuleName name =
+    State.do (ModuleLookup.findModuleOfVar ctx.index ctx.modules ctx.thisModule maybeModuleName name) <| \( package, moduleName ) ->
+    resolveGlobalVar ctx package moduleName name
 
 
 
@@ -170,8 +181,8 @@ inferFnImplementation ctx declId impl =
         )
 
 
-annotationScheme : Ctx -> Maybe (Node Signature) -> StateM (Maybe Type)
-annotationScheme ctx maybeSigNode =
+annotationType : Ctx -> Maybe (Node Signature) -> StateM (Maybe MonoType)
+annotationType ctx maybeSigNode =
     case maybeSigNode of
         Nothing ->
             State.pure Nothing
@@ -182,7 +193,7 @@ annotationScheme ctx maybeSigNode =
                 |> Node.value
                 |> TypeI.fromTypeAnnotation (typeResolver ctx)
                 |> Result.mapError (State.error << toError ctx << TypeI.fromTypeAnnotationError)
-                |> Result.map (TypeI.closeOver >> Just >> State.pure)
+                |> Result.map (Just >> State.pure)
                 |> Result.Extra.merge
 
 
@@ -196,74 +207,71 @@ that then corrupts every other same-named-variable signature processed
 afterwards (see the `e2e/tests/histogram-force-comparable` regression fixture).
 
 -}
-signatureEquations : Ctx -> Id -> Maybe (Node Signature) -> StateM (List TypeEquation)
-signatureEquations ctx declId maybeSigNode =
-    maybeSigNode
-        |> Maybe.map
-            (Node.value
-                >> .typeAnnotation
-                >> Node.value
-                >> TypeI.fromTypeAnnotation (typeResolver ctx)
-                >> Result.mapError (State.error << toError ctx << TypeI.fromTypeAnnotationError)
-                >> Result.map
-                    (\annotationType ->
-                        State.do (State.instantiate (TypeI.closeOver annotationType)) <| \freshAnnotationType ->
-                        State.pure
-                            [ ( TypeI.id_ declId
-                              , freshAnnotationType
-                              , "Binding must be consistent with its annotation"
-                              )
-                            ]
-                    )
-                >> Result.Extra.merge
-            )
-        |> Maybe.withDefault (State.pure [])
+signatureEquations : Id -> Maybe MonoType -> StateM (List TypeEquation)
+signatureEquations declId maybeAnnotationType =
+    case maybeAnnotationType of
+        Nothing ->
+            State.pure []
+
+        Just annotationType_ ->
+            State.do (State.instantiate (TypeI.closeOver annotationType_)) <| \freshAnnotationType ->
+            State.pure
+                [ ( TypeI.id_ declId
+                  , freshAnnotationType
+                  , "Binding must be consistent with its annotation"
+                  )
+                ]
+
+
+{-| Shared body of `topLevelMember` and `letFunctionMember`.
+Only the install step differs: `globalEnv` vs lexical env.
+-}
+functionMember :
+    Ctx
+    -> Node a
+    -> Expression.Function
+    -> (VarName -> Type -> StateM ())
+    -> StateM BindingGroup.Member
+functionMember ctx declNode fn installFor =
+    State.do (State.idForNode declNode) <| \declId ->
+    State.do (aliasImplementation declId fn.declaration) <| \impl ->
+    State.do (annotationType ctx fn.signature) <| \maybeAnnotationType ->
+    let
+        varName : VarName
+        varName =
+            Node.value impl.name
+    in
+    State.pure
+        { id = declId
+        , annotation = Maybe.map TypeI.closeOver maybeAnnotationType
+        , install = installFor varName
+        , equations =
+            State.map2 (++)
+                (signatureEquations declId maybeAnnotationType)
+                (inferFnImplementation ctx declId impl)
+        }
 
 
 {-| Top-level function declaration. Adds a binding to `globalEnv`.
 -}
 topLevelMember : Ctx -> Node Declaration -> Expression.Function -> StateM BindingGroup.Member
 topLevelMember ctx declNode fn =
-    State.do (State.idForNode declNode) <| \declId ->
-    State.do (aliasImplementation declId fn.declaration) <| \impl ->
-    State.do (annotationScheme ctx fn.signature) <| \annotation ->
-    let
-        varName : VarName
-        varName =
-            Node.value impl.name
-    in
-    State.pure
-        { id = declId
-        , annotation = annotation
-        , install = State.addGlobalBinding ( "", ctx.thisModule.moduleName, varName )
-        , equations =
-            State.map2 (++)
-                (signatureEquations ctx declId fn.signature)
-                (inferFnImplementation ctx declId impl)
-        }
+    functionMember
+        ctx
+        declNode
+        fn
+        (\varName -> State.addGlobalBinding ( "", ctx.thisModule.moduleName, varName ))
 
 
 {-| A `let..in` function declaration. Adds a binding to lexical `lexicalEnv`
 -}
 letFunctionMember : Ctx -> Node LetDeclaration -> Expression.Function -> StateM BindingGroup.Member
 letFunctionMember ctx declNode fn =
-    State.do (State.idForNode declNode) <| \declId ->
-    State.do (aliasImplementation declId fn.declaration) <| \impl ->
-    State.do (annotationScheme ctx fn.signature) <| \annotation ->
-    let
-        varName : VarName
-        varName =
-            Node.value impl.name
-    in
-    State.pure
-        { id = declId
-        , annotation = annotation
-        , install = State.addBinding varName
-        , equations =
-            State.map2 (++)
-                (signatureEquations ctx declId fn.signature)
-                (inferFnImplementation ctx declId impl)
-        }
+    functionMember
+        ctx
+        declNode
+        fn
+        State.addBinding
 
 
 
@@ -347,7 +355,7 @@ inferExpr ctx exprNode =
                         varName
                 of
                     Ok (Just ( package, fullModuleName )) ->
-                        State.do (State.lookupGlobalEnv package fullModuleName varName) <| \varType ->
+                        State.do (resolveGlobalVar ctx package fullModuleName varName) <| \varType ->
                         finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
 
                     Ok Nothing ->
