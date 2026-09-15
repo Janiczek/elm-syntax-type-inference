@@ -1,61 +1,23 @@
 module Elm.TypeInference.SubstitutionMap exposing
-    ( SubstitutionMap
+    ( Flags
+    , LetRank
+    , SubstitutionMap
+    , bindRoot
     , empty
     , fromList
-    , bindRoot
+    , letRankOf
     , linkTo
-    , union
+    , resultIsGround
+    , setIdLetRank
+    , stampIdAtLetRank
     , substituteMono
     , substituteMonoPure
     , substituteMonoTracked
     , substituteTracked
-    , Flags, resultIsGround
-    , LetRank, stampIdAtLetRank, setIdLetRank, letRankOf
+    , union
     )
 
-{-| The accumulated solution: a union-find store mapping type variables to the
-types they've been found equal to.
-
-Each variable is either unbound, `Link`ed to another variable of the same
-equivalence class, or `Bound` to a non-variable type. Unification "finds" both
-sides' roots and either links the two roots or binds one of them -- which means
-**a cycle can never be created**: a link always goes from one root to a
-_different_ root, and a bind only ever happens after the occurs check in
-`Unify.bind`.
-
-That's the whole point of the shape. The previous design composed immutable
-maps, which could stitch two individually-acyclic chains into a cycle (`s1`
-says `a -> b`, `s2` says `b -> a`) and needed a `breakCycles` repair pass, a
-left-bias contract, and a `setSubst`-vs-`composeSubst` distinction documented
-in prose. None of that exists here: there is one store, it only ever grows, and
-it is threaded through `TIState` rather than merged.
-
-`Ground` is the cache: a fully-resolved, var-free type. It is monotone and
-never needs invalidation -- a var-free type has nothing left to substitute, so
-once a var resolves to a ground type that answer can never change. A resolution
-that is _not_ ground must never be recorded as `Ground` (it would go stale when
-an inner var is later bound); it becomes a `Bound` instead, which is still
-path compression, just one that has to be walked again later.
-
-Keeping the cache in the same dictionary as the links is worth a surprising
-amount: zonking a type variable is the hottest operation in the library, and a
-separate ground dictionary made every single variable cost two dictionary
-lookups instead of one. (Measured at ~7% of a whole elm-geometry run, per
-lookup.)
-
-@docs SubstitutionMap
-@docs empty
-@docs fromList
-@docs bindRoot
-@docs linkTo
-@docs union
-@docs substituteMono
-@docs substituteMonoPure
-@docs substituteMonoTracked
-@docs substituteTracked
-@docs Flags, resultIsGround
-@docs LetRank, stampIdAtLetRank, setIdLetRank, letRankOf
-
+{-| A dict mapping type variables to the inferred types.
 -}
 
 import Bitwise
@@ -72,11 +34,8 @@ import Elm.TypeInference.VarSet as VarSet
 
 
 {-| How deeply nested inside `let`/binding groups a type variable was created.
-
-Fresh vars are stamped with the enclosing let-rank; generalization quantifies
-vars stamped strictly higher than the rank at generalization time. (Following
-OCaml.)
-
+Thet let-rank of newly created vars is remembered into SubstitutionMap.letRanks.
+Generalization only touches vars above the current rank.
 -}
 type alias LetRank =
     Int
@@ -95,13 +54,9 @@ type alias SubstitutionMap =
 
 
 type Slot
-    = -- Same type as this other variable, which is closer to the root.
-      Link TypeVar
-    | -- Resolves to this non-variable type, which may itself still mention
-      -- unresolved variables.
-      Bound MonoType
-    | -- Resolves to this variable-free type. Final: nothing can change it.
-      Ground MonoType
+    = Link TypeVar -- same type as the other variable (step in the right direction)
+    | Bound MonoType -- resolves to mono-type but that one could still mention unresolved vars
+    | Ground MonoType -- var-free, as specific as can be.
 
 
 type alias Key =
