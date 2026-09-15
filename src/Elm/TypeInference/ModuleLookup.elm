@@ -132,13 +132,7 @@ moduleOfVar index modules thisModule maybeModuleName varName =
     Result.ExtraExtra.firstJustLazy
         [ \() -> unqualifiedVarInThisModule thisModule maybeModuleName varName
         , \() -> unqualifiedVarOutsideThisModule index modules thisModule maybeModuleName varName
-        , -- Aliases must be resolved before a bare qualifier lookup: otherwise
-          -- `import Quantity.Interval as Interval` would let a qualified
-          -- `Interval.from` resolve to an unrelated `Interval` module.
-          -- And a bare qualifier needs an unaliased import (or an implicit
-          -- module); `Foo.bar` without `import Foo` is an error, as is a full
-          -- `Platform.Cmd` qualifier without an explicit import.
-          \() -> qualifiedVar index modules thisModule maybeModuleName varName
+        , \() -> qualifiedVar index modules thisModule maybeModuleName varName
         ]
 
 
@@ -245,16 +239,16 @@ unqualifiedVarOutsideThisModule index modules thisModule maybeModuleName varName
             (List.filter (\import_ -> ModuleIndex.importCouldExposeValue import_ varName) thisModule.imports)
             |> Result.andThen
                 (\explicitMatches ->
-                    Result.Extra.combineMap
-                        (\home ->
-                            dependencyModuleDefines index (FullModuleName.toString home) varName
-                                |> Result.map (Maybe.map (\package -> ( package, home )))
-                        )
-                        (ImplicitImports.implicitValueHomes varName)
+                    let
+                        home =
+                            ImplicitImports.implicitValueHome varName
+                    in
+                    dependencyModuleDefines index (FullModuleName.toString home) varName
+                        |> Result.map (Maybe.map (\package -> ( package, home )))
                         |> Result.map
-                            (\implicitMatches ->
+                            (\implicitMatch ->
                                 List.filterMap identity explicitMatches
-                                    ++ List.filterMap identity implicitMatches
+                                    ++ List.filterMap identity [ implicitMatch ]
                             )
                 )
             |> Result.andThen
@@ -353,7 +347,7 @@ qualifiedVar index modules thisModule maybeModuleName varName =
                                         in
                                         if
                                             ModuleIndex.isImportedUnaliased thisModule qualifierModuleName
-                                                || ImplicitImports.isImplicitQualifiedModule qualifierModuleName
+                                                || ImplicitImports.isImplicitlyImportedModule qualifierModuleName
                                         then
                                             qualifiedModuleDefines index modules qualifier varName
 
@@ -545,7 +539,7 @@ qualifierCandidates thisModule qualifier =
             -- then explicit imports (last wins), then the implicit prelude.
             List.isEmpty qualifier
                 || ModuleIndex.isImportedUnaliased thisModule qualifier
-                || ImplicitImports.isImplicitQualifiedModule qualifier
+                || ImplicitImports.isImplicitlyImportedModule qualifier
     in
     if List.isEmpty aliasCandidates then
         if literalAvailable then
