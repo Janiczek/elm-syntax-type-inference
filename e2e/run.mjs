@@ -18,6 +18,8 @@ const ELM_JS = path.join(__dirname, "elm.js");
 
 // `elm` from PATH unless --compiler points somewhere else.
 let elmCompiler = "elm";
+// Skip writing inferred-types.txt unless --write-types is passed.
+let writeTypes = false;
 
 function parseArgs(argv) {
   const filters = [];
@@ -34,6 +36,10 @@ function parseArgs(argv) {
       }
     } else if (arg.startsWith("--compiler=")) {
       elmCompiler = arg.slice("--compiler=".length);
+    } else if (arg === "--write-types") {
+      writeTypes = true;
+    } else if (arg === "--no-write-types") {
+      writeTypes = false;
     } else {
       filters.push(arg);
     }
@@ -151,8 +157,25 @@ function buildRunner() {
 
 function runOnce(flags) {
   const { Elm } = require(ELM_JS);
+  const app = Elm.Runner.init({ flags });
+  const resultPromise = new Promise((resolve) => {
+    const handler = (value) => {
+      app.ports.result.unsubscribe(handler);
+      resolve(value);
+    };
+    app.ports.result.subscribe(handler);
+  });
+  return { app, resultPromise };
+}
+
+function requestInferredTypes(app) {
   return new Promise((resolve) => {
-    Elm.Runner.init({ flags }).ports.result.subscribe(resolve);
+    const handler = (value) => {
+      app.ports.inferredTypes.unsubscribe(handler);
+      resolve(value);
+    };
+    app.ports.inferredTypes.subscribe(handler);
+    app.ports.requestInferredTypes.send(null);
   });
 }
 
@@ -187,13 +210,34 @@ async function runTest(name) {
   };
 
   const start = process.hrtime.bigint();
-  const result = await runOnce(flags);
+  const { app, resultPromise } = runOnce(flags);
+  const result = await resultPromise;
   const elapsedSeconds = Number(process.hrtime.bigint() - start) / 1e9;
 
-  fs.writeFileSync(path.join(testDir, "inferred-types.txt"), result.inferredTypes ?? "", "utf8");
-
   const passed = result.ok === (expected.expect === "pass");
-  return { name, expected, result, passed, elapsedSeconds };
+  const report = { name, expected, result, passed, elapsedSeconds };
+  printReport(report);
+
+  // Outside benchmarked time: only on success ask Elm to serialize
+  // the tables and save them to a file. Skipped unless --write-types.
+  if (writeTypes) {
+    let inferredTypes = "";
+    if (result.ok) {
+      if (process.stdout.isTTY) {
+        process.stdout.write("Writing types to inferred-types.txt...");
+      }
+      inferredTypes = await requestInferredTypes(app);
+      fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
+      if (process.stdout.isTTY) {
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+      }
+    } else {
+      fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
+    }
+  }
+
+  return report;
 }
 
 function printReport({ name, expected, result, passed, elapsedSeconds }) {
@@ -220,7 +264,6 @@ async function main() {
   let passedCount = 0;
   for (const name of names) {
     const report = await runTest(name);
-    printReport(report);
     if (report.passed) passedCount++;
   }
 

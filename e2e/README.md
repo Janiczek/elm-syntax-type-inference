@@ -23,8 +23,11 @@ npm run test:e2e
 
 # uses `elm` from PATH; override with --compiler:
 ./e2e/run.mjs --compiler lamdera
+
+# write `tests/<name>/inferred-types.txt` for debugging (off by default):
+./e2e/run.mjs --write-types
 ```
 
 Exit code is 0 if all pased, 1 otherwise.
 
-Each run writes `tests/<name>/inferred-types.txt`.
+Pass `--write-types` to write `tests/<name>/inferred-types.txt`.

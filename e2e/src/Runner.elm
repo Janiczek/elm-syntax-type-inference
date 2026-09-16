@@ -4,7 +4,12 @@ port module Runner exposing (main)
 
 Reads Elm project's source files and dependency docs.json files, parses
 everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`
-with `canSkipChecks = False` (full validation) and reports back via a port.
+with `canSkipChecks = False` (full validation) and reports back via ports.
+
+1. Elm infers and sends summary (`ok` / `error`) via the `result` port.
+2. run.mjs stops its timer, prints how fast it was and what the result was,
+   then (only on success) sends `requestInferredTypes`.
+3. Elm serializes the tables and sends the text via the `inferredTypes` port.
 
 -}
 
@@ -28,6 +33,24 @@ import TypeLookupTable.Internal exposing (TypeLookupTable(..))
 
 
 port result : Encode.Value -> Cmd msg
+
+port inferredTypes : String -> Cmd msg
+
+port requestInferredTypes : (Decode.Value -> msg) -> Sub msg
+
+
+type alias Model =
+    Maybe PendingTables
+
+
+type alias PendingTables =
+    { sourcePaths : Dict ModuleName String
+    , tables : Dict ModuleName TypeLookupTable
+    }
+
+
+type Msg
+    = GotInferredTypesRequest Decode.Value
 
 
 type alias Flags =
@@ -73,49 +96,73 @@ dependencyDecoder =
         (Decode.field "docsJson" Decode.value)
 
 
-main : Program Decode.Value () msg
+main : Program Decode.Value Model Msg
 main =
     Platform.worker
         { init = init
-        , update = \_ model -> ( model, Cmd.none )
-        , subscriptions = \_ -> Sub.none
+        , update = update
+        , subscriptions = subscriptions
         }
 
 
-init : Decode.Value -> ( (), Cmd msg )
+init : Decode.Value -> ( Model, Cmd Msg )
 init flagsValue =
-    ( ()
-    , result (run flagsValue)
-    )
+    run flagsValue
 
 
-run : Decode.Value -> Encode.Value
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        GotInferredTypesRequest _ ->
+            case model of
+                Nothing ->
+                    ( model, inferredTypes "" )
+
+                Just pending ->
+                    ( model, inferredTypes (tablesToString pending.sourcePaths pending.tables) )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    requestInferredTypes GotInferredTypesRequest
+
+
+run : Decode.Value -> ( Model, Cmd Msg )
 run flagsValue =
     case Decode.decodeValue flagsDecoder flagsValue of
         Err err ->
-            Encode.object
-                [ ( "ok", Encode.bool False )
-                , ( "error", Encode.string ("flags decode error: " ++ Decode.errorToString err) )
-                , ( "inferredTypes", Encode.string "" )
-                ]
+            ( Nothing
+            , result
+                (Encode.object
+                    [ ( "ok", Encode.bool False )
+                    , ( "error", Encode.string ("flags decode error: " ++ Decode.errorToString err) )
+                    ]
+                )
+            )
 
         Ok flags ->
             case buildDependencies flags.allDependencies of
                 Err err ->
-                    Encode.object
-                        [ ( "ok", Encode.bool False )
-                        , ( "error", Encode.string ("docs.json decode error: " ++ err) )
-                        , ( "inferredTypes", Encode.string "" )
-                        ]
+                    ( Nothing
+                    , result
+                        (Encode.object
+                            [ ( "ok", Encode.bool False )
+                            , ( "error", Encode.string ("docs.json decode error: " ++ err) )
+                            ]
+                        )
+                    )
 
                 Ok allDependencies ->
                     case parseAllSources flags.sources of
                         Err err ->
-                            Encode.object
-                                [ ( "ok", Encode.bool False )
-                                , ( "error", Encode.string ("parse error: " ++ err) )
-                                , ( "inferredTypes", Encode.string "" )
-                                ]
+                            ( Nothing
+                            , result
+                                (Encode.object
+                                    [ ( "ok", Encode.bool False )
+                                    , ( "error", Encode.string ("parse error: " ++ err) )
+                                    ]
+                                )
+                            )
 
                         Ok modules ->
                             let
@@ -134,12 +181,15 @@ run flagsValue =
                                     }
                             of
                                 Err depEnvError ->
-                                    Encode.object
-                                        [ ( "ok", Encode.bool False )
-                                        , ( "moduleCount", Encode.int (Dict.size files) )
-                                        , ( "error", Encode.string (Error.toString depEnvError) )
-                                        , ( "inferredTypes", Encode.string "" )
-                                        ]
+                                    ( Nothing
+                                    , result
+                                        (Encode.object
+                                            [ ( "ok", Encode.bool False )
+                                            , ( "moduleCount", Encode.int (Dict.size files) )
+                                            , ( "error", Encode.string (Error.toString depEnvError) )
+                                            ]
+                                        )
+                                    )
 
                                 Ok depEnv ->
                                     let
@@ -149,27 +199,36 @@ run flagsValue =
                                                 depEnv
                                                 files
 
-                                        inferredTypes : String
-                                        inferredTypes =
-                                            tablesToString sourcePaths project.tables
+                                        pending : Model
+                                        pending =
+                                            Just
+                                                { sourcePaths = sourcePaths
+                                                , tables = project.tables
+                                                }
                                     in
                                     case Dict.values project.errors of
                                         [] ->
-                                            Encode.object
-                                                [ ( "ok", Encode.bool True )
-                                                , ( "moduleCount", Encode.int (Dict.size files) )
-                                                , ( "tableCount", Encode.int (Dict.size project.tables) )
-                                                , ( "inferredTypes", Encode.string inferredTypes )
-                                                ]
+                                            ( pending
+                                            , result
+                                                (Encode.object
+                                                    [ ( "ok", Encode.bool True )
+                                                    , ( "moduleCount", Encode.int (Dict.size files) )
+                                                    , ( "tableCount", Encode.int (Dict.size project.tables) )
+                                                    ]
+                                                )
+                                            )
 
                                         err :: _ ->
-                                            Encode.object
-                                                [ ( "ok", Encode.bool False )
-                                                , ( "moduleCount", Encode.int (Dict.size files) )
-                                                , ( "tableCount", Encode.int (Dict.size project.tables) )
-                                                , ( "error", Encode.string (Error.toString err) )
-                                                , ( "inferredTypes", Encode.string inferredTypes )
-                                                ]
+                                            ( pending
+                                            , result
+                                                (Encode.object
+                                                    [ ( "ok", Encode.bool False )
+                                                    , ( "moduleCount", Encode.int (Dict.size files) )
+                                                    , ( "tableCount", Encode.int (Dict.size project.tables) )
+                                                    , ( "error", Encode.string (Error.toString err) )
+                                                    ]
+                                                )
+                                            )
 
 
 buildDependencies : List RawDependency -> Result String (List Dependency)
