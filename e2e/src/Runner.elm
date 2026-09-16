@@ -4,12 +4,12 @@ port module Runner exposing (main)
 
 Reads Elm project's source files and dependency docs.json files, parses
 everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`
-with `canSkipChecks = False` (full validation) and reports back via ports.
+with the `canSkipChecks` flag value (`False` = full validation) and reports back via ports.
 
-1. Elm infers and sends summary (`ok` / `error`) via the `result` port.
-2. run.mjs stops its timer, prints how fast it was and what the result was,
-   then (only on success) sends `requestInferredTypes`.
-3. Elm serializes the tables and sends the text via the `inferredTypes` port.
+1.  Elm infers and sends summary (`ok` / `error`) via the `result` port.
+2.  run.mjs stops its timer, prints how fast it was and what the result was,
+    then (only on success) sends `requestInferredTypes`.
+3.  Elm serializes the tables and sends the text via the `inferredTypes` port.
 
 -}
 
@@ -34,7 +34,9 @@ import TypeLookupTable.Internal exposing (TypeLookupTable(..))
 
 port result : Encode.Value -> Cmd msg
 
+
 port inferredTypes : String -> Cmd msg
+
 
 port requestInferredTypes : (Decode.Value -> msg) -> Sub msg
 
@@ -57,6 +59,7 @@ type alias Flags =
     { sources : List SourceFile
     , directDependencies : List String
     , allDependencies : List RawDependency
+    , canSkipChecks : Bool
     }
 
 
@@ -75,10 +78,11 @@ type alias RawDependency =
 
 flagsDecoder : Decode.Decoder Flags
 flagsDecoder =
-    Decode.map3 Flags
+    Decode.map4 Flags
         (Decode.field "sources" (Decode.list sourceFileDecoder))
         (Decode.field "directDependencies" (Decode.list Decode.string))
         (Decode.field "allDependencies" (Decode.list dependencyDecoder))
+        (Decode.field "canSkipChecks" Decode.bool)
 
 
 sourceFileDecoder : Decode.Decoder SourceFile
@@ -195,7 +199,7 @@ run flagsValue =
                                     let
                                         project =
                                             Elm.TypeInference.inferProject
-                                                { canSkipChecks = False }
+                                                { canSkipChecks = flags.canSkipChecks }
                                                 depEnv
                                                 files
 

@@ -20,6 +20,8 @@ const ELM_JS = path.join(__dirname, "elm.js");
 let elmCompiler = "elm";
 // Skip writing inferred-types.txt unless --write-types is passed.
 let writeTypes = false;
+// Full validation unless --skip-checks is passed.
+let canSkipChecks = false;
 
 function parseArgs(argv) {
   const filters = [];
@@ -40,6 +42,10 @@ function parseArgs(argv) {
       writeTypes = true;
     } else if (arg === "--no-write-types") {
       writeTypes = false;
+    } else if (arg === "--skip-checks") {
+      canSkipChecks = true;
+    } else if (arg === "--no-skip-checks") {
+      canSkipChecks = false;
     } else {
       filters.push(arg);
     }
@@ -207,6 +213,7 @@ async function runTest(name) {
     })),
     directDependencies: directDependencyNames(elmJson),
     allDependencies: resolveDependencies(elmJson),
+    canSkipChecks,
   };
 
   const start = process.hrtime.bigint();

@@ -12,6 +12,10 @@
 # Only elm.json plus the module files reachable from its "source-directories"
 # are copied into e2e/tests/<name>/project — non-Elm files (native shims,
 # READMEs, other-language sources, etc.) are left behind.
+#
+# Also runs `elm make --output=/dev/null` in the new fixture project so the
+# compiler downloads its deps into ~/.elm (best-effort, never fails fixture
+# creation). Skip with SKIP_ELM_MAKE=1.
 
 set -euo pipefail
 
@@ -81,6 +85,26 @@ cat > "$FIXTURE_DIR/expected.json" <<EOF
   "note": "Cloned from $URL"
 }
 EOF
+
+# Pre-download deps into ~/.elm via `elm make --output=/dev/null`.
+if [ "${SKIP_ELM_MAKE:-0}" != "1" ]; then
+  if ! command -v elm >/dev/null 2>&1; then
+    echo "warning: elm not found on PATH, skipping dependency pre-download" >&2
+  else
+    FIRST_ELM="$(find "$PROJECT_DIR" -name '*.elm' -print | head -n 1 || true)"
+    if [ -z "$FIRST_ELM" ]; then
+      echo "warning: no .elm files found, skipping dependency pre-download" >&2
+    else
+      echo "Downloading dependencies with elm make..."
+      if (cd "$PROJECT_DIR" && elm make "$FIRST_ELM" --output=/dev/null); then
+        echo "Dependencies cached in ~/.elm"
+      else
+        echo "warning: elm make failed, dependencies may not be cached" >&2
+      fi
+      rm -rf "$PROJECT_DIR/elm-stuff"
+    fi
+  fi
+fi
 
 echo "Created fixture at $FIXTURE_DIR"
 echo "Run it with: ./e2e/run.mjs $NAME"
