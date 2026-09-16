@@ -2733,7 +2733,7 @@ aliasParamNameCollisionRegression =
     Test.test "type alias whose own generic param name collides with the caller's generic name (regression test)" <| \() ->
     getDeclType modules [ "Main" ] "apply"
         |> Result.map Type.toString
-        |> Expect.equal (Ok "(Main.Wrap a) -> a -> a")
+        |> Expect.equal (Ok "Main.Wrap a -> a -> a")
 
 
 recordConstructorFunctionRegression : Test
@@ -2998,7 +2998,7 @@ extensibleRecordRegression =
             in
             getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "applyForce"
                 |> Result.map Type.toString
-                |> Expect.equal (Ok "(Dict.Dict comparable (Main.Entity comparable a)) -> Dict.Dict comparable (Main.Entity comparable a)")
+                |> Expect.equal (Ok "Dict.Dict comparable (Main.Entity comparable a) -> Dict.Dict comparable (Main.Entity comparable a)")
 
 
 annotationsCheckedAgainstBodiesSuite : Test

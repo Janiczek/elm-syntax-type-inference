@@ -72,23 +72,51 @@ type Type
 
 
 {-| Wraps a type in parentheses when it wouldn't parse back unambiguously
-in argument position (of `->` or of a type constructor application).
+as an argument of a type constructor application.
 -}
 wrapped : Type -> String
 wrapped t =
     case t of
         Function _ ->
-            "(" ++ toString t ++ ")"
+            paren t
+
+        List _ ->
+            paren t
+
+        WebGLShader _ ->
+            paren t
 
         Named r ->
             if List.isEmpty r.arguments then
                 toString t
 
             else
-                "(" ++ toString t ++ ")"
+                paren t
 
         _ ->
             toString t
+
+
+{-| Wraps a type in parentheses when it wouldn't parse back unambiguously on the
+left of `->`.
+
+`->` is right-associative and type application binds tighter, so only a nested
+`->` needs parens there: `List a -> b` already parses as `(List a) -> b`.
+
+-}
+wrappedFrom : Type -> String
+wrappedFrom t =
+    case t of
+        Function _ ->
+            paren t
+
+        _ ->
+            toString t
+
+
+paren : Type -> String
+paren t =
+    "(" ++ toString t ++ ")"
 
 
 {-| Display a type.
@@ -104,7 +132,7 @@ toString t =
             name
 
         Function { from, to } ->
-            wrapped from ++ " -> " ++ toString to
+            wrappedFrom from ++ " -> " ++ toString to
 
         Int ->
             "Int"
