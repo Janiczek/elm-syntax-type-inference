@@ -8,18 +8,23 @@ with `canSkipChecks = False` (full validation) and reports back via a port.
 
 -}
 
+import Bitwise
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Parser
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Module
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.TypeInference exposing (Dependency)
 import Elm.TypeInference.Error as Error
+import Elm.TypeInference.Type as PublicType
 import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra exposing (Step(..))
 import Parser
+import RangeLike exposing (RangeLike)
+import TypeLookupTable.Internal exposing (TypeLookupTable(..))
 
 
 port result : Encode.Value -> Cmd msg
@@ -91,6 +96,7 @@ run flagsValue =
             Encode.object
                 [ ( "ok", Encode.bool False )
                 , ( "error", Encode.string ("flags decode error: " ++ Decode.errorToString err) )
+                , ( "inferredTypes", Encode.string "" )
                 ]
 
         Ok flags ->
@@ -99,6 +105,7 @@ run flagsValue =
                     Encode.object
                         [ ( "ok", Encode.bool False )
                         , ( "error", Encode.string ("docs.json decode error: " ++ err) )
+                        , ( "inferredTypes", Encode.string "" )
                         ]
 
                 Ok allDependencies ->
@@ -107,9 +114,19 @@ run flagsValue =
                             Encode.object
                                 [ ( "ok", Encode.bool False )
                                 , ( "error", Encode.string ("parse error: " ++ err) )
+                                , ( "inferredTypes", Encode.string "" )
                                 ]
 
-                        Ok files ->
+                        Ok modules ->
+                            let
+                                files : Dict (List String) File
+                                files =
+                                    Dict.map (\_ { file } -> file) modules
+
+                                sourcePaths : Dict (List String) String
+                                sourcePaths =
+                                    Dict.map (\_ { path } -> path) modules
+                            in
                             case
                                 Elm.TypeInference.dependencyEnv
                                     { directDependencies = flags.directDependencies
@@ -121,6 +138,7 @@ run flagsValue =
                                         [ ( "ok", Encode.bool False )
                                         , ( "moduleCount", Encode.int (Dict.size files) )
                                         , ( "error", Encode.string (Error.toString depEnvError) )
+                                        , ( "inferredTypes", Encode.string "" )
                                         ]
 
                                 Ok depEnv ->
@@ -130,6 +148,10 @@ run flagsValue =
                                                 { canSkipChecks = False }
                                                 depEnv
                                                 files
+
+                                        inferredTypes : String
+                                        inferredTypes =
+                                            tablesToString sourcePaths project.tables
                                     in
                                     case Dict.values project.errors of
                                         [] ->
@@ -137,6 +159,7 @@ run flagsValue =
                                                 [ ( "ok", Encode.bool True )
                                                 , ( "moduleCount", Encode.int (Dict.size files) )
                                                 , ( "tableCount", Encode.int (Dict.size project.tables) )
+                                                , ( "inferredTypes", Encode.string inferredTypes )
                                                 ]
 
                                         err :: _ ->
@@ -145,6 +168,7 @@ run flagsValue =
                                                 , ( "moduleCount", Encode.int (Dict.size files) )
                                                 , ( "tableCount", Encode.int (Dict.size project.tables) )
                                                 , ( "error", Encode.string (Error.toString err) )
+                                                , ( "inferredTypes", Encode.string inferredTypes )
                                                 ]
 
 
@@ -173,7 +197,7 @@ buildDependencies rawDeps =
             (Ok [])
 
 
-parseAllSources : List SourceFile -> Result String (Dict (List String) File)
+parseAllSources : List SourceFile -> Result String (Dict (List String) { path : String, file : File })
 parseAllSources sources =
     sources
         |> List.Extra.stoppableFoldl
@@ -185,7 +209,7 @@ parseAllSources sources =
                             moduleName =
                                 Elm.Syntax.Module.moduleName (Node.value file.moduleDefinition)
                         in
-                        Continue (Result.map (Dict.insert moduleName file) acc)
+                        Continue (Result.map (Dict.insert moduleName { path = path, file = file }) acc)
 
                     Err deadEnds ->
                         -- Abort if something is unparsable.
@@ -200,3 +224,77 @@ deadEndsToString deadEnds =
         |> List.map (\{ row, col } -> "line " ++ String.fromInt row ++ ", column " ++ String.fromInt col)
         |> List.Extra.unique
         |> String.join "; "
+
+
+{-| Serialize every inferred type in every module table, one per line:
+
+    src/Main.elm:60:1-60:31: Platform.Program Main.Flags Main.Model Main.Msg
+
+-}
+tablesToString : Dict ModuleName String -> Dict ModuleName TypeLookupTable -> String
+tablesToString paths tables =
+    let
+        pathFor : ModuleName -> String
+        pathFor moduleName =
+            Dict.get moduleName paths
+                |> Maybe.withDefault (String.join "." moduleName)
+
+        lines : List String
+        lines =
+            tables
+                |> Dict.toList
+                |> List.sortBy (\( moduleName, _ ) -> pathFor moduleName)
+                |> List.concatMap (\( moduleName, table ) -> tableToLines (pathFor moduleName) table)
+                |> List.Extra.unique
+    in
+    case lines of
+        [] ->
+            ""
+
+        _ ->
+            String.join "\n" lines ++ "\n"
+
+
+tableToLines : String -> TypeLookupTable -> List String
+tableToLines path (TLT entries) =
+    entries
+        |> Dict.toList
+        |> List.sortBy (\( rangeLike, _ ) -> rangeSortKey rangeLike)
+        |> List.map
+            (\( rangeLike, type_ ) ->
+                let
+                    ( startRow, startCol ) =
+                        unpackPos (Tuple.first rangeLike)
+
+                    ( endRow, endCol ) =
+                        unpackPos (Tuple.second rangeLike)
+                in
+                path
+                    ++ ":"
+                    ++ String.fromInt startRow
+                    ++ ":"
+                    ++ String.fromInt startCol
+                    ++ "-"
+                    ++ String.fromInt endRow
+                    ++ ":"
+                    ++ String.fromInt endCol
+                    ++ ": "
+                    ++ PublicType.toString type_
+            )
+
+
+rangeSortKey : RangeLike -> List Int
+rangeSortKey ( start, end ) =
+    let
+        ( startRow, startCol ) =
+            unpackPos start
+
+        ( endRow, endCol ) =
+            unpackPos end
+    in
+    [ startRow, startCol, endRow, endCol ]
+
+
+unpackPos : Int -> ( Int, Int )
+unpackPos pos =
+    ( Bitwise.shiftRightBy 16 pos, Bitwise.and 0xFFFF pos )

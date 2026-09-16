@@ -26,3 +26,5 @@ npm run test:e2e
 ```
 
 Exit code is 0 if all pased, 1 otherwise.
+
+Each run writes `tests/<name>/inferred-types.txt`.

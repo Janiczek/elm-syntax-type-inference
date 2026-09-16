@@ -190,6 +190,8 @@ async function runTest(name) {
   const result = await runOnce(flags);
   const elapsedSeconds = Number(process.hrtime.bigint() - start) / 1e9;
 
+  fs.writeFileSync(path.join(testDir, "inferred-types.txt"), result.inferredTypes ?? "", "utf8");
+
   const passed = result.ok === (expected.expect === "pass");
   return { name, expected, result, passed, elapsedSeconds };
 }
