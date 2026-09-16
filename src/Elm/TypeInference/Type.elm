@@ -62,11 +62,12 @@ type Type
         , arguments : List Type
         }
     | WebGLShader
-        -- WebGL Shader literals produce extensible records.
-        -- TODO: produce the insides of the extensible records type, to not have to case-unwrap it
-        { attributes : Type
-        , uniforms : Type
-        , varyings : Type
+        { attributesFields : Dict String Type
+        , attributesExtensionTypevar : Maybe String
+        , uniformsFields : Dict String Type
+        , uniformsExtensionTypevar : Maybe String
+        , varyingsFields : Dict String Type
+        , varyingsExtensionTypevar : Maybe String
         }
 
 
@@ -170,11 +171,11 @@ toString t =
             )
                 |> String.join " "
 
-        WebGLShader { attributes, uniforms, varyings } ->
+        WebGLShader r ->
             [ "Shader"
-            , toString attributes
-            , toString uniforms
-            , toString varyings
+            , shaderSlotToString r.attributesFields r.attributesExtensionTypevar
+            , shaderSlotToString r.uniformsFields r.uniformsExtensionTypevar
+            , shaderSlotToString r.varyingsFields r.varyingsExtensionTypevar
             ]
                 |> String.join " "
 
@@ -245,14 +246,14 @@ toTypeAnnotation type_ =
                 (Node.empty ( moduleName, name ))
                 (List.map (toTypeAnnotation >> Node.empty) arguments)
 
-        WebGLShader { attributes, uniforms, varyings } ->
+        WebGLShader r ->
             TypeAnnotation.Typed
                 (Node.empty ( [ "WebGL" ], "Shader" ))
-                ([ attributes
-                 , uniforms
-                 , varyings
+                ([ shaderSlotToTypeAnnotation r.attributesFields r.attributesExtensionTypevar
+                 , shaderSlotToTypeAnnotation r.uniformsFields r.uniformsExtensionTypevar
+                 , shaderSlotToTypeAnnotation r.varyingsFields r.varyingsExtensionTypevar
                  ]
-                    |> List.map (toTypeAnnotation >> Node.empty)
+                    |> List.map Node.empty
                 )
 
 
@@ -267,3 +268,27 @@ recordFieldsToRecordDefinition fields =
                     , Node.empty (toTypeAnnotation fieldType)
                     )
             )
+
+
+shaderSlotToType : Dict String Type -> Maybe String -> Type
+shaderSlotToType fields extensionTypevar =
+    case extensionTypevar of
+        Nothing ->
+            Record { fields = fields }
+
+        Just var ->
+            if Dict.isEmpty fields then
+                TypeVar var
+
+            else
+                ExtensibleRecord { fields = fields, extensionTypevar = var }
+
+
+shaderSlotToString : Dict String Type -> Maybe String -> String
+shaderSlotToString fields extensionTypevar =
+    toString (shaderSlotToType fields extensionTypevar)
+
+
+shaderSlotToTypeAnnotation : Dict String Type -> Maybe String -> TypeAnnotation
+shaderSlotToTypeAnnotation fields extensionTypevar =
+    toTypeAnnotation (shaderSlotToType fields extensionTypevar)

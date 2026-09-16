@@ -285,27 +285,22 @@ isShader : ShaderFields -> Result Error Type -> Bool
 isShader expected actual =
     case actual of
         Ok (Type.WebGLShader shader) ->
-            isShaderSet expected.attributes shader.attributes
-                && isShaderSet expected.uniforms shader.uniforms
-                && isShaderSet expected.varyings shader.varyings
+            isShaderSet expected.attributes shader.attributesFields
+                && isShaderSet expected.uniforms shader.uniformsFields
+                && isShaderSet expected.varyings shader.varyingsFields
 
         _ ->
             False
 
 
-isShaderSet : List ( String, Type ) -> Type -> Bool
+isShaderSet : List ( String, Type ) -> Dict String Type -> Bool
 isShaderSet expected actual =
     case expected of
         [] ->
             True
 
         _ ->
-            case actual of
-                Type.ExtensibleRecord er ->
-                    er.fields == Dict.fromList expected
-
-                _ ->
-                    False
+            actual == Dict.fromList expected
 
 
 goodExprs : List ( String, Result Error Type.Type -> Bool )

@@ -102,7 +102,6 @@ type MonoType
         , args : List MonoType
         }
     | WebGLShader
-        -- WebGL Shader literals produce extensible records.
         { attributesExtension : MonoType
         , attributes : Dict VarName MonoType
         , uniformsExtension : MonoType
@@ -901,20 +900,68 @@ toPublicTypeNormalized mono_ =
                 }
 
         WebGLShader r ->
+            let
+                ( attributesFields, attributesExtensionTypevar ) =
+                    shaderSlotToPublic f r.attributesExtension r.attributes
+
+                ( uniformsFields, uniformsExtensionTypevar ) =
+                    shaderSlotToPublic f r.uniformsExtension r.uniforms
+
+                ( varyingsFields, varyingsExtensionTypevar ) =
+                    shaderSlotToPublic f r.varyingsExtension r.varyings
+            in
             Public.WebGLShader
-                { attributes = shaderSet r.attributesExtension r.attributes
-                , uniforms = shaderSet r.uniformsExtension r.uniforms
-                , varyings = shaderSet r.varyingsExtension r.varyings
+                { attributesFields = attributesFields
+                , attributesExtensionTypevar = attributesExtensionTypevar
+                , uniformsFields = uniformsFields
+                , uniformsExtensionTypevar = uniformsExtensionTypevar
+                , varyingsFields = varyingsFields
+                , varyingsExtensionTypevar = varyingsExtensionTypevar
                 }
 
 
-shaderSet : MonoType -> Dict VarName MonoType -> Public.Type
-shaderSet extensionTypevar fields =
-    toPublicTypeNormalized
-        (collapseExtensible
+shaderSlotToPublic : (MonoType -> Public.Type) -> MonoType -> Dict VarName MonoType -> ( Dict VarName Public.Type, Maybe String )
+shaderSlotToPublic f extensionTypevar fields =
+    case
+        collapseExtensible
             (ExtensibleRecord
                 { extensionTypevar = extensionTypevar
                 , fields = fields
                 }
             )
-        )
+    of
+        Record r ->
+            ( Dict.map (\_ v -> f v) r.fields
+            , Nothing
+            )
+
+        TypeVar var ->
+            ( Dict.empty
+            , Just (TypeVar.toString var)
+            )
+
+        ExtensibleRecord r ->
+            case r.extensionTypevar of
+                TypeVar var ->
+                    ( Dict.map (\_ v -> f v) r.fields
+                    , Just (TypeVar.toString var)
+                    )
+
+                _ ->
+                    -- Should be impossible to trigger for users of the
+                    -- library, as they don't have access to MonoType
+                    -- constructors.
+                    ( Dict.map (\_ v -> f v) r.fields
+                    , Just "<elm-syntax-type-inference bug: non-var as extensible record base>"
+                    )
+
+        other ->
+            -- Shouldn't happen: shader slots are always record-like.
+            -- Fall back to a closed record holding nothing, to avoid crashing.
+            let
+                _ =
+                    other
+            in
+            ( Dict.empty
+            , Nothing
+            )
