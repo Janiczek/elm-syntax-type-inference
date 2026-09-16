@@ -62,10 +62,11 @@ type Type
         , arguments : List Type
         }
     | WebGLShader
-        -- TODO do we need to allow extensible records in here?
-        { attributes : Dict String Type
-        , uniforms : Dict String Type
-        , varyings : Dict String Type
+        -- WebGL Shader literals produce extensible records.
+        -- TODO: produce the insides of the extensible records type, to not have to case-unwrap it
+        { attributes : Type
+        , uniforms : Type
+        , varyings : Type
         }
 
 
@@ -171,9 +172,9 @@ toString t =
 
         WebGLShader { attributes, uniforms, varyings } ->
             [ "Shader"
-            , toString (Record { fields = attributes })
-            , toString (Record { fields = uniforms })
-            , toString (Record { fields = varyings })
+            , toString attributes
+            , toString uniforms
+            , toString varyings
             ]
                 |> String.join " "
 
@@ -251,11 +252,7 @@ toTypeAnnotation type_ =
                  , uniforms
                  , varyings
                  ]
-                    |> List.map
-                        (recordFieldsToRecordDefinition
-                            >> TypeAnnotation.Record
-                            >> Node.empty
-                        )
+                    |> List.map (toTypeAnnotation >> Node.empty)
                 )
 
 

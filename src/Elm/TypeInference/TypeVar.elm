@@ -38,8 +38,6 @@ type SuperType
     | {- String | List comparable -} CompAppend
 
 
-{-| TODO: test that the published API surface never gives a Generated typevar (#0, number#1 etc.)
--}
 toString : TypeVar -> String
 toString ( style, super ) =
     let
@@ -91,8 +89,6 @@ parse name =
         |> Maybe.withDefault ( Named name, Normal )
 
 
-{-| TODO: test that the exposed API surface doesn't show "any type" anywhere.
--}
 superTypeToString : SuperType -> String
 superTypeToString super =
     case super of

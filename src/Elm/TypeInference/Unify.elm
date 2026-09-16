@@ -197,8 +197,11 @@ substituteAliasArgs mappings type_ =
 
         WebGLShader r ->
             WebGLShader
-                { attributes = Dict.map (\_ v -> go v) r.attributes
+                { attributesExtension = go r.attributesExtension
+                , attributes = Dict.map (\_ v -> go v) r.attributes
+                , uniformsExtension = go r.uniformsExtension
                 , uniforms = Dict.map (\_ v -> go v) r.uniforms
+                , varyingsExtension = go r.varyingsExtension
                 , varyings = Dict.map (\_ v -> go v) r.varyings
                 }
 
@@ -362,6 +365,84 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                         (( er.extensionTypevar, Record { fields = residual } )
                             :: matchedEqs
                         )
+
+            {- Unify one of a shader's attribute/uniform/varying sets.
+
+               Shader sets are special: the GLSL literal opens them, and a type
+               annotation can narrow them down to a closed record. So a closed
+               side only requires that its fields are present (with matching
+               types) in the other side; the open side absorbs the difference.
+               Two closed sides still have to agree on the field set.
+            -}
+            webglSet :
+                { extensionTypevar : MonoType, fields : Dict VarName MonoType }
+                -> { extensionTypevar : MonoType, fields : Dict VarName MonoType }
+                -> StateM ()
+            webglSet set1 set2 =
+                let
+                    ( only1, only2, sharedEqs ) =
+                        Dict.merge
+                            (\k v ( o1, o2, eqs ) ->
+                                ( Dict.insert k v o1, o2, eqs )
+                            )
+                            (\_ v1 v2 ( o1, o2, eqs ) ->
+                                ( o1, o2, ( v1, v2 ) :: eqs )
+                            )
+                            (\k v ( o1, o2, eqs ) ->
+                                ( o1, Dict.insert k v o2, eqs )
+                            )
+                            set1.fields
+                            set2.fields
+                            ( Dict.empty, Dict.empty, [] )
+
+                    isClosed : MonoType -> Bool
+                    isClosed extensionTypevar =
+                        case extensionTypevar of
+                            Record _ ->
+                                True
+
+                            _ ->
+                                False
+
+                    closed1 : Bool
+                    closed1 =
+                        isClosed set1.extensionTypevar
+
+                    closed2 : Bool
+                    closed2 =
+                        isClosed set2.extensionTypevar
+                in
+                if closed1 && closed2 && not (Dict.isEmpty only1 && Dict.isEmpty only2) then
+                    typeMismatch ()
+
+                else
+                    State.do State.getNextIdAndTick <| \tailId ->
+                    let
+                        tail : MonoType
+                        tail =
+                            Type.id_ tailId
+
+                        absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
+                        absorb extensionTypevar fields =
+                            [ ( extensionTypevar
+                              , ExtensibleRecord
+                                    { extensionTypevar = tail
+                                    , fields = fields
+                                    }
+                              )
+                            ]
+                    in
+                    if not closed1 && not closed2 then
+                        unifyMany cfg (absorb set1.extensionTypevar only2 ++ absorb set2.extensionTypevar only1 ++ sharedEqs)
+
+                    else if not closed1 then
+                        unifyMany cfg (absorb set1.extensionTypevar only2 ++ sharedEqs)
+
+                    else if not closed2 then
+                        unifyMany cfg (absorb set2.extensionTypevar only1 ++ sharedEqs)
+
+                    else
+                        unifyMany cfg sharedEqs
         in
         case ( t1, t2 ) of
             ( TypeVar v, _ ) ->
@@ -546,12 +627,33 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                 typeMismatch ()
 
             ( WebGLShader webgl1, WebGLShader webgl2 ) ->
-                unifyMany
-                    cfg
-                    [ ( Record { fields = webgl1.attributes }, Record { fields = webgl2.attributes } )
-                    , ( Record { fields = webgl1.uniforms }, Record { fields = webgl2.uniforms } )
-                    , ( Record { fields = webgl1.varyings }, Record { fields = webgl2.varyings } )
-                    ]
+                State.do
+                    (webglSet
+                        { extensionTypevar = webgl1.attributesExtension
+                        , fields = webgl1.attributes
+                        }
+                        { extensionTypevar = webgl2.attributesExtension
+                        , fields = webgl2.attributes
+                        }
+                    )
+                <| \() ->
+                State.do
+                    (webglSet
+                        { extensionTypevar = webgl1.uniformsExtension
+                        , fields = webgl1.uniforms
+                        }
+                        { extensionTypevar = webgl2.uniformsExtension
+                        , fields = webgl2.uniforms
+                        }
+                    )
+                <| \() ->
+                webglSet
+                    { extensionTypevar = webgl1.varyingsExtension
+                    , fields = webgl1.varyings
+                    }
+                    { extensionTypevar = webgl2.varyingsExtension
+                    , fields = webgl2.varyings
+                    }
 
             ( WebGLShader _, _ ) ->
                 typeMismatch ()
@@ -894,6 +996,9 @@ occursCheck typeVar type_ =
             List.any (occursCheck typeVar) r.args
 
         WebGLShader r ->
-            inFields r.attributes
+            occursCheck typeVar r.attributesExtension
+                || inFields r.attributes
+                || occursCheck typeVar r.uniformsExtension
                 || inFields r.uniforms
+                || occursCheck typeVar r.varyingsExtension
                 || inFields r.varyings

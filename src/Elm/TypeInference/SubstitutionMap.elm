@@ -365,8 +365,11 @@ lowerLetRanksTo targetLetRank type_ store =
         WebGLShader r ->
             store
                 |> inFields r.attributes
+                |> lowerLetRanksTo targetLetRank r.attributesExtension
                 |> inFields r.uniforms
+                |> lowerLetRanksTo targetLetRank r.uniformsExtension
                 |> inFields r.varyings
+                |> lowerLetRanksTo targetLetRank r.varyingsExtension
 
 
 
@@ -643,31 +646,43 @@ substituteMono store monoType =
 
         WebGLShader r ->
             let
-                ( attributes_, f1, s1 ) =
-                    substituteRecordFields store r.attributes
+                ( attributesExtension_, f1, s1 ) =
+                    substituteMono store r.attributesExtension
 
-                ( uniforms_, f2, s2 ) =
-                    substituteRecordFields s1 r.uniforms
+                ( attributes_, f2, s2 ) =
+                    substituteRecordFields s1 r.attributes
 
-                ( varyings_, f3, s3 ) =
-                    substituteRecordFields s2 r.varyings
+                ( uniformsExtension_, f3, s3 ) =
+                    substituteMono s2 r.uniformsExtension
+
+                ( uniforms_, f4, s4 ) =
+                    substituteRecordFields s3 r.uniforms
+
+                ( varyingsExtension_, f5, s5 ) =
+                    substituteMono s4 r.varyingsExtension
+
+                ( varyings_, f6, s6 ) =
+                    substituteRecordFields s5 r.varyings
 
                 flags : Flags
                 flags =
-                    both f1 (both f2 f3)
+                    both f1 (both f2 (both f3 (both f4 (both f5 f6))))
             in
             if isChanged flags then
                 ( WebGLShader
-                    { attributes = attributes_
+                    { attributesExtension = attributesExtension_
+                    , attributes = attributes_
+                    , uniformsExtension = uniformsExtension_
                     , uniforms = uniforms_
+                    , varyingsExtension = varyingsExtension_
                     , varyings = varyings_
                     }
                 , flags
-                , s3
+                , s6
                 )
 
             else
-                ( monoType, flags, s3 )
+                ( monoType, flags, s6 )
 
 
 {-| Resolve as much as you can from a Bound type.

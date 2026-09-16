@@ -102,10 +102,12 @@ type MonoType
         , args : List MonoType
         }
     | WebGLShader
-        -- TODO do we need to also be able to support ExtensibleRecord here?
-        -- See eg. https://github.com/elm-explorations/webgl/blob/main/README.md#writing-shaders
-        { attributes : Dict VarName MonoType
+        -- WebGL Shader literals produce extensible records.
+        { attributesExtension : MonoType
+        , attributes : Dict VarName MonoType
+        , uniformsExtension : MonoType
         , uniforms : Dict VarName MonoType
+        , varyingsExtension : MonoType
         , varyings : Dict VarName MonoType
         }
 
@@ -160,12 +162,30 @@ collapseExtensible type_ =
             type_
 
 
-{-| Converts `elm/core` `UserDefinedType` into a `MonoType` primitive
-(Int, Float, Bool, Char, String, List).
+{-| Converts special `UserDefinedType`s into dedicated `MonoType`s:
+
+  - `elm/core` Int, Float, Bool, Char, String, List
+  - `elm-explorations/webgl` Shader
+
 -}
 collapsePrimitive : PackageName -> FullModuleName -> VarName -> List MonoType -> Maybe MonoType
 collapsePrimitive package moduleName name args =
-    if package /= ImplicitImports.elmCorePackage then
+    -- TODO make sure the package is elm-explorations/webgl
+    -- TODO do we also need to collapse elm-explorations/webgl's Texture?
+    -- TODO do we also need to collapse elm-explorations/linear-algebra's Mat4, Vec2, Vec3, Vec4?
+    -- TODO rewrite this into (if ... then ...) chains - less tuple creation, and we need to check 4 things = we'd need to nest tuples.
+    if FullModuleName.toString moduleName == "WebGL" && name == "Shader" then
+        case args of
+            [ attributes, uniforms, varyings ] ->
+                Maybe.map3 makeWebGLShader
+                    (shaderSetSlot attributes)
+                    (shaderSetSlot uniforms)
+                    (shaderSetSlot varyings)
+
+            _ ->
+                Nothing
+
+    else if package /= ImplicitImports.elmCorePackage then
         Nothing
 
     else
@@ -190,6 +210,47 @@ collapsePrimitive package moduleName name args =
 
             _ ->
                 Nothing
+
+
+{-| WebGL Shader typevars can be of three shapes:
+
+  - `{ position : Vec3 }`
+  - `{ attributes | position : Vec3 }`
+  - `a`
+
+Anythign else, we return Nothing and let downstream code report a mismatch.
+
+-}
+shaderSetSlot : MonoType -> Maybe ( MonoType, Dict VarName MonoType )
+shaderSetSlot arg =
+    case arg of
+        Record { fields } ->
+            Just ( Record { fields = Dict.empty }, fields )
+
+        ExtensibleRecord er ->
+            Just ( er.extensionTypevar, er.fields )
+
+        TypeVar v ->
+            Just ( TypeVar v, Dict.empty )
+
+        _ ->
+            Nothing
+
+
+makeWebGLShader :
+    ( MonoType, Dict VarName MonoType )
+    -> ( MonoType, Dict VarName MonoType )
+    -> ( MonoType, Dict VarName MonoType )
+    -> MonoType
+makeWebGLShader ( attributesExtension, attributes ) ( uniformsExtension, uniforms ) ( varyingsExtension, varyings ) =
+    WebGLShader
+        { attributesExtension = attributesExtension
+        , attributes = attributes
+        , uniformsExtension = uniformsExtension
+        , uniforms = uniforms
+        , varyingsExtension = varyingsExtension
+        , varyings = varyings
+        }
 
 
 
@@ -256,8 +317,11 @@ recurse f type_ =
 
         WebGLShader r ->
             WebGLShader
-                { attributes = Dict.map (always f) r.attributes
+                { attributesExtension = f r.attributesExtension
+                , attributes = Dict.map (always f) r.attributes
+                , uniformsExtension = f r.uniformsExtension
                 , uniforms = Dict.map (always f) r.uniforms
+                , varyingsExtension = f r.varyingsExtension
                 , varyings = Dict.map (always f) r.varyings
                 }
 
@@ -339,9 +403,12 @@ monoTypeVarsHelp type_ acc =
 
         WebGLShader r ->
             acc
-                |> inFields r.varyings
-                |> inFields r.uniforms
                 |> inFields r.attributes
+                |> monoTypeVarsHelp r.attributesExtension
+                |> inFields r.uniforms
+                |> monoTypeVarsHelp r.uniformsExtension
+                |> inFields r.varyings
+                |> monoTypeVarsHelp r.varyingsExtension
 
 
 {-|
@@ -755,11 +822,15 @@ toPublicPair t1 t2 =
 toPublicTypeNormalized : MonoType -> Public.Type
 toPublicTypeNormalized mono_ =
     let
+        collapsed : MonoType
+        collapsed =
+            collapseExtensible mono_
+
         f : MonoType -> Public.Type
         f =
             toPublicType { alreadyNormalized = True }
     in
-    case mono_ of
+    case collapsed of
         TypeVar typeVar ->
             Public.TypeVar (TypeVar.toString typeVar)
 
@@ -831,7 +902,19 @@ toPublicTypeNormalized mono_ =
 
         WebGLShader r ->
             Public.WebGLShader
-                { attributes = r.attributes |> Dict.map (\_ v -> f v)
-                , uniforms = r.uniforms |> Dict.map (\_ v -> f v)
-                , varyings = r.varyings |> Dict.map (\_ v -> f v)
+                { attributes = shaderSet r.attributesExtension r.attributes
+                , uniforms = shaderSet r.uniformsExtension r.uniforms
+                , varyings = shaderSet r.varyingsExtension r.varyings
                 }
+
+
+shaderSet : MonoType -> Dict VarName MonoType -> Public.Type
+shaderSet extensionTypevar fields =
+    toPublicTypeNormalized
+        (collapseExtensible
+            (ExtensibleRecord
+                { extensionTypevar = extensionTypevar
+                , fields = fields
+                }
+            )
+        )

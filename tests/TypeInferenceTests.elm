@@ -45,6 +45,7 @@ suite =
         , bindingGroupSuite
         , dependenciesSuite
         , glslSuite
+        , shaderAnnotationSuite
         , largeInputsSuite
         , importedTypeInferredProperly
         , infiniteLoopRegression
@@ -58,6 +59,8 @@ suite =
         , extensibleRecordRegression
         , annotationsCheckedAgainstBodiesSuite
         , rangeContractSuite
+        , publicBoundarySuite
+        , publicSurfaceLeakSuite
         ]
 
 
@@ -280,14 +283,29 @@ emptyShader =
 
 isShader : ShaderFields -> Result Error Type -> Bool
 isShader expected actual =
-    actual
-        == Ok
-            (Type.WebGLShader
-                { attributes = Dict.fromList expected.attributes
-                , uniforms = Dict.fromList expected.uniforms
-                , varyings = Dict.fromList expected.varyings
-                }
-            )
+    case actual of
+        Ok (Type.WebGLShader shader) ->
+            isShaderSet expected.attributes shader.attributes
+                && isShaderSet expected.uniforms shader.uniforms
+                && isShaderSet expected.varyings shader.varyings
+
+        _ ->
+            False
+
+
+isShaderSet : List ( String, Type ) -> Type -> Bool
+isShaderSet expected actual =
+    case expected of
+        [] ->
+            True
+
+        _ ->
+            case actual of
+                Type.ExtensibleRecord er ->
+                    er.fields == Dict.fromList expected
+
+                _ ->
+                    False
 
 
 goodExprs : List ( String, Result Error Type.Type -> Bool )
@@ -638,6 +656,93 @@ main = 1"""
         ]
 
 
+publicBoundarySuite : Test
+publicBoundarySuite =
+    Test.describe "Elm.TypeInference.Type.Internal.toPublicType"
+        [ Test.test "an extensible record with a concrete closed tail collapses to a closed Record" <| \() ->
+        TypeI.toPublicType
+            { alreadyNormalized = False }
+            (TypeI.ExtensibleRecord
+                { extensionTypevar = TypeI.Record { fields = Dict.singleton "b" TypeI.Char }
+                , fields = Dict.singleton "a" TypeI.Int
+                }
+            )
+            |> Expect.equal
+                (Type.Record { fields = Dict.fromList [ ( "a", Type.Int ), ( "b", Type.Char ) ] })
+        , Test.test "a nested extensible chain flattens without losing fields" <| \() ->
+        TypeI.toPublicType
+            { alreadyNormalized = False }
+            (TypeI.ExtensibleRecord
+                { extensionTypevar =
+                    TypeI.ExtensibleRecord
+                        { extensionTypevar = TypeI.Record { fields = Dict.singleton "c" TypeI.Bool }
+                        , fields = Dict.singleton "b" TypeI.Char
+                        }
+                , fields = Dict.singleton "a" TypeI.Int
+                }
+            )
+            |> Expect.equal
+                (Type.Record
+                    { fields =
+                        Dict.fromList
+                            [ ( "a", Type.Int )
+                            , ( "b", Type.Char )
+                            , ( "c", Type.Bool )
+                            ]
+                    }
+                )
+        , Test.test "an open record with a type-variable tail stays open" <| \() ->
+        TypeI.toPublicType
+            { alreadyNormalized = False }
+            (TypeI.ExtensibleRecord
+                { extensionTypevar = TypeI.TypeVar ( TypeVar.Generated 0, TypeVar.Normal )
+                , fields = Dict.singleton "a" TypeI.Int
+                }
+            )
+            |> Expect.equal
+                (Type.ExtensibleRecord
+                    { extensionTypevar = "a"
+                    , fields = Dict.singleton "a" Type.Int
+                    }
+                )
+        ]
+
+
+testExprLeakFree : String -> Test
+testExprLeakFree exprCode =
+    Test.test exprCode <| \() ->
+    case getExprTypeWithDeps [ CoreFixture.core ] exprCode of
+        Err err ->
+            Expect.fail ("Has failed in a bad way: " ++ Debug.toString err)
+
+        Ok type_ ->
+            let
+                str : String
+                str =
+                    Type.toString type_
+            in
+            Expect.all
+                [ \_ -> str |> String.contains "#" |> Expect.equal False
+                , \_ -> str |> String.contains "any type" |> Expect.equal False
+                ]
+                ()
+
+
+publicSurfaceLeakSuite : Test
+publicSurfaceLeakSuite =
+    Test.describe "published surface never leaks internal typevar details"
+        ([ "\\x -> x + 1"
+         , "\\x y -> x == y"
+         , "[1, 2, 3]"
+         , "\\r -> r.a"
+         , "{ a = 1, b = 'x' }"
+         , "\\x y -> (x, y)"
+         , "let id x = x in (id 1, id 'a')"
+         ]
+            |> List.map testExprLeakFree
+        )
+
+
 isNumberLike : Maybe Type -> Bool
 isNumberLike maybeType =
     case maybeType of
@@ -902,14 +1007,212 @@ glslSuite =
                   ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec3 x;|] ]"
                   , isList (isShader (attr [ ( "x", vec3 ) ]))
                   )
-                , -- Shader records are closed
-                  ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec3 y;|] ]", fails )
+                , -- The record sets are extensible, so shaders with different
+                  -- fields unify too (their sets merge).
+                  ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec3 y;|] ]"
+                  , isList (isShader { emptyShader | attributes = [ ( "x", vec3 ), ( "y", vec3 ) ] })
+                  )
                 , ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec2 x;|] ]", fails )
-                , ( "[ [glsl|attribute vec3 x;|], [glsl|uniform vec3 x;|] ]", fails )
+                , ( "[ [glsl|attribute vec3 x;|], [glsl|uniform vec3 x;|] ]"
+                  , isList
+                        (isShader
+                            { emptyShader
+                                | attributes = [ ( "x", vec3 ) ]
+                                , uniforms = [ ( "x", vec3 ) ]
+                            }
+                        )
+                  )
                 , ( "[ [glsl|attribute vec3 x;|], 1 ]", fails )
                 , ( "[glsl|attribute vec3 x;|] 1", fails )
                 ]
             )
+        , Test.describe "the three sets are extensible records"
+            (List.map testExpr
+                [ ( "[glsl|attribute vec3 x;|]"
+                  , isShader (attr [ ( "x", vec3 ) ])
+                  )
+                , ( "[glsl|uniform mat4 u;|]"
+                  , isShader { emptyShader | uniforms = [ ( "u", mat4 ) ] }
+                  )
+                , ( "[glsl|varying vec2 v;|]"
+                  , isShader { emptyShader | varyings = [ ( "v", vec2 ) ] }
+                  )
+                , ( """
+                    [glsl|
+                    attribute vec3 position;
+                    attribute vec3 coord;
+                    uniform mat4 view;
+                    varying vec2 vcoord;
+                    |]
+                    """
+                  , isShader
+                        { attributes = [ ( "position", vec3 ), ( "coord", vec3 ) ]
+                        , uniforms = [ ( "view", mat4 ) ]
+                        , varyings = [ ( "vcoord", vec2 ) ]
+                        }
+                  )
+                ]
+            )
+        ]
+
+
+shaderAnnotationSuite : Test
+shaderAnnotationSuite =
+    let
+        opacityMathModule : String -> String -> Elm.Docs.Module
+        opacityMathModule moduleName typeName =
+            { name = moduleName
+            , comment = ""
+            , unions = [ { name = typeName, comment = "", args = [], tags = [] } ]
+            , aliases = []
+            , values = []
+            , binops = []
+            }
+
+        linearAlgebra : Dependency
+        linearAlgebra =
+            { name = "elm-explorations/linear-algebra"
+            , dependencies = []
+            , modules =
+                [ opacityMathModule "Math.Vector2" "Vec2"
+                , opacityMathModule "Math.Vector3" "Vec3"
+                , opacityMathModule "Math.Matrix4" "Mat4"
+                ]
+            }
+
+        webgl : Dependency
+        webgl =
+            { name = "elm-explorations/webgl"
+            , dependencies = [ "elm-explorations/linear-algebra" ]
+            , modules =
+                [ { name = "WebGL"
+                  , comment = ""
+                  , unions =
+                        [ { name = "Shader"
+                          , comment = ""
+                          , args = [ "attributes", "uniforms", "varyings" ]
+                          , tags = []
+                          }
+                        ]
+                  , aliases = []
+                  , values = []
+                  , binops = []
+                  }
+                ]
+            }
+
+        inferShader : String -> Result TestError Type
+        inferShader code =
+            getDeclTypeWithDeps [ webgl, linearAlgebra ]
+                (Dict.singleton [ "Main" ] (String.ExtraExtra.multilineInput code))
+                [ "Main" ]
+                "shader"
+
+        header : String
+        header =
+            """
+            module Main exposing (shader)
+
+            import Math.Matrix4 exposing (Mat4)
+            import Math.Vector2 exposing (Vec2)
+            import Math.Vector3 exposing (Vec3)
+            import WebGL exposing (Shader)
+            """
+    in
+    Test.describe "Shader type annotations unify with GLSL literals"
+        [ Test.test "an annotation listing the same fields as the literal (extensible)" <| \() ->
+        inferShader
+            (header
+                ++ """
+
+            shader : Shader { a | position : Vec3 } { b | view : Mat4 } { c | vcoord : Vec2 }
+            shader =
+                [glsl|
+                    attribute vec3 position;
+                    uniform mat4 view;
+                    varying vec2 vcoord;
+                |]
+            """
+                    )
+                    |> Result.map Type.toString
+                    |> Expect.equal
+                        (Ok "Shader { a | position : Math.Vector3.Vec3 } { b | view : Math.Matrix4.Mat4 } { c | vcoord : Math.Vector2.Vec2 }")
+        , Test.test "an annotation listing the same fields as the literal (closed)" <| \() ->
+        inferShader
+            (header
+                ++ """
+
+            shader : Shader { position : Vec3 } { view : Mat4 } { vcoord : Vec2 }
+            shader =
+                [glsl|
+                    attribute vec3 position;
+                    uniform mat4 view;
+                    varying vec2 vcoord;
+                |]
+            """
+                    )
+                    |> Result.map Type.toString
+                    |> Expect.equal
+                        (Ok "Shader {position : Math.Vector3.Vec3} {view : Math.Matrix4.Mat4} {vcoord : Math.Vector2.Vec2}")
+        , Test.test "an annotation narrowing the literal's (open) sets" <| \() ->
+        inferShader
+            (header
+                ++ """
+
+            shader : Shader { position : Vec3 } { view : Mat4 } { vcoord : Vec2 }
+            shader =
+                [glsl|
+                    attribute vec3 position;
+                    attribute vec3 coord;
+                    uniform mat4 view;
+                    varying vec2 vcoord;
+                |]
+            """
+                    )
+                    |> Result.map Type.toString
+                    |> Expect.equal
+                        (Ok "Shader {position : Math.Vector3.Vec3} {view : Math.Matrix4.Mat4} {vcoord : Math.Vector2.Vec2}")
+        , Test.test "an annotation with fully open sets (type variables)" <| \() ->
+        inferShader
+            (header
+                ++ """
+
+            shader : Shader a b c
+            shader =
+                [glsl|attribute vec3 position;|]
+            """
+                    )
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Shader { c | position : Math.Vector3.Vec3 } b a")
+        , Test.test "a field-type mismatch is still reported" <| \() ->
+        inferShader
+            (header
+                ++ """
+
+            shader : Shader { position : Vec4 } { view : Mat4 } { vcoord : Vec2 }
+            shader =
+                [glsl|
+                    attribute vec3 position;
+                    uniform mat4 view;
+                    varying vec2 vcoord;
+                |]
+            """
+                    )
+                    |> Expect.err
+        , Test.test "two different closed annotations don't unify" <| \() ->
+        inferShader
+            (header
+                ++ """
+
+            other : Shader { other : Vec3 } {} {}
+            other =
+                [glsl|attribute vec3 position;|]
+
+            shader : Shader { position : Vec3 } {} {}
+            shader = other
+            """
+                    )
+                    |> Expect.err
         ]
 
 
@@ -2759,6 +3062,25 @@ annotationsCheckedAgainstBodiesSuite =
             x : comparable
             x = { a = 1 }
             """
+        , -- This one has some history: https://github.com/intellij-elm/intellij-elm/issues/482
+          Test.test "extensible-record type param over a closed record loses its tail field" <| \() ->
+          getDeclType
+              (Dict.singleton [ "Main" ]
+                  (String.ExtraExtra.multilineInput """
+          module Main exposing (..)
+
+          type Foo a = Foo (Outer a)
+          type alias Outer a = { a | f1 : () }
+          type alias Record = { f1 : () }
+
+          foo : Foo Record
+          foo =
+              Foo { f1 = () }
+          """)
+                    )
+                    [ "Main" ]
+                    "foo"
+                    |> Expect.err
         , Test.test "a let-bound function's annotation is checked against its body too" <| \() ->
         getDeclType
             (Dict.singleton [ "Main" ] (String.ExtraExtra.multilineInput """

@@ -628,11 +628,17 @@ inferExpr ctx exprNode =
                 declarations =
                     glslDeclarations code
             in
+            State.do State.getNextIdAndTick <| \attributesId ->
+            State.do State.getNextIdAndTick <| \uniformsId ->
+            State.do State.getNextIdAndTick <| \varyingsId ->
             finish
                 [ ( type_
                   , WebGLShader
-                        { attributes = declarations.attributes
+                        { attributesExtension = TypeI.id_ attributesId
+                        , attributes = declarations.attributes
+                        , uniformsExtension = TypeI.id_ uniformsId
                         , uniforms = declarations.uniforms
+                        , varyingsExtension = TypeI.id_ varyingsId
                         , varyings = declarations.varyings
                         }
                   , "GLSLExpression: is a shader"

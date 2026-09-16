@@ -377,7 +377,6 @@ moduleResult :
             , interface : ModuleInterface
             }
 moduleResult ctx outgoingAliases =
-    -- TODO translate from TypeI.Type to Type.Type before inserting into the dict
     State.do State.getNodeIds <| \nodeIds ->
     State.do State.getSubst <| \substitutionMap ->
     State.do State.getGlobalEnv <| \globalEnv ->
