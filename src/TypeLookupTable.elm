@@ -24,15 +24,6 @@ type alias TypeLookupTable =
 Only exact ranges given by `Node.range` of AST nodes inside the input
 `Elm.Syntax.File`s are recorded and there is no fuzzy/overlap matching.
 
-Covered:
-
-  - all expression Nodes
-  - all pattern Nodes
-  - function declaration Nodes (implementation, implementation name, signature, signature name)
-  - record, record-update, record-pattern and record-access field name Nodes
-  - record-update base record Nodes
-  - as-pattern variable Nodes
-
 -}
 get : Range -> TypeLookupTable -> Maybe Type
 get range (Internal.TLT tlt) =
