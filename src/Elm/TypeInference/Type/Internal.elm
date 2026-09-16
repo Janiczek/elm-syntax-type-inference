@@ -169,11 +169,67 @@ collapseExtensible type_ =
 -}
 collapsePrimitive : PackageName -> FullModuleName -> VarName -> List MonoType -> Maybe MonoType
 collapsePrimitive package moduleName name args =
-    -- TODO make sure the package is elm-explorations/webgl
-    -- TODO do we also need to collapse elm-explorations/webgl's Texture?
-    -- TODO do we also need to collapse elm-explorations/linear-algebra's Mat4, Vec2, Vec3, Vec4?
-    -- TODO rewrite this into (if ... then ...) chains - less tuple creation, and we need to check 4 things = we'd need to nest tuples.
-    if FullModuleName.toString moduleName == "WebGL" && name == "Shader" then
+    let
+        moduleNameStr : String
+        moduleNameStr =
+            FullModuleName.toString moduleName
+    in
+    if package == ImplicitImports.elmCorePackage then
+        collapseElmCoreType moduleNameStr name args
+
+    else if package == webGLPackage then
+        collapseWebGLShader moduleNameStr name args
+
+    else
+        Nothing
+
+
+webGLPackage : PackageName
+webGLPackage =
+    "elm-explorations/webgl"
+
+
+collapseElmCoreType : String -> VarName -> List MonoType -> Maybe MonoType
+collapseElmCoreType moduleNameStr name args =
+    case args of
+        [] ->
+            if moduleNameStr == "Basics" then
+                case name of
+                    "Int" ->
+                        Just Int
+
+                    "Float" ->
+                        Just Float
+
+                    "Bool" ->
+                        Just Bool
+
+                    _ ->
+                        Nothing
+
+            else if moduleNameStr == "Char" && name == "Char" then
+                Just Char
+
+            else if moduleNameStr == "String" && name == "String" then
+                Just String
+
+            else
+                Nothing
+
+        [ inner ] ->
+            if moduleNameStr == "List" && name == "List" then
+                Just (List inner)
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
+
+
+collapseWebGLShader : String -> VarName -> List MonoType -> Maybe MonoType
+collapseWebGLShader moduleNameStr name args =
+    if moduleNameStr == "WebGL" && name == "Shader" then
         case args of
             [ attributes, uniforms, varyings ] ->
                 Maybe.map3 makeWebGLShader
@@ -184,31 +240,8 @@ collapsePrimitive package moduleName name args =
             _ ->
                 Nothing
 
-    else if package /= ImplicitImports.elmCorePackage then
-        Nothing
-
     else
-        case ( FullModuleName.toString moduleName, name, args ) of
-            ( "Basics", "Int", [] ) ->
-                Just Int
-
-            ( "Basics", "Float", [] ) ->
-                Just Float
-
-            ( "Basics", "Bool", [] ) ->
-                Just Bool
-
-            ( "Char", "Char", [] ) ->
-                Just Char
-
-            ( "String", "String", [] ) ->
-                Just String
-
-            ( "List", "List", [ inner ] ) ->
-                Just (List inner)
-
-            _ ->
-                Nothing
+        Nothing
 
 
 {-| WebGL Shader typevars can be of three shapes:
