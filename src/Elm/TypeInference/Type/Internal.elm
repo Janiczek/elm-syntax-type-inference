@@ -403,12 +403,12 @@ monoTypeVarsHelp type_ acc =
 
         WebGLShader r ->
             acc
-                |> inFields r.attributes
-                |> monoTypeVarsHelp r.attributesExtension
-                |> inFields r.uniforms
-                |> monoTypeVarsHelp r.uniformsExtension
                 |> inFields r.varyings
                 |> monoTypeVarsHelp r.varyingsExtension
+                |> inFields r.uniforms
+                |> monoTypeVarsHelp r.uniformsExtension
+                |> inFields r.attributes
+                |> monoTypeVarsHelp r.attributesExtension
 
 
 {-|
