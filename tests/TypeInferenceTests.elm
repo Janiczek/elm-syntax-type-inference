@@ -1727,16 +1727,22 @@ helper x = x
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "number")
 
-        {- , Test.todo """
-           mutual recursion between two top-level declarations
+        , Test.test "mutual recursion between two top-level declarations" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
+module Main exposing (main)
 
-           module Main exposing (main)
-
-           isEven n = if n == 0 then True else isOdd n
-           isOdd n = if n == 0 then False else isEven n
-           main = isEven
-           """
-        -}
+isEven n = if n == 0 then True else isOdd n
+isOdd n = if n == 0 then False else isEven n
+main = isEven
+"""
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "number -> Bool")
         , Test.test "a top-level var is usable, at its own inferred type, across modules" <| \() ->
         let
             modules : Dict ModuleName String
