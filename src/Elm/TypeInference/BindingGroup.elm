@@ -3,11 +3,12 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 {-| Solve a binding group (SCC of mutually-referencing bindings).
 -}
 
+import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type.Internal as Type exposing (Id, Type(..))
+import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType(..), Type(..))
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
 import Elm.TypeInference.VarSet as VarSet
@@ -115,7 +116,18 @@ checkOne cfg member =
                     ( finalMono, _, _ ) =
                         SubstitutionMap.substituteMono subst (Type.id_ member.id)
                 in
-                if List.isEmpty (VarSet.toList (Type.monoTypeVars finalMono)) then
+                if shaderSlotsTooGeneral annoMono finalMono then
+                    let
+                        ( pubAnno, pubFinal ) =
+                            Type.toPublicPair annoMono finalMono
+                    in
+                    State.error
+                        { moduleName = FullModuleName.toModuleName cfg.moduleName
+                        , declarationNames = cfg.declarationNames
+                        , details = TypeMismatch pubAnno pubFinal
+                        }
+
+                else if List.isEmpty (VarSet.toList (Type.monoTypeVars finalMono)) then
                     let
                         ( pubAnno, pubFinal ) =
                             Type.toPublicPair annoMono finalMono
@@ -128,3 +140,78 @@ checkOne cfg member =
 
                 else
                     State.pure ()
+
+
+{-|
+
+    shader : Shader a b c
+    shader =
+        [glsl|
+        attribute vec3 position;
+    |]
+
+is an error because the annotation is more general than the body.
+
+-}
+shaderSlotsTooGeneral : MonoType -> MonoType -> Bool
+shaderSlotsTooGeneral annoMono finalMono =
+    case ( annoMono, finalMono ) of
+        ( WebGLShader annoShader, WebGLShader finalShader ) ->
+            let
+                slots :
+                    { attributesExtension : MonoType
+                    , attributes : Dict String MonoType
+                    , uniformsExtension : MonoType
+                    , uniforms : Dict String MonoType
+                    , varyingsExtension : MonoType
+                    , varyings : Dict String MonoType
+                    }
+                    -> List { extensionTypevar : MonoType, fields : Dict String MonoType }
+                slots shader =
+                    [ { extensionTypevar = shader.attributesExtension, fields = shader.attributes }
+                    , { extensionTypevar = shader.uniformsExtension, fields = shader.uniforms }
+                    , { extensionTypevar = shader.varyingsExtension, fields = shader.varyings }
+                    ]
+            in
+            List.map2 Tuple.pair (slots annoShader) (slots finalShader)
+                |> List.any (\( annoSlot, finalSlot ) -> slotTooGeneral annoSlot finalSlot)
+
+        _ ->
+            False
+
+
+slotTooGeneral :
+    { extensionTypevar : MonoType, fields : Dict String MonoType }
+    -> { extensionTypevar : MonoType, fields : Dict String MonoType }
+    -> Bool
+slotTooGeneral annoSlot finalSlot =
+    let
+        collapsedFields : { extensionTypevar : MonoType, fields : Dict String MonoType } -> Dict String MonoType
+        collapsedFields slot =
+            case
+                Type.collapseExtensible
+                    (ExtensibleRecord
+                        { extensionTypevar = slot.extensionTypevar
+                        , fields = slot.fields
+                        }
+                    )
+            of
+                ExtensibleRecord r ->
+                    r.fields
+
+                Record r ->
+                    r.fields
+
+                _ ->
+                    Dict.empty
+    in
+    case annoSlot.extensionTypevar of
+        TypeVar _ ->
+            if Dict.isEmpty annoSlot.fields then
+                not (Dict.isEmpty (collapsedFields finalSlot))
+
+            else
+                not (Dict.isEmpty (Dict.diff annoSlot.fields (collapsedFields finalSlot)))
+
+        _ ->
+            not (Dict.isEmpty (Dict.diff annoSlot.fields (collapsedFields finalSlot)))

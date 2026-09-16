@@ -1182,8 +1182,7 @@ shaderAnnotationSuite =
                 [glsl|attribute vec3 position;|]
             """
                     )
-                    |> Result.map Type.toString
-                    |> Expect.equal (Ok "Shader { c | position : Math.Vector3.Vec3 } b a")
+                    |> Expect.err
         , Test.test "a field-type mismatch is still reported" <| \() ->
         inferShader
             (header
