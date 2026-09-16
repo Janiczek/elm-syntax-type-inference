@@ -3,10 +3,14 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 {-| Solve a binding group (SCC of mutually-referencing bindings).
 -}
 
+import Elm.Syntax.FullModuleName as FullModuleName
+import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (StateM)
-import Elm.TypeInference.Type.Internal as Type exposing (Id, Type)
+import Elm.TypeInference.SubstitutionMap as SubstitutionMap
+import Elm.TypeInference.Type.Internal as Type exposing (Id, Type(..))
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
+import Elm.TypeInference.VarSet as VarSet
 
 
 {-| One binding in the binding group.
@@ -45,10 +49,14 @@ solveGroup cfg members =
                 )
              <| \_ ->
              State.do (State.traverse .equations members) <| \eqLists ->
-             eqLists
-                 |> List.concat
-                 |> List.map TypeEquation.dropLabel
-                 |> Unify.unifyMany cfg
+             State.do
+                 (eqLists
+                     |> List.concat
+                     |> List.map TypeEquation.dropLabel
+                     |> Unify.unifyMany cfg
+                 )
+             <| \() ->
+             checkAnnotations cfg members
             )
         )
     <| \() ->
@@ -67,3 +75,56 @@ solveGroup cfg members =
         )
     <| \_ ->
     State.pure ()
+
+
+{-| A declaration body must be at least as general as its annotation.
+
+Motivating example:
+
+    x : number
+    x =
+        1.0
+
+This shouldn't typecheck: we know 1.0 must be a Float, so `number` is too
+general.
+
+-}
+checkAnnotations : UnifyConfig -> List Member -> StateM ()
+checkAnnotations cfg members =
+    if cfg.canSkipChecks then
+        State.pure ()
+
+    else
+        State.traverse (checkOne cfg) members
+            |> State.map (always ())
+
+
+checkOne : UnifyConfig -> Member -> StateM ()
+checkOne cfg member =
+    case member.annotation of
+        Nothing ->
+            State.pure ()
+
+        Just (Forall boundVars annoMono) ->
+            if List.isEmpty boundVars then
+                State.pure ()
+
+            else
+                State.do State.getSubst <| \subst ->
+                let
+                    ( finalMono, _, _ ) =
+                        SubstitutionMap.substituteMono subst (Type.id_ member.id)
+                in
+                if List.isEmpty (VarSet.toList (Type.monoTypeVars finalMono)) then
+                    let
+                        ( pubAnno, pubFinal ) =
+                            Type.toPublicPair annoMono finalMono
+                    in
+                    State.error
+                        { moduleName = FullModuleName.toModuleName cfg.moduleName
+                        , declarationNames = cfg.declarationNames
+                        , details = TypeMismatch pubAnno pubFinal
+                        }
+
+                else
+                    State.pure ()

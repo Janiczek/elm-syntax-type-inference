@@ -1,5 +1,5 @@
 module Elm.TypeInference exposing
-    ( inferAndCheck, inferCorrectCode
+    ( inferProject
     , DependencyEnv, dependencyEnv
     , Dependency
     )
@@ -7,16 +7,10 @@ module Elm.TypeInference exposing
 {-| Type inference for [`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
 ASTs.
 
-Note: Type annotations are trusted, not checked: this library is written with
-elm-review in mind, which runs _after_ Elm compiler has typechecked the code.
-If you would benefit from this library checking annotations, let me know!
-
-TODO: inferAndCheck needs to check the annotations too. inferCorrectCode can trust them.
-
 
 # Whole project at once
 
-@docs inferAndCheck, inferCorrectCode
+@docs inferProject
 
 
 # Dependencies
@@ -64,166 +58,7 @@ import TypeLookupTable.Internal
 -- WHOLE-PROJECT ENTRY POINTS
 
 
-{-| Infers types of code already typechecked by Elm compiler.
-This invariant allows it to skip sanity checks that could never fire on already-accepted code.
--}
-inferCorrectCode :
-    { directDependencies : List PackageName
-    , allDependencies : List Dependency
-    , files : Dict ModuleName File
-    }
-    -> Result Error (Dict ModuleName TypeLookupTable)
-inferCorrectCode =
-    infer { canSkipChecks = True }
-
-
-{-| Infers types of code that might not typecheck.
-Runs all sanity checks.
--}
-inferAndCheck :
-    { directDependencies : List PackageName
-    , allDependencies : List Dependency
-    , files : Dict ModuleName File
-    }
-    -> Result Error (Dict ModuleName TypeLookupTable)
-inferAndCheck =
-    infer { canSkipChecks = False }
-
-
-infer :
-    { canSkipChecks : Bool }
-    ->
-        { directDependencies : List PackageName
-        , allDependencies : List Dependency
-        , files : Dict ModuleName File
-        }
-    -> Result Error (Dict ModuleName TypeLookupTable)
-infer canSkipChecks { directDependencies, allDependencies, files } =
-    dependencyEnv
-        { directDependencies = directDependencies
-        , allDependencies = allDependencies
-        }
-        |> Result.andThen
-            (\depEnv ->
-                let
-                    project : { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
-                    project =
-                        inferProject canSkipChecks depEnv files
-                in
-                case Dict.values project.errors of
-                    [] ->
-                        Ok project.tables
-
-                    err :: _ ->
-                        Err err
-            )
-
-
-
--- DEPENDENCIES
-
-
-{-| A dependency from the top-level elm.json.
-Its `modules` come from the dependency's `docs.json` file.
-Its `dependencies` come from the dependency's `elm.json` file.
-I
--}
-type alias Dependency =
-    { name : PackageName
-    , dependencies : List PackageName
-    , modules : List Elm.Docs.Module
-    }
-
-
-{-| The dependencies' contribution to inference, precomputed.
-
-Dependencies change far less often than source does, so this is worth building
-once and reusing across many `inferModule` / `inferProject` calls.
-
--}
-type DependencyEnv
-    = DependencyEnv
-        { globalEnv : Dict GlobalKey TypeI.Type
-        , typeAliases : Dict GlobalKey TypeAlias
-        , index : ModuleLookup.Index
-        }
-
-
-{-| `directDependencies` are the project's own direct dependencies: only those
-may own a module our source `import`s. `dependencies` is the full transitive
-closure, needed because a direct dependency's types mention them.
--}
-dependencyEnv :
-    { directDependencies : List PackageName
-    , allDependencies : List Dependency
-    }
-    -> Result Error DependencyEnv
-dependencyEnv { directDependencies, allDependencies } =
-    let
-        deps : Dependencies
-        deps =
-            Dependencies.fromList allDependencies
-
-        directVisibleDeps : Dependencies
-        directVisibleDeps =
-            allDependencies
-                |> List.filter (\pkg -> List.member pkg.name directDependencies)
-                |> Dependencies.fromList
-    in
-    (State.do (Dependencies.register deps) <| \depAliases ->
-    State.do State.getGlobalEnv <| \globalEnv ->
-    State.pure <|
-        DependencyEnv
-            { globalEnv = globalEnv
-            , typeAliases = depAliases
-            , index = ModuleLookup.buildIndex directVisibleDeps
-            }
-    )
-        |> State.run State.empty
-        |> Tuple.first
-
-
-
--- PER-MODULE INFERENCE (internal)
-
-
-{-| What one module contributes to the modules that import it.
-
-Inference runs one module at a time (Elm forbids import cycles, so a module can
-always be inferred once its imports are done). A `ModuleInterface` is everything the
-importing module needs: it replaces having the imported `File`s around.
-
-The types in here are id-space independent: `State.generalize` substitutes
-before quantifying vars younger than the enclosing let, and
-`State.lookupGlobalEnv` re-instantiates with fresh ids on every lookup. So an
-interface stays valid no matter which `State` consumes it.
-
-  - `moduleIndex` -- the declared/exposed names, imports and infix declarations
-    that name resolution in the importing module needs.
-  - `values` -- the module's _exposed_ values (functions, constructors, ports,
-    record-alias constructors) with their generalized schemes.
-  - `typeAliases` -- the module's own type aliases _plus_ every alias it
-    inherited from its own imports. A type flowing out of this module's
-    signatures can mention an alias the importer never imported itself, and
-    `Unify.expandAlias` still has to be able to expand it. (Dependency aliases
-    are not in here: they live in the `DependencyEnv`, which every module has
-    anyway.)
-
--}
-type alias ModuleInterface =
-    { moduleIndex : ModuleIndex
-    , values : Dict VarName TypeI.Type
-    , typeAliases : Dict GlobalKey TypeAlias
-    }
-
-
 {-| Infer every module of a project, in dependency order.
-
-Unlike `inferCorrectCode` this reports failures **per
-module**: a type error in one module no longer kills the whole run. The failed
-module's dependents are inferred against its annotations
-(see `interfaceFromAnnotations`).
-
 -}
 inferProject :
     { canSkipChecks : Bool }
@@ -312,6 +147,83 @@ inferProject canSkipChecks depEnv files =
             |> (\acc -> { tables = acc.tables, errors = acc.errors })
 
 
+
+-- DEPENDENCIES
+
+
+{-| A dependency package with its type information.
+
+  - `name` -- the package identifier (e.g. `"elm/core"`).
+  - `dependencies` -- names of the package's _immediate_ `elm.json` dependencies (eg. "elm/json").
+  - `modules` -- the decoded `docs.json` modules
+
+-}
+type alias Dependency =
+    { name : PackageName
+    , dependencies : List PackageName
+    , modules : List Elm.Docs.Module
+    }
+
+
+{-| Dependency types and other info computed from dependencies' docs.json files.
+
+This cache doesn't change as user's project code changes - only invalidate it
+when elm.json changes.
+
+-}
+type DependencyEnv
+    = DependencyEnv
+        { globalEnv : Dict GlobalKey TypeI.Type
+        , typeAliases : Dict GlobalKey TypeAlias
+        , index : ModuleLookup.Index
+        }
+
+
+{-| Build a `DependencyEnv`.
+-}
+dependencyEnv :
+    { directDependencies : List PackageName
+    , allDependencies : List Dependency
+    }
+    -> Result Error DependencyEnv
+dependencyEnv { directDependencies, allDependencies } =
+    let
+        deps : Dependencies
+        deps =
+            Dependencies.fromList allDependencies
+
+        directVisibleDeps : Dependencies
+        directVisibleDeps =
+            allDependencies
+                |> List.filter (\pkg -> List.member pkg.name directDependencies)
+                |> Dependencies.fromList
+    in
+    (State.do (Dependencies.register deps) <| \depAliases ->
+    State.do State.getGlobalEnv <| \globalEnv ->
+    State.pure <|
+        DependencyEnv
+            { globalEnv = globalEnv
+            , typeAliases = depAliases
+            , index = ModuleLookup.buildIndex directVisibleDeps
+            }
+    )
+        |> State.run State.empty
+        |> Tuple.first
+
+
+
+-- PER-MODULE INFERENCE (internal)
+
+
+{-| What one module contributes to the modules that import it.
+-}
+type alias ModuleInterface =
+    { moduleIndex : ModuleIndex
+    , values : Dict VarName TypeI.Type
+    , typeAliases : Dict GlobalKey TypeAlias
+    }
+
+
 type alias ProjectModule =
     { key : ModuleName
     , index : ModuleIndex
@@ -355,7 +267,10 @@ inferOne canSkipChecks depEnv m acc =
                 | errors = Dict.insert m.key err acc.errors
                 , interfaces =
                     Dict.insert m.index.moduleName
-                        (interfaceFromAnnotations_ depEnv imported m.file)
+                        { moduleIndex = m.index
+                        , values = Dict.empty
+                        , typeAliases = Dict.empty
+                        }
                         acc.interfaces
             }
 
@@ -451,28 +366,6 @@ inferModule_ canSkipChecks depEnv importedInterfaces file =
     )
         |> State.run (State.init ctx.globalEnv)
         |> Tuple.first
-
-
-interfaceFromAnnotations_ : DependencyEnv -> Dict FullModuleName ModuleInterface -> File -> ModuleInterface
-interfaceFromAnnotations_ depEnv importedInterfaces file =
-    let
-        ctx : ModuleCtx
-        ctx =
-            moduleCtx depEnv importedInterfaces file
-    in
-    (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
-    State.do (registerConstructorsAndPorts ctx file) <| \() ->
-    State.do (registerAnnotations ctx file) <| \() ->
-    State.do (moduleResult ctx (Dict.union ownAliases ctx.inheritedAliases)) <| \result ->
-    State.pure result.interface
-    )
-        |> State.run (State.init ctx.globalEnv)
-        |> Tuple.first
-        |> Result.withDefault
-            { moduleIndex = ctx.thisIndex
-            , values = Dict.empty
-            , typeAliases = ctx.inheritedAliases
-            }
 
 
 moduleResult :
@@ -719,40 +612,6 @@ registerConstructorsAndPorts ctx file =
 
                     Declaration.PortDeclaration sig ->
                         registerPort ctx.resolver ctx.thisIndex.moduleName sig
-
-                    _ ->
-                        State.pure ()
-            )
-        |> State.map (always ())
-
-
-{-| The no-inference path: take the explicit annotations at face value and put
-them in `globalEnv`. Annotations that don't resolve are skipped rather than
-failing the whole module -- this is already the degradation path.
--}
-registerAnnotations : ModuleCtx -> File -> StateM ()
-registerAnnotations ctx file =
-    file.declarations
-        |> State.traverse
-            (\declNode ->
-                case Node.value declNode of
-                    Declaration.FunctionDeclaration fn ->
-                        case fn.signature of
-                            Nothing ->
-                                State.pure ()
-
-                            Just sigNode ->
-                                case
-                                    Node.value (Node.value sigNode).typeAnnotation
-                                        |> TypeI.fromTypeAnnotation ctx.resolver
-                                of
-                                    Err _ ->
-                                        State.pure ()
-
-                                    Ok monoType ->
-                                        State.addGlobalBinding
-                                            ( "", ctx.thisIndex.moduleName, Elm.Syntax.Expression.Extra.functionName fn )
-                                            (TypeI.closeOver monoType)
 
                     _ ->
                         State.pure ()

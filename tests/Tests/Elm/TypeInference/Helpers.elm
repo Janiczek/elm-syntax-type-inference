@@ -15,8 +15,7 @@ import Elm.Syntax.Declaration as Declaration exposing (Declaration)
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
-import Elm.TypeInference
-import Elm.TypeInference.Dependencies exposing (DependencyPackage)
+import Elm.TypeInference exposing (Dependency)
 import Elm.TypeInference.Error exposing (Error)
 import Elm.TypeInference.Type exposing (Type)
 import List.Extra
@@ -47,12 +46,7 @@ inferMainModule moduleCode =
         |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                Elm.TypeInference.inferAndCheck
-                    { directDependencies = []
-                    , allDependencies = []
-                    , files = Dict.singleton mainModule file
-                    }
-                    |> Result.mapError CouldntInfer
+                runInference [] [] (Dict.singleton mainModule file)
                     |> Result.andThen
                         (\lookupTables ->
                             Dict.get mainModule lookupTables
@@ -62,12 +56,45 @@ inferMainModule moduleCode =
             )
 
 
+runInference :
+    List String
+    -> List Dependency
+    -> Dict ModuleName File
+    -> Result TestError (Dict ModuleName TypeLookupTable)
+runInference directDependencies allDependencies files =
+    Elm.TypeInference.dependencyEnv
+        { directDependencies = directDependencies
+        , allDependencies = allDependencies
+        }
+        |> Result.mapError CouldntInfer
+        |> Result.andThen
+            (\depEnv ->
+                let
+                    project :
+                        { tables : Dict ModuleName TypeLookupTable
+                        , errors : Dict ModuleName Error
+                        }
+                    project =
+                        Elm.TypeInference.inferProject
+                            { canSkipChecks = False }
+                            depEnv
+                            files
+                in
+                case Dict.values project.errors of
+                    [] ->
+                        Ok project.tables
+
+                    err :: _ ->
+                        Err (CouldntInfer err)
+            )
+
+
 getExprType : String -> Result TestError Type
 getExprType exprCode =
     getExprTypeWithDeps [] exprCode
 
 
-getExprTypeWithDeps : List DependencyPackage -> String -> Result TestError Type
+getExprTypeWithDeps : List Dependency -> String -> Result TestError Type
 getExprTypeWithDeps allDependencies exprCode =
     """
 module Main exposing (main)
@@ -81,12 +108,7 @@ main =
         |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                Elm.TypeInference.inferAndCheck
-                    { directDependencies = List.map .name allDependencies
-                    , allDependencies = allDependencies
-                    , files = Dict.singleton mainModule file
-                    }
-                    |> Result.mapError CouldntInfer
+                runInference (List.map .name allDependencies) allDependencies (Dict.singleton mainModule file)
                     |> Result.andThen
                         (\lookupTables ->
                             Dict.get mainModule lookupTables
@@ -107,7 +129,7 @@ modules from a non-direct dependency.
 -}
 inferModules :
     List String
-    -> List DependencyPackage
+    -> List Dependency
     -> Dict ModuleName String
     -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
 inferModules directDependencies allDependencies modules =
@@ -127,12 +149,7 @@ inferModules directDependencies allDependencies modules =
             (Ok Dict.empty)
         |> Result.andThen
             (\files ->
-                Elm.TypeInference.inferAndCheck
-                    { directDependencies = directDependencies
-                    , allDependencies = allDependencies
-                    , files = files
-                    }
-                    |> Result.mapError CouldntInfer
+                runInference directDependencies allDependencies files
                     |> Result.map
                         (\lookupTables ->
                             files
@@ -154,7 +171,7 @@ getDeclType modules moduleName declName =
 
 
 getDeclTypeWithDeps :
-    List DependencyPackage
+    List Dependency
     -> Dict ModuleName String
     -> ModuleName
     -> String
@@ -165,7 +182,7 @@ getDeclTypeWithDeps dependencies modules moduleName declName =
 
 getDeclTypeWithDirectAndDeps :
     List String
-    -> List DependencyPackage
+    -> List Dependency
     -> Dict ModuleName String
     -> ModuleName
     -> String

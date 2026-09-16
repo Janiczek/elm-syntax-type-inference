@@ -25,14 +25,6 @@ type alias TypeAliases =
     Dict ( PackageName, FullModuleName, VarName ) TypeAlias
 
 
-{-| `canSkipChecks == True` (from `inferCorrectCode`) uses the "code already
-compiles" invariant and skips some checks. Intended for elm-review.
-
-`canSkipChecks == False` (from `inferAndCheck`) is mainly used in tests. The
-fast path turns a violated "already-correct code" invariant into a diagnostic
-instead of silently returning an incorrect type.
-
--}
 type alias UnifyConfig =
     { typeAliases : TypeAliases
     , canSkipChecks : Bool
@@ -90,9 +82,8 @@ unifyManyHelp cfg eqs state =
 
 {-| Expand alias (substitute its args) recursively, then collapse extensible records.
 
-Because of `inferAndCheck` we have possibility of infinite cycles. We use `fuel`
-to stop the expansion after a while and provide a type mismatch instead of a
-hang.
+There is a possibility of infinite cycles. We use `fuel` to stop the expansion
+after a while and provide a type mismatch instead of a hang.
 
 -}
 expandAlias : TypeAliases -> MonoType -> MonoType

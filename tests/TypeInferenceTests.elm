@@ -56,6 +56,7 @@ suite =
         , importWithSpecificExposes
         , duplicateImportAliasRegression
         , extensibleRecordRegression
+        , annotationsCheckedAgainstBodiesSuite
         ]
 
 
@@ -2274,21 +2275,21 @@ recordConstructorFunctionRegression =
         modules =
             Dict.singleton [ "Main" ] <|
                 String.ExtraExtra.multilineInput """
-            module Main exposing (main)
+    module Main exposing (main)
 
-            type alias Foo =
-                { a : Int
-                , b : String
-                }
+    type alias Foo =
+        { a : Int
+        , b : String
+        }
 
-            main : Foo
-            main =
-                Foo 1 "x"
-            """
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "{a : Int, b : String}")
+    main : Foo
+    main =
+        Foo 1 "x"
+    """
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "{a : Int, b : String}")
 
 
 unionConstructorReexposeRegression : Test
@@ -2300,28 +2301,28 @@ unionConstructorReexposeRegression =
             Dict.fromList
                 [ ( [ "A" ]
                   , String.ExtraExtra.multilineInput """
-                module A exposing (Foo(..))
+        module A exposing (Foo(..))
 
-                type Foo
-                    = Foo Int
-                """
-                  )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
-                module Main exposing (main)
+        type Foo
+            = Foo Int
+        """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (main)
 
-                import A exposing (Foo(..))
+        import A exposing (Foo(..))
 
-                main : Foo
-                main =
-                    Foo 1
-                """
-                  )
-                ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "A.Foo")
+        main : Foo
+        main =
+            Foo 1
+        """
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "A.Foo")
 
 
 recordConstructorReexposeRegression : Test
@@ -2333,28 +2334,28 @@ recordConstructorReexposeRegression =
             Dict.fromList
                 [ ( [ "A" ]
                   , String.ExtraExtra.multilineInput """
-                module A exposing (Bar)
+        module A exposing (Bar)
 
-                type alias Bar =
-                    { x : Int }
-                """
-                  )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
-                module Main exposing (main)
+        type alias Bar =
+            { x : Int }
+        """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (main)
 
-                import A exposing (Bar)
+        import A exposing (Bar)
 
-                main : Bar
-                main =
-                    Bar 1
-                """
-                  )
-                ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "{x : Int}")
+        main : Bar
+        main =
+            Bar 1
+        """
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "{x : Int}")
 
 
 unexposedUnionConstructorIsntFound : Test
@@ -2366,39 +2367,39 @@ unexposedUnionConstructorIsntFound =
             Dict.fromList
                 [ ( [ "A" ]
                   , String.ExtraExtra.multilineInput """
-                module A exposing (Foo)
+        module A exposing (Foo)
 
-                type Foo
-                    = Foo Int
-                """
-                  )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
-                module Main exposing (main)
+        type Foo
+            = Foo Int
+        """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (main)
 
-                import A exposing (Foo)
+        import A exposing (Foo)
 
-                main =
-                    Foo 1
-                """
-                  )
-                ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map Type.toString
-        |> Expect.equal
-            (Err
-                (CouldntInfer
-                    { moduleName = [ "Main" ]
-                    , declarationNames = []
-                    , details =
-                        VarNotFound
-                            { usedIn = [ "Main" ]
-                            , varName = "Foo"
+        main =
+            Foo 1
+        """
+                          )
+                        ]
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map Type.toString
+                |> Expect.equal
+                    (Err
+                        (CouldntInfer
+                            { moduleName = [ "Main" ]
+                            , declarationNames = []
+                            , details =
+                                VarNotFound
+                                    { usedIn = [ "Main" ]
+                                    , varName = "Foo"
+                                    }
                             }
-                    }
-                )
-            )
+                        )
+                    )
 
 
 duplicateImportAliasRegression : Test
@@ -2410,52 +2411,52 @@ duplicateImportAliasRegression =
             Dict.fromList
                 [ ( [ "A" ]
                   , String.ExtraExtra.multilineInput """
-                module A exposing (Placeholder)
+        module A exposing (Placeholder)
 
-                type alias Placeholder =
-                    Int
-                """
-                  )
-                , ( [ "B" ]
-                  , String.ExtraExtra.multilineInput """
-                module B exposing (Bar(..), Baz)
+        type alias Placeholder =
+            Int
+        """
+                          )
+                        , ( [ "B" ]
+                          , String.ExtraExtra.multilineInput """
+        module B exposing (Bar(..), Baz)
 
-                type alias Baz =
-                    { x : Int }
+        type alias Baz =
+            { x : Int }
 
-                type Bar
-                    = Only
-                """
-                  )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
-                module Main exposing (value, useBaz)
+        type Bar
+            = Only
+        """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (value, useBaz)
 
-                import A as M
-                import B as M
+        import A as M
+        import B as M
 
-                useBaz : M.Baz -> Int
-                useBaz r =
-                    r.x
+        useBaz : M.Baz -> Int
+        useBaz r =
+            r.x
 
-                value : M.Bar
-                value =
-                    M.Only
-                """
-                  )
+        value : M.Bar
+        value =
+            M.Only
+        """
+                          )
+                        ]
+            in
+            Expect.all
+                [ \() ->
+                    getDeclType modules [ "Main" ] "useBaz"
+                        |> Result.map Type.toString
+                        |> Expect.equal (Ok "B.Baz -> Int")
+                , \() ->
+                    getDeclType modules [ "Main" ] "value"
+                        |> Result.map Type.toString
+                        |> Expect.equal (Ok "B.Bar")
                 ]
-    in
-    Expect.all
-        [ \() ->
-            getDeclType modules [ "Main" ] "useBaz"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "B.Baz -> Int")
-        , \() ->
-            getDeclType modules [ "Main" ] "value"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "B.Bar")
-        ]
-        ()
+                ()
 
 
 importWithSpecificExposes : Test
@@ -2488,18 +2489,18 @@ importWithSpecificExposes =
         modules =
             Dict.singleton [ "Main" ] <|
                 String.ExtraExtra.multilineInput """
-            module Main exposing (attributeToString)
+    module Main exposing (attributeToString)
 
-            import Json.Decode exposing (Decoder)
+    import Json.Decode exposing (Decoder)
 
-            attributeToString : ( String, String ) -> String
-            attributeToString ( name, value ) =
-                value
-            """
-    in
-    getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "( String, String ) -> String")
+    attributeToString : ( String, String ) -> String
+    attributeToString ( name, value ) =
+        value
+    """
+            in
+            getDeclTypeWithDeps [ pkg ] modules [ "Main" ] "attributeToString"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "( String, String ) -> String")
 
 
 extensibleRecordRegression : Test
@@ -2510,22 +2511,159 @@ extensibleRecordRegression =
         modules =
             Dict.singleton [ "Main" ] <|
                 String.ExtraExtra.multilineInput """
-                module Main exposing ( Entity, applyForce )
+        module Main exposing ( Entity, applyForce )
 
-                import Dict exposing (Dict)
+        import Dict exposing (Dict)
 
-                type alias Entity comparable a =
-                    { a
-                        | x : Float
-                        , y : Float
-                        , id : comparable
-                    }
+        type alias Entity comparable a =
+            { a
+                | x : Float
+                , y : Float
+                , id : comparable
+            }
 
-                applyForce : Dict comparable (Entity comparable a) -> Dict comparable (Entity comparable a)
-                applyForce entities =
-                    Dict.map (\\_ ent -> { ent | x = ent.x, y = ent.y }) entities
-                """
+        applyForce : Dict comparable (Entity comparable a) -> Dict comparable (Entity comparable a)
+        applyForce entities =
+            Dict.map (\\_ ent -> { ent | x = ent.x, y = ent.y }) entities
+        """
+            in
+            getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "applyForce"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "(Dict.Dict comparable (Main.Entity comparable a)) -> Dict.Dict comparable (Main.Entity comparable a)")
+
+
+annotationsCheckedAgainstBodiesSuite : Test
+annotationsCheckedAgainstBodiesSuite =
+    let
+        checkError : String -> Test
+        checkError code =
+            Test.test code <| \() ->
+            getDeclType
+                (Dict.singleton [ "Main" ] (String.ExtraExtra.multilineInput code))
+                [ "Main" ]
+                "x"
+                |> Expect.err
     in
-    getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "applyForce"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "(Dict.Dict comparable (Main.Entity comparable a)) -> Dict.Dict comparable (Main.Entity comparable a)")
+    Test.describe "annotations are checked against their expressions"
+        [ checkError """
+            module Main exposing (x)
+
+            x : Int
+            x = "nope"
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : Int -> Int
+            x = \\n -> "oops"
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : Int -> Int
+            x = 1
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : { a : Int }
+            x = { a = "oops" }
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : { a : Int }
+            x = { b = 1 }
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : List Int
+            x = [ 1, "oops" ]
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : Int
+            x = ( 1, 2 )
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : comparable
+            x = { a = 1 }
+            """
+        , Test.test "a let-bound function's annotation is checked against its body too" <| \() ->
+        getDeclType
+            (Dict.singleton [ "Main" ] (String.ExtraExtra.multilineInput """
+            module Main exposing (main)
+
+            main =
+                let
+                    x : Int
+                    x = "nope"
+                in
+                x
+            """))
+                    [ "Main" ]
+                    "main"
+                    |> Expect.err
+        , checkError """
+            module Main exposing (x)
+
+            f : Int -> Int
+            f n = n
+
+            x = f "hi"
+            """
+        , checkError """
+            module Main exposing (x)
+
+            f : Int -> Int
+            f n = n
+
+            g : String -> String
+            g s = f s
+
+            x = 1
+            """
+        , checkError """
+            module Main exposing (x)
+
+            f : Int -> Int
+            f n = n
+
+            x : String
+            x = f 1
+            """
+        , checkError """
+            module Main exposing (x)
+
+            x : number
+            x = 1.0
+            """
+        , Test.test "an annotation that the body satisfies is fine (identity)" <| \() ->
+        getDeclType
+            (Dict.singleton [ "Main" ] (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            x : a -> a
+            x = \\y -> y
+            """))
+                    [ "Main" ]
+                    "x"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "a -> a")
+        , Test.test "a polymorphic literal can satisfy a more specific annotation (Float = 1)" <| \() ->
+        getDeclType
+            (Dict.singleton [ "Main" ] (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            x : Float
+            x = 1
+            """))
+                    [ "Main" ]
+                    "x"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Float")
+        ]

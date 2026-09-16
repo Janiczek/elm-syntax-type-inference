@@ -3,7 +3,8 @@ port module Runner exposing (main)
 {-| Used by e2e/run.mjs.
 
 Reads Elm project's source files and dependency docs.json files, parses
-everything, runs Elm.TypeInference.inferAndCheck and reports back via a port.
+everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`
+with `canSkipChecks = False` (full validation) and reports back via a port.
 
 -}
 
@@ -13,13 +14,13 @@ import Elm.Parser
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Module
 import Elm.Syntax.Node as Node
-import Elm.TypeInference
-import Elm.TypeInference.Dependencies exposing (DependencyPackage)
+import Elm.TypeInference exposing (Dependency)
 import Elm.TypeInference.Error as Error
 import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra exposing (Step(..))
 import Parser
+
 
 port result : Encode.Value -> Cmd msg
 
@@ -109,34 +110,45 @@ run flagsValue =
                                 ]
 
                         Ok files ->
-                            let
-                                moduleCount : Int
-                                moduleCount =
-                                    Dict.size files
-                            in
                             case
-                                Elm.TypeInference.inferAndCheck
+                                Elm.TypeInference.dependencyEnv
                                     { directDependencies = flags.directDependencies
                                     , allDependencies = allDependencies
-                                    , files = files
                                     }
                             of
-                                Err inferError ->
+                                Err depEnvError ->
                                     Encode.object
                                         [ ( "ok", Encode.bool False )
-                                        , ( "moduleCount", Encode.int moduleCount )
-                                        , ( "error", Encode.string (Error.toString inferError) )
+                                        , ( "moduleCount", Encode.int (Dict.size files) )
+                                        , ( "error", Encode.string (Error.toString depEnvError) )
                                         ]
 
-                                Ok tables ->
-                                    Encode.object
-                                        [ ( "ok", Encode.bool True )
-                                        , ( "moduleCount", Encode.int moduleCount )
-                                        , ( "tableCount", Encode.int (Dict.size tables) )
-                                        ]
+                                Ok depEnv ->
+                                    let
+                                        project =
+                                            Elm.TypeInference.inferProject
+                                                { canSkipChecks = False }
+                                                depEnv
+                                                files
+                                    in
+                                    case Dict.values project.errors of
+                                        [] ->
+                                            Encode.object
+                                                [ ( "ok", Encode.bool True )
+                                                , ( "moduleCount", Encode.int (Dict.size files) )
+                                                , ( "tableCount", Encode.int (Dict.size project.tables) )
+                                                ]
+
+                                        err :: _ ->
+                                            Encode.object
+                                                [ ( "ok", Encode.bool False )
+                                                , ( "moduleCount", Encode.int (Dict.size files) )
+                                                , ( "tableCount", Encode.int (Dict.size project.tables) )
+                                                , ( "error", Encode.string (Error.toString err) )
+                                                ]
 
 
-buildDependencies : List RawDependency -> Result String (List DependencyPackage)
+buildDependencies : List RawDependency -> Result String (List Dependency)
 buildDependencies rawDeps =
     rawDeps
         |> List.foldr

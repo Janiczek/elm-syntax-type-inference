@@ -52,8 +52,7 @@ type alias Ctx =
     , thisModule : ModuleIndex
     , typeAliases : Dict ( PackageName, FullModuleName, VarName ) TypeAlias
     , index : ModuleLookup.Index
-    , -- see `Elm.TypeInference.inferCorrectCode` vs `inferAndCheck`
-      canSkipChecks : Bool
+    , canSkipChecks : Bool
     }
 
 

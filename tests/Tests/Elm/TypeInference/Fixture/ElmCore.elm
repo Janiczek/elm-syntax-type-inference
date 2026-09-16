@@ -10,10 +10,10 @@ Maybe it would be worth it to put a real docs.json here and parse it from JSON..
 
 import Elm.Docs
 import Elm.Type exposing (Type(..))
-import Elm.TypeInference.Dependencies exposing (DependencyPackage)
+import Elm.TypeInference exposing (Dependency)
 
 
-core : DependencyPackage
+core : Dependency
 core =
     { name = "elm/core"
     , dependencies = []
