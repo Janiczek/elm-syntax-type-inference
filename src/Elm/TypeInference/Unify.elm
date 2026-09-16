@@ -278,17 +278,31 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
         State.pure ()
 
     else if cfg.canSkipChecks && isGround1 && isGround2 then
-        -- Two ground types, we can assume they agree!
-        -- (As the Elm compiler presumably already checked they agree.)
+        -- Two ground types on correct code should agree - fast happy path.
+        -- Though, we need to expand aliases to make MyRecord equal to
+        -- {some: Int, fields: Int}.
         let
-            ( pubT1, pubT2 ) =
-                Type.toPublicPair rawT1 rawT2
+            t1 : MonoType
+            t1 =
+                expandAlias cfg.typeAliases rawT1
+
+            t2 : MonoType
+            t2 =
+                expandAlias cfg.typeAliases rawT2
         in
-        State.error
-            { moduleName = FullModuleName.toModuleName cfg.moduleName
-            , declarationNames = cfg.declarationNames
-            , details = InternalInconsistency pubT1 pubT2
-            }
+        if t1 == t2 then
+            State.pure ()
+
+        else
+            let
+                ( pubT1, pubT2 ) =
+                    Type.toPublicPair rawT1 rawT2
+            in
+            State.error
+                { moduleName = FullModuleName.toModuleName cfg.moduleName
+                , declarationNames = cfg.declarationNames
+                , details = InternalInconsistency pubT1 pubT2
+                }
 
     else
         let
