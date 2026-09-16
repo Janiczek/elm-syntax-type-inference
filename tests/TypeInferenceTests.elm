@@ -57,6 +57,7 @@ suite =
         , duplicateImportAliasRegression
         , extensibleRecordRegression
         , annotationsCheckedAgainstBodiesSuite
+        , rangeContractSuite
         ]
 
 
@@ -480,6 +481,171 @@ main x = x"""
                         )
                     |> Expect.equal (Ok (Just "a -> a"))
         ]
+
+
+rangeContractSuite : Test
+rangeContractSuite =
+    Test.describe "TypeLookupTable ranges"
+        [ Test.test "exact declaration range hits, shifted range misses" <| \() ->
+        --     123456789
+        --     main = 1
+        --     ^^^^^^^^ exact declaration range (cols 1-9): hits
+        --      ^^^^^^^ shifted by one column (cols 2-9): misses
+        case inferMainModule """module Main exposing (main)
+
+main = 1""" of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, table ) ->
+                        Expect.all
+                            [ \_ ->
+                                TypeLookupTable.get
+                                    { start = { row = 3, column = 1 }
+                                    , end = { row = 3, column = 9 }
+                                    }
+                                    table
+                                    |> Expect.notEqual Nothing
+                            , \_ ->
+                                TypeLookupTable.get
+                                    { start = { row = 3, column = 2 }
+                                    , end = { row = 3, column = 9 }
+                                    }
+                                    table
+                                    |> Expect.equal Nothing
+                            ]
+                            ()
+        , Test.test "record-literal field-name nodes carry the field value's type" <| \() ->
+        --     00000000011111111112222222
+        --     12345678901234567890123456
+        --     main = { a = 1, b = 'x' }
+        --              ^             field `a` (cols 10-11)
+        --                     ^      field `b` (cols 17-18; value `'x'` is cols 21-24)
+        case """module Main exposing (main)
+
+main = { a = 1, b = 'x' }""" |> inferMainModule of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, table ) ->
+                        Expect.all
+                            [ \_ ->
+                                TypeLookupTable.get
+                                    { start = { row = 3, column = 10 }
+                                    , end = { row = 3, column = 11 }
+                                    }
+                                    table
+                                    |> isNumberLike
+                                    |> Expect.equal True
+                            , \_ ->
+                                TypeLookupTable.get
+                                    { start = { row = 3, column = 17 }
+                                    , end = { row = 3, column = 18 }
+                                    }
+                                    table
+                                    |> Expect.equal (Just Char)
+                            ]
+                            ()
+        , Test.test "record-update field-name nodes carry the field value's type" <| \() ->
+        --     000000000111111111122222222
+        --     123456789012345678901234567
+        --     main rec = { rec | a = 1 }
+        --                        ^       field `a` (cols 20-21; value `1` is col 24)
+        case """module Main exposing (main)
+
+main rec = { rec | a = 1 }""" |> inferMainModule of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, table ) ->
+                        TypeLookupTable.get
+                            { start = { row = 3, column = 20 }
+                            , end = { row = 3, column = 21 }
+                            }
+                            table
+                            |> isNumberLike
+                            |> Expect.equal True
+        , Test.test "signature node and signature name node share the declared type" <| \() ->
+        --     00000000011
+        --     12345678901
+        --     main : Int
+        --     ^^^^^^^^^^ signature node (row 3, cols 1-11)
+        --     ^^^^       signature name node (row 3, cols 1-5)
+        --     main = 1
+        case """module Main exposing (main)
+
+main : Int
+main = 1""" |> inferMainModule of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, table ) ->
+                        Expect.all
+                            [ \_ ->
+                                TypeLookupTable.get
+                                    { start = { row = 3, column = 1 }
+                                    , end = { row = 3, column = 11 }
+                                    }
+                                    table
+                                    |> Expect.equal (Just Int)
+                            , \_ ->
+                                TypeLookupTable.get
+                                    { start = { row = 3, column = 1 }
+                                    , end = { row = 3, column = 5 }
+                                    }
+                                    table
+                                    |> Expect.equal (Just Int)
+                            ]
+                            ()
+        , Test.test "custom-type declaration nodes have no entry" <| \() ->
+        --     000000000111111
+        --     123456789012345
+        --     type Box = Box
+        --     ^^^^^^^^^^^^^^ declaration node (row 3, cols 1-15): misses
+        """module Main exposing (main)
+
+type Box = Box
+
+main = 1"""
+                    |> inferMainModule
+                    |> Result.map
+                        (Tuple.second
+                            >> TypeLookupTable.get
+                                { start = { row = 3, column = 1 }
+                                , end = { row = 3, column = 15 }
+                                }
+                        )
+                    |> Expect.equal (Ok Nothing)
+        , Test.test "type-alias declaration nodes have no entry" <| \() ->
+        --     00000000011111111112222222222
+        --     12345678901234567890123456789
+        --     type alias Foo = { a : Int }
+        --     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ declaration node (row 3, cols 1-29): misses
+        """module Main exposing (main)
+
+type alias Foo = { a : Int }
+
+main = 1"""
+                    |> inferMainModule
+                    |> Result.map
+                        (Tuple.second
+                            >> TypeLookupTable.get
+                                { start = { row = 3, column = 1 }
+                                , end = { row = 3, column = 29 }
+                                }
+                        )
+                    |> Expect.equal (Ok Nothing)
+        ]
+
+
+isNumberLike : Maybe Type -> Bool
+isNumberLike maybeType =
+    case maybeType of
+        Just (Type.TypeVar name) ->
+            String.startsWith "number" name
+
+        _ ->
+            False
 
 
 largeInputsSuite : Test

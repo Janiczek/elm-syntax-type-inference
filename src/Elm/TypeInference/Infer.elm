@@ -165,6 +165,17 @@ aliasImplementation declId implNode =
     State.pure impl
 
 
+aliasSignature : Id -> Maybe (Node Signature) -> StateM ()
+aliasSignature declId maybeSigNode =
+    case maybeSigNode of
+        Nothing ->
+            State.pure ()
+
+        Just sigNode ->
+            State.do (State.aliasNodeId (Node.range sigNode) declId) <| \() ->
+            State.aliasNodeId (Node.range (Node.value sigNode).name) declId
+
+
 inferFnImplementation : Ctx -> Id -> Expression.FunctionImplementation -> StateM (List TypeEquation)
 inferFnImplementation ctx declId impl =
     State.withScopedEnv <|
@@ -234,6 +245,7 @@ functionMember :
 functionMember ctx declNode fn installFor =
     State.do (State.idForNode declNode) <| \declId ->
     State.do (aliasImplementation declId fn.declaration) <| \impl ->
+    State.do (aliasSignature declId fn.signature) <| \() ->
     State.do (annotationType ctx fn.signature) <| \maybeAnnotationType ->
     let
         varName : VarName
@@ -641,6 +653,7 @@ inferRecordSetters ctx fieldSetters =
                         Node.value fieldSetterNode
                 in
                 State.do (inferExpr ctx fieldExprNode) <| \( fieldId, eqs ) ->
+                State.do (State.aliasNodeId (Node.range fieldNameNode) fieldId) <| \() ->
                 State.pure ( ( Node.value fieldNameNode, TypeI.id_ fieldId ), eqs )
             )
         |> State.map
