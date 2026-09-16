@@ -955,13 +955,9 @@ shaderSlotToPublic f extensionTypevar fields =
                     , Just "<elm-syntax-type-inference bug: non-var as extensible record base>"
                     )
 
-        other ->
+        _ ->
             -- Shouldn't happen: shader slots are always record-like.
             -- Fall back to a closed record holding nothing, to avoid crashing.
-            let
-                _ =
-                    other
-            in
             ( Dict.empty
             , Nothing
             )
