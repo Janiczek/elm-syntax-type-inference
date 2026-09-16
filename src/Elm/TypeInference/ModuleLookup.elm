@@ -497,7 +497,7 @@ qualifierCandidates thisModule qualifier =
                         acc ++ [ candidate ]
                 )
                 []
-                (explicitAliases ++ implicitAlias)
+                (aliasedModules ++ implicitAlias)
 
         literalAvailable : Bool
         literalAvailable =
