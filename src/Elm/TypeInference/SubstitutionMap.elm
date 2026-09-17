@@ -4,7 +4,6 @@ module Elm.TypeInference.SubstitutionMap exposing
     , SubstitutionMap
     , bindRoot
     , empty
-    , isGround
     , letRankOf
     , linkTo
     , setIdLetRank

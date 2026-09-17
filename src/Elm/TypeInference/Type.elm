@@ -285,6 +285,7 @@ breakType maxWidth t =
 
         Named { moduleName, name, arguments } ->
             let
+                qualifiedName : String
                 qualifiedName =
                     Elm.Syntax.ModuleName.Extra.toString moduleName
                         ++ "."
@@ -377,6 +378,7 @@ breakRecordFields maxWidth extensionTypevar fields =
 
         ( firstName, firstType ) :: rest ->
             let
+                firstLine : String
                 firstLine =
                     case extensionTypevar of
                         Nothing ->
@@ -385,6 +387,7 @@ breakRecordFields maxWidth extensionTypevar fields =
                         Just var ->
                             "{ " ++ var ++ " | " ++ firstName ++ " : " ++ toMultilineString maxWidth firstType
 
+                restLines : List String
                 restLines =
                     List.map (\( name, fieldType ) -> "\n, " ++ name ++ " : " ++ toMultilineString maxWidth fieldType) rest
             in
