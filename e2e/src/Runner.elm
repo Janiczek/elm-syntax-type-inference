@@ -13,17 +13,20 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Parser
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.TypeInference exposing (Dependency, DependencyEnv)
 import Elm.TypeInference.Error as Error
+import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.Type as Type
 import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra exposing (Step(..))
 import Parser
 import RangeLike exposing (RangeLike)
+import Set exposing (Set)
 import TypeLookupTable.Internal exposing (TypeLookupTable(..))
 
 
@@ -98,6 +101,7 @@ type alias Flags =
     { sources : List SourceFile
     , directDependencies : List String
     , allDependencies : List RawDependency
+    , exposedModules : Maybe (List String)
     }
 
 
@@ -122,10 +126,11 @@ type alias ProvidedPackage =
 
 flagsDecoder : Decode.Decoder Flags
 flagsDecoder =
-    Decode.map3 Flags
+    Decode.map4 Flags
         (Decode.field "sources" (Decode.list sourceFileDecoder))
         (Decode.field "directDependencies" (Decode.list Decode.string))
         (Decode.field "allDependencies" (Decode.list dependencyDecoder))
+        (Decode.field "exposedModules" (Decode.nullable (Decode.list Decode.string)))
 
 
 sourceFileDecoder : Decode.Decoder SourceFile
@@ -267,13 +272,25 @@ run flagsValue =
                             )
 
                         Ok modules ->
-                            step
-                                { directDependencies = flags.directDependencies
-                                , allDependencies = allDependencies
-                                , files = Dict.map (\_ { file } -> file) modules
-                                , sourcePaths = Dict.map (\_ { path } -> path) modules
-                                , dependencySources = Dict.empty
-                                }
+                            case keepReachable flags.exposedModules modules of
+                                Err err ->
+                                    ( finished Nothing
+                                    , result
+                                        (Encode.object
+                                            [ ( "ok", Encode.bool False )
+                                            , ( "error", Encode.string err )
+                                            ]
+                                        )
+                                    )
+
+                                Ok kept ->
+                                    step
+                                        { directDependencies = flags.directDependencies
+                                        , allDependencies = allDependencies
+                                        , files = Dict.map (\_ { file } -> file) kept
+                                        , sourcePaths = Dict.map (\_ { path } -> path) kept
+                                        , dependencySources = Dict.empty
+                                        }
 
 
 step : Active -> ( Model, Cmd Msg )
@@ -405,6 +422,75 @@ parseAllSources sources =
                         Stop (Err (path ++ ": " ++ deadEndsToString deadEnds))
             )
             (Ok Dict.empty)
+
+
+keepReachable :
+    Maybe (List String)
+    -> Dict ModuleName { path : String, file : File }
+    -> Result String (Dict ModuleName { path : String, file : File })
+keepReachable maybeExposed modules =
+    case maybeExposed of
+        Nothing ->
+            Ok modules
+
+        Just exposedDotted ->
+            let
+                roots : List ModuleName
+                roots =
+                    List.map (String.split ".") exposedDotted
+
+                missing : List String
+                missing =
+                    roots
+                        |> List.filter (\root -> not (Dict.member root modules))
+                        |> List.map (String.join ".")
+            in
+            case missing of
+                first :: rest ->
+                    Err ("exposed module not found in sources: " ++ String.join ", " (first :: rest))
+
+                [] ->
+                    Ok (reachableFrom roots modules)
+
+
+reachableFrom :
+    List ModuleName
+    -> Dict ModuleName { path : String, file : File }
+    -> Dict ModuleName { path : String, file : File }
+reachableFrom roots modules =
+    let
+        firstPartyImports : ModuleName -> List ModuleName
+        firstPartyImports name =
+            case Dict.get name modules of
+                Nothing ->
+                    []
+
+                Just { file } ->
+                    (ModuleIndex.fromFile file).imports
+                        |> List.map (\import_ -> FullModuleName.toModuleName import_.moduleName)
+                        |> List.filter (\target -> Dict.member target modules)
+
+        go : List ModuleName -> Set ModuleName -> Dict ModuleName { path : String, file : File } -> Dict ModuleName { path : String, file : File }
+        go queue seen acc =
+            case queue of
+                [] ->
+                    acc
+
+                name :: rest ->
+                    if Set.member name seen then
+                        go rest seen acc
+
+                    else
+                        case Dict.get name modules of
+                            Nothing ->
+                                go rest (Set.insert name seen) acc
+
+                            Just entry ->
+                                go (rest ++ firstPartyImports name)
+                                    (Set.insert name seen)
+                                    (Dict.insert name entry acc)
+    in
+    go roots Set.empty Dict.empty
 
 
 deadEndsToString : List Parser.DeadEnd -> String

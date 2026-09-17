@@ -76,6 +76,33 @@ function findSourceFiles(projectDir, elmJson) {
     .flatMap(findElmFiles);
 }
 
+// Test only exposed modules (+ transitive deps - resovled in Runner.elm).
+// Ignore other files in src/.
+function exposedModulesFor(elmJson) {
+  if (elmJson.type !== "package") return null;
+  const em = elmJson["exposed-modules"];
+  if (Array.isArray(em)) return em.filter((m) => typeof m === "string");
+  if (em && typeof em === "object") {
+    return Object.values(em)
+      .flat()
+      .filter((m) => typeof m === "string");
+  }
+  return null;
+}
+
+// Warm the ELM_HOME cache with an exposed file.
+function pickWarmupFile(projectDir, sourceFiles, elmJson) {
+  const exposed = exposedModulesFor(elmJson);
+  if (exposed && exposed.length > 0) {
+    for (const mod of exposed) {
+      const suffix = path.join(...mod.split(".")) + ".elm";
+      const hit = sourceFiles.find((f) => path.relative(projectDir, f).endsWith(suffix));
+      if (hit) return hit;
+    }
+  }
+  return sourceFiles[0];
+}
+
 // Runs `elm make` in the tested directory so the compiler downloads the deps.
 // Compile errors are ignored (tests can be expected to fail).
 function ensureDependenciesCached(projectDir, sourceFiles) {
@@ -348,7 +375,7 @@ async function runTest(name) {
   const elmJson = readJson(path.join(projectDir, "elm.json"));
 
   const sourceFiles = findSourceFiles(projectDir, elmJson);
-  ensureDependenciesCached(projectDir, sourceFiles);
+  ensureDependenciesCached(projectDir, [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean));
 
   const { dependencies, versions } = await resolveDependencies(elmJson);
   const flags = {
@@ -358,6 +385,7 @@ async function runTest(name) {
     })),
     directDependencies: directDependencyNames(elmJson),
     allDependencies: dependencies,
+    exposedModules: exposedModulesFor(elmJson),
   };
 
   const start = process.hrtime.bigint();
