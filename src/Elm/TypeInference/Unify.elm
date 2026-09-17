@@ -27,7 +27,6 @@ type alias TypeAliases =
 
 type alias UnifyConfig =
     { typeAliases : TypeAliases
-    , canSkipChecks : Bool
     , moduleName : FullModuleName
     , declarationNames : List VarName
     }
@@ -48,10 +47,10 @@ unifyManyHelp cfg eqs state =
 
         ( t1, t2 ) :: rest ->
             let
-                ( st1, flags1, subst1 ) =
+                ( st1, _, subst1 ) =
                     SubstitutionMap.substituteMono state.subst t1
 
-                ( st2, flags2, subst2 ) =
+                ( st2, _, subst2 ) =
                     SubstitutionMap.substituteMono subst1 t2
 
                 state1 : State.State
@@ -67,9 +66,7 @@ unifyManyHelp cfg eqs state =
             case
                 unifyMono
                     cfg
-                    (SubstitutionMap.isGround flags1)
                     st1
-                    (SubstitutionMap.isGround flags2)
                     st2
                     state1
             of
@@ -272,37 +269,10 @@ zipRecordFields bindings1 bindings2 =
         (Just [])
 
 
-unifyMono : UnifyConfig -> Bool -> MonoType -> Bool -> MonoType -> StateM ()
-unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
+unifyMono : UnifyConfig -> MonoType -> MonoType -> StateM ()
+unifyMono cfg rawT1 rawT2 =
     if rawT1 == rawT2 then
         State.pure ()
-
-    else if cfg.canSkipChecks && isGround1 && isGround2 then
-        -- Two ground types on correct code should agree - fast happy path.
-        -- Though, we need to expand aliases to make MyRecord equal to
-        -- {some: Int, fields: Int}.
-        let
-            t1 : MonoType
-            t1 =
-                expandAlias cfg.typeAliases rawT1
-
-            t2 : MonoType
-            t2 =
-                expandAlias cfg.typeAliases rawT2
-        in
-        if t1 == t2 then
-            State.pure ()
-
-        else
-            let
-                ( pubT1, pubT2 ) =
-                    TypeI.toPublicPair rawT1 rawT2
-            in
-            State.error
-                { moduleName = FullModuleName.toModuleName cfg.moduleName
-                , declarationNames = cfg.declarationNames
-                , details = InternalInconsistency pubT1 pubT2
-                }
 
     else
         let
@@ -749,7 +719,7 @@ bind cfg typeVar type_ =
                                 )
 
             _ ->
-                if cfg.canSkipChecks || accepts cfg.typeAliases super type_ then
+                if accepts cfg.typeAliases super type_ then
                     State.modifySubst (SubstitutionMap.bindRoot typeVar type_)
 
                 else

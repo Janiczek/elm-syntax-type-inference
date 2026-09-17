@@ -92,12 +92,8 @@ general.
 -}
 checkAnnotations : UnifyConfig -> List Member -> StateM ()
 checkAnnotations cfg members =
-    if cfg.canSkipChecks then
-        State.pure ()
-
-    else
-        State.traverse (checkOne cfg) members
-            |> State.map (always ())
+    State.traverse (checkOne cfg) members
+        |> State.map (always ())
 
 
 checkOne : UnifyConfig -> Member -> StateM ()

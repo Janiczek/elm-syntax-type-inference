@@ -61,11 +61,10 @@ import TypeLookupTable.Internal
 {-| Infer every module of a project, in dependency order.
 -}
 inferProject :
-    { canSkipChecks : Bool }
-    -> DependencyEnv
+    DependencyEnv
     -> Dict ModuleName File
     -> { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
-inferProject canSkipChecks depEnv files =
+inferProject depEnv files =
     let
         modules : List ProjectModule
         modules =
@@ -139,7 +138,7 @@ inferProject canSkipChecks depEnv files =
                     |> List.ExtraExtra.fastConcatMap (List.filterMap (\name -> Dict.get name byName))
         in
         order
-            |> List.foldl (inferOne canSkipChecks depEnv)
+            |> List.foldl (inferOne depEnv)
                 { tables = Dict.empty
                 , errors = Dict.empty
                 , interfaces = Dict.empty
@@ -238,8 +237,8 @@ type alias ProjectAcc =
     }
 
 
-inferOne : { canSkipChecks : Bool } -> DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
-inferOne canSkipChecks depEnv m acc =
+inferOne : DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
+inferOne depEnv m acc =
     let
         imported : Dict FullModuleName ModuleInterface
         imported =
@@ -255,7 +254,7 @@ inferOne canSkipChecks depEnv m acc =
                     )
                     Dict.empty
     in
-    case inferModule_ canSkipChecks depEnv imported m.file of
+    case inferModule_ depEnv imported m.file of
         Ok { table, interface } ->
             { acc
                 | tables = Dict.insert m.key table acc.tables
@@ -338,12 +337,11 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
 
 
 inferModule_ :
-    { canSkipChecks : Bool }
-    -> DependencyEnv
+    DependencyEnv
     -> Dict FullModuleName ModuleInterface
     -> File
     -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
-inferModule_ canSkipChecks depEnv importedInterfaces file =
+inferModule_ depEnv importedInterfaces file =
     let
         ctx : ModuleCtx
         ctx =
@@ -360,7 +358,7 @@ inferModule_ canSkipChecks depEnv importedInterfaces file =
             Dict.union outgoingAliases ctx.depTypeAliases
     in
     State.do (registerConstructorsAndPorts ctx file) <| \() ->
-    State.do (solveModule canSkipChecks ctx typeAliases file) <| \() ->
+    State.do (solveModule ctx typeAliases file) <| \() ->
     State.do (moduleResult ctx outgoingAliases) <| \result ->
     State.pure result
     )
@@ -441,12 +439,11 @@ moduleResult ctx outgoingAliases =
 
 
 solveModule :
-    { canSkipChecks : Bool }
-    -> ModuleCtx
+    ModuleCtx
     -> Dict GlobalKey TypeAlias
     -> File
     -> StateM ()
-solveModule { canSkipChecks } ctx typeAliases file =
+solveModule ctx typeAliases file =
     let
         topLevelFunctions : List ( VarName, ( Node Declaration, Expression.Function ) )
         topLevelFunctions =
@@ -516,7 +513,6 @@ solveModule { canSkipChecks } ctx typeAliases file =
             , thisModule = ctx.thisIndex
             , typeAliases = typeAliases
             , index = ctx.index
-            , canSkipChecks = canSkipChecks
             }
     in
     sccs

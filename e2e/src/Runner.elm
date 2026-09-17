@@ -4,7 +4,7 @@ port module Runner exposing (main)
 
 Reads Elm project's source files and dependency docs.json files, parses
 everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`
-with the `canSkipChecks` flag value (`False` = full validation) and reports back via ports.
+and reports back via ports.
 
 1.  Elm infers and sends summary (`ok` / `error`) via the `result` port.
 2.  run.mjs stops its timer, prints how fast it was and what the result was,
@@ -59,7 +59,6 @@ type alias Flags =
     { sources : List SourceFile
     , directDependencies : List String
     , allDependencies : List RawDependency
-    , canSkipChecks : Bool
     }
 
 
@@ -78,11 +77,10 @@ type alias RawDependency =
 
 flagsDecoder : Decode.Decoder Flags
 flagsDecoder =
-    Decode.map4 Flags
+    Decode.map3 Flags
         (Decode.field "sources" (Decode.list sourceFileDecoder))
         (Decode.field "directDependencies" (Decode.list Decode.string))
         (Decode.field "allDependencies" (Decode.list dependencyDecoder))
-        (Decode.field "canSkipChecks" Decode.bool)
 
 
 sourceFileDecoder : Decode.Decoder SourceFile
@@ -199,7 +197,6 @@ run flagsValue =
                                     let
                                         project =
                                             Elm.TypeInference.inferProject
-                                                { canSkipChecks = flags.canSkipChecks }
                                                 depEnv
                                                 files
 

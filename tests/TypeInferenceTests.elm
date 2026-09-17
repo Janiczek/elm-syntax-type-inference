@@ -2175,7 +2175,6 @@ runUnify typeAliases eqs =
     (State.do
         (Unify.unifyMany
             { typeAliases = typeAliases
-            , canSkipChecks = False
             , moduleName = mainModule
             , declarationNames = []
             }

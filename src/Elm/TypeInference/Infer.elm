@@ -52,7 +52,6 @@ type alias Ctx =
     , thisModule : ModuleIndex
     , typeAliases : Dict ( PackageName, FullModuleName, VarName ) TypeAlias
     , index : ModuleLookup.Index
-    , canSkipChecks : Bool
     }
 
 
@@ -64,7 +63,6 @@ unifyConfig ctx =
 unifyConfigForGroup : Ctx -> List VarName -> Unify.UnifyConfig
 unifyConfigForGroup ctx declarationNames =
     { typeAliases = ctx.typeAliases
-    , canSkipChecks = ctx.canSkipChecks
     , moduleName = ctx.thisModule.moduleName
     , declarationNames = declarationNames
     }

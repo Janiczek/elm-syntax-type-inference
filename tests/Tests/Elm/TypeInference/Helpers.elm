@@ -76,7 +76,6 @@ runInference directDependencies allDependencies files =
                         }
                     project =
                         Elm.TypeInference.inferProject
-                            { canSkipChecks = False }
                             depEnv
                             files
                 in
