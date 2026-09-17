@@ -15,6 +15,7 @@
     "postinstall": "elm-tooling install"
   },
   "dependencies": {
+    "elm-solve-deps-wasm": "^2.0.0",
     "elm-test": "^0.19.2-1",
     "elm-tooling": "^1.20.0"
   }

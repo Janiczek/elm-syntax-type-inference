@@ -6,6 +6,9 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
+import solver from "elm-solve-deps-wasm";
+
+solver.init();
 
 const ELM_VERSION = "0.19.2";
 const ELM_HOME = process.env.ELM_HOME || path.join(os.homedir(), ".elm");
@@ -85,21 +88,19 @@ function ensureDependenciesCached(projectDir, sourceFiles) {
   } catch {}
 }
 
-function latestCachedVersion(name) {
+function cachedVersions(name) {
   let entries;
   try {
     entries = fs.readdirSync(path.join(PACKAGES_DIR, name));
   } catch (e) {
     if (e?.code === "ENOENT") {
-      console.warn(`warning: no cached versions for ${name}, skipping`);
-      return undefined;
+      return [];
     }
     throw e;
   }
   return entries
     .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-    .at(-1);
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
 }
 
 function packageDeps(name, version) {
@@ -157,7 +158,22 @@ function directDependencyNames(elmJson) {
   }
 }
 
-// Resolves elm.json dependencies to exact versions (for packages, pick latest version).
+// Resolve the whole graph, not just each package's newest cached version:
+// transitive dependencies can further constrain a direct dependency's range.
+function resolvePackageVersions(elmJson, readPackageJson, listVersions) {
+  const solution = JSON.parse(
+    solver.solve_deps(
+      JSON.stringify(elmJson),
+      false,
+      {},
+      (name, version) => JSON.stringify(readPackageJson(name, version)),
+      listVersions
+    )
+  );
+  return { ...solution.direct, ...solution.indirect };
+}
+
+// Resolves elm.json dependencies to exact (allowed) versions.
 // Loads their docs.json.
 async function resolveDependencies(elmJson) {
   const versions = {};
@@ -171,15 +187,14 @@ async function resolveDependencies(elmJson) {
     }
 
     case "package": {
-      const queue = Object.keys(elmJson.dependencies);
-      while (queue.length) {
-        const name = queue.shift();
-        if (versions[name]) continue;
-        const version = latestCachedVersion(name);
-        if (!version) continue;
-        versions[name] = version;
-        queue.push(...packageDeps(name, version));
-      }
+      Object.assign(
+        versions,
+        resolvePackageVersions(
+          elmJson,
+          (name, version) => readJson(path.join(PACKAGES_DIR, name, version, "elm.json")),
+          cachedVersions
+        )
+      );
       break;
     }
 
