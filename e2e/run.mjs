@@ -443,9 +443,11 @@ function csvEscape(value) {
 function printReport({ name, expected, result, passed, elapsedSeconds }) {
   const actual = result.ok ? "pass" : "fail";
   if (csvMode) {
-    const error = result.ok ? "" : (result.error ?? "");
+    const rawError = result.ok ? "" : (result.error ?? "");
+    const error = expected.expect === "fail" && passed ? "" : rawError;
+    // `test,` prefix already written early in main loop, finish rest of line.
     console.log(
-      [name, expected.expect, actual, passed, elapsedSeconds.toFixed(3), error].map(csvEscape).join(",")
+      [expected.expect, actual, passed, elapsedSeconds.toFixed(3), error].map(csvEscape).join(",")
     );
     return;
   }
@@ -473,15 +475,17 @@ async function main() {
     console.log("test,expected,actual,passed,seconds,error");
   }
   for (const name of names) {
+    if (csvMode) process.stdout.write(`${csvEscape(name)},`);
     try {
       const report = await runTest(name);
       if (report.passed) passedCount++;
     } catch (e) {
       // runTest already handles errors after expected.json loads;
       // this is a last resort (e.g. missing expected.json) so the suite continues.
+      // CSV `test,` prefix already written above, finish rest of line.
       const error = formatError(e);
       if (csvMode) {
-        console.log([name, "?", "fail", false, (0).toFixed(3), error].map(csvEscape).join(","));
+        console.log(["?", "fail", false, (0).toFixed(3), error].map(csvEscape).join(","));
       } else {
         console.log(` ✗ FAIL (0.000s)`);
         console.log(`    error: ${error}`);
