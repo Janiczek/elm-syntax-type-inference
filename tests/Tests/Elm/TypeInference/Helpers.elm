@@ -27,6 +27,7 @@ import TypeLookupTable.Internal
 type TestError
     = CouldntParse
     | CouldntInfer Error
+    | MissingDependencySources (List String)
     | CouldntFindMainModule
     | CouldntFindMainDeclaration
 
@@ -62,30 +63,36 @@ runInference :
     -> Dict ModuleName File
     -> Result TestError (Dict ModuleName TypeLookupTable)
 runInference directDependencies allDependencies files =
-    Elm.TypeInference.dependencyEnv
-        { directDependencies = directDependencies
-        , allDependencies = allDependencies
-        }
-        |> Result.mapError CouldntInfer
-        |> Result.andThen
-            (\depEnv ->
-                let
-                    project :
-                        { tables : Dict ModuleName TypeLookupTable
-                        , errors : Dict ModuleName Error
-                        }
-                    project =
-                        Elm.TypeInference.inferProject
-                            depEnv
-                            files
-                in
-                case Dict.values project.errors of
-                    [] ->
-                        Ok project.tables
+    case
+        Elm.TypeInference.dependencyEnv
+            { directDependencies = directDependencies
+            , allDependencies = allDependencies
+            , sourcesToResolveAmbiguity = Dict.empty
+            }
+    of
+        Elm.TypeInference.Failed err ->
+            Err (CouldntInfer err)
 
-                    err :: _ ->
-                        Err (CouldntInfer err)
-            )
+        Elm.TypeInference.Ready depEnv ->
+            let
+                project :
+                    { tables : Dict ModuleName TypeLookupTable
+                    , errors : Dict ModuleName Error
+                    }
+                project =
+                    Elm.TypeInference.inferProject
+                        depEnv
+                        files
+            in
+            case Dict.values project.errors of
+                [] ->
+                    Ok project.tables
+
+                err :: _ ->
+                    Err (CouldntInfer err)
+
+        Elm.TypeInference.NeedSources { neededPackages } ->
+            Err (MissingDependencySources neededPackages)
 
 
 getExprType : String -> Result TestError Type

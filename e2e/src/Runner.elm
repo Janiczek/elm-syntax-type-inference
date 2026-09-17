@@ -6,11 +6,6 @@ Reads Elm project's source files and dependency docs.json files, parses
 everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`
 and reports back via ports.
 
-1.  Elm infers and sends summary (`ok` / `error`) via the `result` port.
-2.  run.mjs stops its timer, prints how fast it was and what the result was,
-    then (only on success) sends `requestInferredTypes`.
-3.  Elm serializes the tables and sends the text via the `inferredTypes` port.
-
 -}
 
 import Bitwise
@@ -21,7 +16,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
-import Elm.TypeInference exposing (Dependency)
+import Elm.TypeInference exposing (Dependency, DependencyEnv)
 import Elm.TypeInference.Error as Error
 import Elm.TypeInference.Type as Type
 import Json.Decode as Decode
@@ -41,8 +36,50 @@ port inferredTypes : String -> Cmd msg
 port requestInferredTypes : (Decode.Value -> msg) -> Sub msg
 
 
+port requestPackageSources : List String -> Cmd msg
+
+
+port providePackageSources : (Decode.Value -> msg) -> Sub msg
+
+
+port inferenceStarted : Encode.Value -> Cmd msg
+
+
+port inferenceStopped : Encode.Value -> Cmd msg
+
+
+port beginInference : (Decode.Value -> msg) -> Sub msg
+
+
 type alias Model =
-    Maybe PendingTables
+    { active : Maybe Active
+    , pending : Maybe PendingTables
+    , inference : Maybe PendingInference
+    }
+
+
+finished : Maybe PendingTables -> Model
+finished pending =
+    { active = Nothing
+    , pending = pending
+    , inference = Nothing
+    }
+
+
+type alias Active =
+    { directDependencies : List String
+    , allDependencies : List Dependency
+    , files : Dict ModuleName File
+    , sourcePaths : Dict ModuleName String
+    , dependencySources : Dict String (List File)
+    }
+
+
+type alias PendingInference =
+    { depEnv : DependencyEnv
+    , files : Dict ModuleName File
+    , sourcePaths : Dict ModuleName String
+    }
 
 
 type alias PendingTables =
@@ -53,6 +90,8 @@ type alias PendingTables =
 
 type Msg
     = GotInferredTypesRequest Decode.Value
+    | GotPackageSources Decode.Value
+    | GotBeginInference Decode.Value
 
 
 type alias Flags =
@@ -72,6 +111,12 @@ type alias RawDependency =
     { name : String
     , dependsOn : List String
     , docsJson : Decode.Value
+    }
+
+
+type alias ProvidedPackage =
+    { name : String
+    , sources : List SourceFile
     }
 
 
@@ -98,6 +143,13 @@ dependencyDecoder =
         (Decode.field "docsJson" Decode.value)
 
 
+providedPackageDecoder : Decode.Decoder ProvidedPackage
+providedPackageDecoder =
+    Decode.map2 ProvidedPackage
+        (Decode.field "name" Decode.string)
+        (Decode.field "sources" (Decode.list sourceFileDecoder))
+
+
 main : Program Decode.Value Model Msg
 main =
     Platform.worker
@@ -116,24 +168,72 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         GotInferredTypesRequest _ ->
-            case model of
+            case model.pending of
                 Nothing ->
                     ( model, inferredTypes "" )
 
                 Just pending ->
                     ( model, inferredTypes (tablesToString pending.sourcePaths pending.tables) )
 
+        GotPackageSources value ->
+            case model.active of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just active ->
+                    case Decode.decodeValue (Decode.list providedPackageDecoder) value of
+                        Err err ->
+                            ( finished Nothing
+                            , result
+                                (Encode.object
+                                    [ ( "ok", Encode.bool False )
+                                    , ( "moduleCount", Encode.int (Dict.size active.files) )
+                                    , ( "error", Encode.string ("package sources decode error: " ++ Decode.errorToString err) )
+                                    ]
+                                )
+                            )
+
+                        Ok provided ->
+                            let
+                                merged : Dict String (List File)
+                                merged =
+                                    List.foldl
+                                        (\pkg acc ->
+                                            Dict.insert pkg.name
+                                                (List.filterMap
+                                                    (\sf -> Elm.Parser.parseToFile sf.source |> Result.toMaybe)
+                                                    pkg.sources
+                                                )
+                                                acc
+                                        )
+                                        active.dependencySources
+                                        provided
+                            in
+                            step { active | dependencySources = merged }
+
+        GotBeginInference _ ->
+            case model.inference of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just pending ->
+                    runInference pending
+
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-    requestInferredTypes GotInferredTypesRequest
+    Sub.batch
+        [ requestInferredTypes GotInferredTypesRequest
+        , providePackageSources GotPackageSources
+        , beginInference GotBeginInference
+        ]
 
 
 run : Decode.Value -> ( Model, Cmd Msg )
 run flagsValue =
     case Decode.decodeValue flagsDecoder flagsValue of
         Err err ->
-            ( Nothing
+            ( finished Nothing
             , result
                 (Encode.object
                     [ ( "ok", Encode.bool False )
@@ -145,7 +245,7 @@ run flagsValue =
         Ok flags ->
             case buildDependencies flags.allDependencies of
                 Err err ->
-                    ( Nothing
+                    ( finished Nothing
                     , result
                         (Encode.object
                             [ ( "ok", Encode.bool False )
@@ -157,7 +257,7 @@ run flagsValue =
                 Ok allDependencies ->
                     case parseAllSources flags.sources of
                         Err err ->
-                            ( Nothing
+                            ( finished Nothing
                             , result
                                 (Encode.object
                                     [ ( "ok", Encode.bool False )
@@ -167,69 +267,98 @@ run flagsValue =
                             )
 
                         Ok modules ->
-                            let
-                                files : Dict (List String) File
-                                files =
-                                    Dict.map (\_ { file } -> file) modules
+                            step
+                                { directDependencies = flags.directDependencies
+                                , allDependencies = allDependencies
+                                , files = Dict.map (\_ { file } -> file) modules
+                                , sourcePaths = Dict.map (\_ { path } -> path) modules
+                                , dependencySources = Dict.empty
+                                }
 
-                                sourcePaths : Dict (List String) String
-                                sourcePaths =
-                                    Dict.map (\_ { path } -> path) modules
-                            in
-                            case
-                                Elm.TypeInference.dependencyEnv
-                                    { directDependencies = flags.directDependencies
-                                    , allDependencies = allDependencies
+
+step : Active -> ( Model, Cmd Msg )
+step active =
+    case
+        Elm.TypeInference.dependencyEnv
+            { directDependencies = active.directDependencies
+            , allDependencies = active.allDependencies
+            , sourcesToResolveAmbiguity = active.dependencySources
+            }
+    of
+        Elm.TypeInference.Failed depEnvError ->
+            reportDepEnvError active.files depEnvError
+
+        Elm.TypeInference.NeedSources { neededPackages } ->
+            ( { active = Just active, pending = Nothing, inference = Nothing }
+            , requestPackageSources neededPackages
+            )
+
+        Elm.TypeInference.Ready depEnv ->
+            ( finished Nothing
+                |> (\model ->
+                        { model
+                            | inference =
+                                Just
+                                    { depEnv = depEnv
+                                    , files = active.files
+                                    , sourcePaths = active.sourcePaths
                                     }
-                            of
-                                Err depEnvError ->
-                                    ( Nothing
-                                    , result
-                                        (Encode.object
-                                            [ ( "ok", Encode.bool False )
-                                            , ( "moduleCount", Encode.int (Dict.size files) )
-                                            , ( "error", Encode.string (Error.toString depEnvError) )
-                                            ]
-                                        )
-                                    )
+                        }
+                   )
+            , inferenceStarted Encode.null
+            )
 
-                                Ok depEnv ->
-                                    let
-                                        project =
-                                            Elm.TypeInference.inferProject
-                                                depEnv
-                                                files
 
-                                        pending : Model
-                                        pending =
-                                            Just
-                                                { sourcePaths = sourcePaths
-                                                , tables = project.tables
-                                                }
-                                    in
-                                    case Dict.values project.errors of
-                                        [] ->
-                                            ( pending
-                                            , result
-                                                (Encode.object
-                                                    [ ( "ok", Encode.bool True )
-                                                    , ( "moduleCount", Encode.int (Dict.size files) )
-                                                    , ( "tableCount", Encode.int (Dict.size project.tables) )
-                                                    ]
-                                                )
-                                            )
+reportDepEnvError : Dict (List String) File -> Error.Error -> ( Model, Cmd Msg )
+reportDepEnvError files depEnvError =
+    ( finished Nothing
+    , result
+        (Encode.object
+            [ ( "ok", Encode.bool False )
+            , ( "moduleCount", Encode.int (Dict.size files) )
+            , ( "error", Encode.string (Error.toString depEnvError) )
+            ]
+        )
+    )
 
-                                        err :: _ ->
-                                            ( pending
-                                            , result
-                                                (Encode.object
-                                                    [ ( "ok", Encode.bool False )
-                                                    , ( "moduleCount", Encode.int (Dict.size files) )
-                                                    , ( "tableCount", Encode.int (Dict.size project.tables) )
-                                                    , ( "error", Encode.string (Error.toString err) )
-                                                    ]
-                                                )
-                                            )
+
+runInference : PendingInference -> ( Model, Cmd Msg )
+runInference pending =
+    let
+        project =
+            Elm.TypeInference.inferProject
+                pending.depEnv
+                pending.files
+
+        summary : Encode.Value
+        summary =
+            case Dict.values project.errors of
+                [] ->
+                    Encode.object
+                        [ ( "ok", Encode.bool True )
+                        , ( "moduleCount", Encode.int (Dict.size pending.files) )
+                        , ( "tableCount", Encode.int (Dict.size project.tables) )
+                        ]
+
+                _ ->
+                    Encode.object
+                        [ ( "ok", Encode.bool False )
+                        , ( "moduleCount", Encode.int (Dict.size pending.files) )
+                        , ( "tableCount", Encode.int (Dict.size project.tables) )
+                        , ( "error", Encode.string (String.join "\n" (List.map Error.toString (Dict.values project.errors))) )
+                        ]
+    in
+    ( finished
+        (Just
+            { sourcePaths = pending.sourcePaths
+            , tables = project.tables
+            }
+        )
+    , Cmd.batch
+        [ inferenceStopped Encode.null
+        , result summary
+        ]
+    )
 
 
 buildDependencies : List RawDependency -> Result String (List Dependency)

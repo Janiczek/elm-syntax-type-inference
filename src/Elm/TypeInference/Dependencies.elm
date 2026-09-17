@@ -4,6 +4,7 @@ module Elm.TypeInference.Dependencies exposing
     , Resolver
     , fromList
     , register
+    , splitLastDot
     )
 
 {-| Dependency types from docs.json.

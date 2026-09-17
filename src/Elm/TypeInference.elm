@@ -1,6 +1,6 @@
 module Elm.TypeInference exposing
     ( inferProject
-    , DependencyEnv, dependencyEnv
+    , DependencyEnv, DependencyEnvOutcome(..), dependencyEnv
     , Dependency
     )
 
@@ -15,7 +15,7 @@ ASTs.
 
 # Dependencies
 
-@docs DependencyEnv, dependencyEnv
+@docs DependencyEnv, DependencyEnvOutcome, dependencyEnv
 @docs Dependency
 
 -}
@@ -34,6 +34,7 @@ import Elm.Syntax.Type as SyntaxType
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
+import Elm.TypeInference.DependencySources as DependencySources
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError)
 import Elm.TypeInference.Infer as Infer
@@ -58,7 +59,7 @@ import TypeLookupTable.Internal
 -- WHOLE-PROJECT ENTRY POINTS
 
 
-{-| Infer every module of a project, in dependency order.
+{-| Infer every module of a project.
 -}
 inferProject :
     DependencyEnv
@@ -178,14 +179,32 @@ type DependencyEnv
         }
 
 
+{-| Did dependencies process correctly?
+-}
+type DependencyEnvOutcome
+    = Ready DependencyEnv
+    | NeedSources { neededPackages : List PackageName }
+    | Failed Error
+
+
 {-| Build a `DependencyEnv`.
+
+Start by running `dependencyEnv` with empty `sourcesToResolveAmbiguity`.
+
+If you get `NeedSources` back, read those Elm files from the dependencies in
+your ELM\_HOME and supply them in `sourcesToResolveAmbiguity` in the next call.
+
+If you get `Failed` back, the dependencies' `docs.json` types could not be
+resolved.
+
 -}
 dependencyEnv :
     { directDependencies : List PackageName
     , allDependencies : List Dependency
+    , sourcesToResolveAmbiguity : Dict PackageName (List File)
     }
-    -> Result Error DependencyEnv
-dependencyEnv { directDependencies, allDependencies } =
+    -> DependencyEnvOutcome
+dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity } =
     let
         deps : Dependencies
         deps =
@@ -196,18 +215,73 @@ dependencyEnv { directDependencies, allDependencies } =
             allDependencies
                 |> List.filter (\pkg -> List.member pkg.name directDependencies)
                 |> Dependencies.fromList
+
+        baseEnv : Result Error DependencyEnv
+        baseEnv =
+            (State.do (Dependencies.register deps) <| \depAliases ->
+            State.do State.getGlobalEnv <| \globalEnv ->
+            State.pure <|
+                DependencyEnv
+                    { globalEnv = globalEnv
+                    , typeAliases = depAliases
+                    , index = ModuleLookup.buildIndex directVisibleDeps
+                    }
+            )
+                |> State.run State.empty
+                |> Tuple.first
     in
-    (State.do (Dependencies.register deps) <| \depAliases ->
-    State.do State.getGlobalEnv <| \globalEnv ->
-    State.pure <|
-        DependencyEnv
-            { globalEnv = globalEnv
-            , typeAliases = depAliases
-            , index = ModuleLookup.buildIndex directVisibleDeps
-            }
-    )
-        |> State.run State.empty
-        |> Tuple.first
+    case baseEnv of
+        Err err ->
+            Failed err
+
+        Ok (DependencyEnv env) ->
+            let
+                reachable : Set.Set PackageName
+                reachable =
+                    reachablePackages deps directDependencies
+
+                needed : List PackageName
+                needed =
+                    DependencySources.neededPackages deps sourcesToResolveAmbiguity
+                        |> List.filter (\pkg -> Set.member pkg reachable)
+                        |> List.sort
+            in
+            case needed of
+                _ :: _ ->
+                    NeedSources { neededPackages = needed }
+
+                [] ->
+                    case DependencySources.aliases deps sourcesToResolveAmbiguity of
+                        Err err ->
+                            Failed err
+
+                        Ok sourceAliases ->
+                            Ready
+                                (DependencyEnv { env | typeAliases = Dict.union sourceAliases env.typeAliases })
+
+
+reachablePackages : Dependencies -> List PackageName -> Set.Set PackageName
+reachablePackages deps roots =
+    reachablePackagesHelp deps roots Set.empty
+
+
+reachablePackagesHelp : Dependencies -> List PackageName -> Set.Set PackageName -> Set.Set PackageName
+reachablePackagesHelp deps queue seen =
+    case queue of
+        [] ->
+            seen
+
+        name :: rest ->
+            if Set.member name seen then
+                reachablePackagesHelp deps rest seen
+
+            else
+                case Dict.get name deps of
+                    Nothing ->
+                        reachablePackagesHelp deps rest (Set.insert name seen)
+
+                    Just pkg ->
+                        reachablePackagesHelp deps (rest ++ pkg.dependencies) (Set.insert name seen)
 
 
 

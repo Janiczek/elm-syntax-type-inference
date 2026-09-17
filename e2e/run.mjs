@@ -187,15 +187,37 @@ async function resolveDependencies(elmJson) {
       throw new Error(`Unknown elm.json type: ${elmJson.type}`);
   }
 
-  const result = [];
+  const dependencies = [];
   for (const [name, version] of Object.entries(versions)) {
-    result.push({
+    dependencies.push({
       name,
       dependsOn: packageDeps(name, version),
       docsJson: await loadDocsJson(name, version),
     });
   }
-  return result;
+  return { dependencies, versions };
+}
+
+// Lazily load dependency's `.elm` files for a `requestPackageSources` round-trip.
+function loadPackageSources(name, version) {
+  if (!version) {
+    console.warn(`warning: no cached version for ${name}, continuing without its sources`);
+    return { name, sources: [] };
+  }
+  let files;
+  try {
+    files = findElmFiles(path.join(PACKAGES_DIR, name, version, "src"));
+  } catch (e) {
+    if (e?.code === "ENOENT") {
+      console.warn(`warning: no sources for ${name}@${version}, continuing without them`);
+      return { name, sources: [] };
+    }
+    throw e;
+  }
+  return {
+    name,
+    sources: files.map((file) => ({ path: file, source: fs.readFileSync(file, "utf8") })),
+  };
 }
 
 function buildRunner() {
@@ -211,17 +233,74 @@ function buildRunner() {
   }
 }
 
-function runOnce(flags) {
+function runLazy(flags, versions) {
   const { Elm } = require(ELM_JS);
   const app = Elm.Runner.init({ flags });
-  const resultPromise = new Promise((resolve) => {
-    const handler = (value) => {
-      app.ports.result.unsubscribe(handler);
-      resolve(value);
+  const provided = new Set();
+  const nowMs = () => Number(process.hrtime.bigint()) / 1e6;
+  let rounds = 0;
+
+  // Benchmark state.
+  // We only hold last attempt (`inferenceStarted`..`inferenceStopped`).
+  let inferenceStart = null;
+  let inferenceStop = null;
+  let finalResult = null;
+  const outcome = new Promise((resolve) => {
+    const cleanup = () => {
+      app.ports.result.unsubscribe(onResult);
+      app.ports.requestPackageSources.unsubscribe(onSourcesRequest);
+      app.ports.inferenceStarted.unsubscribe(onInferenceStarted);
+      app.ports.inferenceStopped.unsubscribe(onInferenceStopped);
     };
-    app.ports.result.subscribe(handler);
+    const maybeFinish = () => {
+      // `result` may arrive before `inferenceStopped`, wait for both
+      if (finalResult !== null && (inferenceStop !== null || inferenceStart === null)) {
+        cleanup();
+        resolve({
+          result: finalResult,
+          inferenceMs: inferenceStop !== null ? inferenceStop - inferenceStart : null,
+        });
+      }
+    };
+    const onResult = (value) => {
+      finalResult = value;
+      maybeFinish();
+    };
+    const onSourcesRequest = (packages) => {
+      rounds += 1;
+      const fresh = packages.filter((name) => !provided.has(name));
+      if (rounds > 10 || fresh.length === 0) {
+        cleanup();
+        resolve({
+          result: {
+            ok: false,
+            error: `could not load package sources for: ${packages.join(", ")}`,
+          },
+          inferenceMs: null,
+        });
+        return;
+      }
+      const payload = fresh.map((name) => {
+        provided.add(name);
+        return loadPackageSources(name, versions[name]);
+      });
+      app.ports.providePackageSources.send(payload);
+    };
+    const onInferenceStarted = () => {
+      inferenceStart = nowMs();
+      inferenceStop = null;
+      app.ports.beginInference.send(null);
+    };
+    const onInferenceStopped = () => {
+      inferenceStop = nowMs();
+      maybeFinish();
+    };
+    app.ports.result.subscribe(onResult);
+    app.ports.requestPackageSources.subscribe(onSourcesRequest);
+    app.ports.inferenceStarted.subscribe(onInferenceStarted);
+    app.ports.inferenceStopped.subscribe(onInferenceStopped);
   });
-  return { app, resultPromise };
+  return { app, outcome };
 }
 
 function requestInferredTypes(app) {
@@ -256,19 +335,21 @@ async function runTest(name) {
   const sourceFiles = findSourceFiles(projectDir, elmJson);
   ensureDependenciesCached(projectDir, sourceFiles);
 
+  const { dependencies, versions } = await resolveDependencies(elmJson);
   const flags = {
     sources: sourceFiles.map((f) => ({
       path: path.relative(projectDir, f),
       source: fs.readFileSync(f, "utf8"),
     })),
     directDependencies: directDependencyNames(elmJson),
-    allDependencies: await resolveDependencies(elmJson),
+    allDependencies: dependencies,
   };
 
   const start = process.hrtime.bigint();
-  const { app, resultPromise } = runOnce(flags);
-  const result = await resultPromise;
-  const elapsedSeconds = Number(process.hrtime.bigint() - start) / 1e9;
+  const { app, outcome } = runLazy(flags, versions);
+  const { result, inferenceMs } = await outcome;
+  const elapsedSeconds =
+    inferenceMs !== null ? inferenceMs / 1000 : Number(process.hrtime.bigint() - start) / 1e9;
 
   const passed = result.ok === (expected.expect === "pass");
   const report = { name, expected, result, passed, elapsedSeconds };
