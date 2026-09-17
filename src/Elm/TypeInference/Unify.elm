@@ -82,6 +82,10 @@ unifyManyHelp cfg eqs state =
 There is a possibility of infinite cycles. We use `fuel` to stop the expansion
 after a while and provide a type mismatch instead of a hang.
 
+Intentionally shallow to preserve inferred types to be as high-level (aliases)
+as possible, instead of the low-level records underneath.
+Full expansion only happens in error reporting.
+
 -}
 expandAlias : TypeAliases -> MonoType -> MonoType
 expandAlias typeAliases type_ =
@@ -128,6 +132,117 @@ expandAliasHelp fuel typeAliases type_ =
 
         _ ->
             type_
+
+
+{-| Expand nested record aliases for error display.
+
+(Unification is shallow to allow inferred types to be shown as the high-level
+aliases instead of as the low-level records underneath them).
+
+-}
+expandAliasDeep : TypeAliases -> MonoType -> MonoType
+expandAliasDeep typeAliases type_ =
+    expandAliasDeepHelp maxAliasDepth typeAliases type_
+        |> TypeI.collapseExtensible
+
+
+expandAliasDeepHelp : Int -> TypeAliases -> MonoType -> MonoType
+expandAliasDeepHelp fuel typeAliases type_ =
+    case type_ of
+        UserDefinedType ut ->
+            if fuel <= 0 then
+                expandDeepChildren fuel typeAliases type_
+
+            else
+                case Dict.get ( ut.package, ut.moduleName, ut.name ) typeAliases of
+                    Nothing ->
+                        expandDeepChildren fuel typeAliases type_
+
+                    Just alias_ ->
+                        case zipAliasArgs alias_.args ut.args of
+                            Nothing ->
+                                expandDeepChildren fuel typeAliases type_
+
+                            Just mappings ->
+                                expandAliasDeepHelp (fuel - 1) typeAliases (substituteAliasArgs mappings alias_.type_)
+
+        _ ->
+            expandDeepChildren fuel typeAliases type_
+
+
+{-| Expand aliases fully. Fuel counts depth instead of breadth.
+-}
+expandDeepChildren : Int -> TypeAliases -> MonoType -> MonoType
+expandDeepChildren fuel typeAliases type_ =
+    case type_ of
+        TypeI.TypeVar _ ->
+            type_
+
+        TypeI.Function f ->
+            TypeI.Function
+                { from = expandAliasDeepHelp fuel typeAliases f.from
+                , to = expandAliasDeepHelp fuel typeAliases f.to
+                }
+
+        TypeI.Int ->
+            type_
+
+        TypeI.Float ->
+            type_
+
+        TypeI.Char ->
+            type_
+
+        TypeI.String ->
+            type_
+
+        TypeI.Bool ->
+            type_
+
+        TypeI.List listItemType ->
+            TypeI.List (expandAliasDeepHelp fuel typeAliases listItemType)
+
+        TypeI.Unit ->
+            type_
+
+        TypeI.Tuple2 t1 t2 ->
+            TypeI.Tuple2
+                (expandAliasDeepHelp fuel typeAliases t1)
+                (expandAliasDeepHelp fuel typeAliases t2)
+
+        TypeI.Tuple3 t1 t2 t3 ->
+            TypeI.Tuple3
+                (expandAliasDeepHelp fuel typeAliases t1)
+                (expandAliasDeepHelp fuel typeAliases t2)
+                (expandAliasDeepHelp fuel typeAliases t3)
+
+        TypeI.Record r ->
+            TypeI.Record
+                { fields = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.fields }
+
+        TypeI.ExtensibleRecord r ->
+            TypeI.ExtensibleRecord
+                { extensionTypevar = expandAliasDeepHelp fuel typeAliases r.extensionTypevar
+                , fields = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.fields
+                }
+
+        TypeI.UserDefinedType r ->
+            TypeI.UserDefinedType
+                { package = r.package
+                , moduleName = r.moduleName
+                , name = r.name
+                , args = List.map (expandAliasDeepHelp fuel typeAliases) r.args
+                }
+
+        TypeI.WebGLShader r ->
+            TypeI.WebGLShader
+                { attributesExtension = expandAliasDeepHelp fuel typeAliases r.attributesExtension
+                , attributes = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.attributes
+                , uniformsExtension = expandAliasDeepHelp fuel typeAliases r.uniformsExtension
+                , uniforms = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.uniforms
+                , varyingsExtension = expandAliasDeepHelp fuel typeAliases r.varyingsExtension
+                , varyings = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.varyings
+                }
 
 
 {-| Replace type alias' arguments with the supplied types, verbatim.
@@ -292,7 +407,9 @@ unifyMono cfg rawT1 rawT2 =
             typeMismatch () =
                 let
                     ( pubT1, pubT2 ) =
-                        TypeI.toPublicPair t1 t2
+                        TypeI.toPublicPair
+                            (expandAliasDeep cfg.typeAliases t1)
+                            (expandAliasDeep cfg.typeAliases t2)
                 in
                 State.error
                     { moduleName = FullModuleName.toModuleName cfg.moduleName

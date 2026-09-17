@@ -37,6 +37,7 @@ suite =
         [ inferSuite
         , parenthesizedTest
         , unifyAliasSuite
+        , nestedExtensibleAliasRegression
         , comparableAliasedTupleRegression
         , substitutionMapCompressionSuite
         , linkToRankSuite
@@ -1726,7 +1727,6 @@ helper x = x
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "number")
-
         , Test.test "mutual recursion between two top-level declarations" <| \() ->
         let
             modules : Dict ModuleName String
@@ -2272,6 +2272,72 @@ unifyAliasSuite =
             |> Result.map (always ())
             |> Expect.err
         ]
+
+
+{-| Nested extensible-record aliases should be fully expanded for clarity.
+
+Found in `y047aka/elm-reset-css`.
+
+-}
+nestedExtensibleAliasRegression : Test
+nestedExtensibleAliasRegression =
+    let
+        dep : Dependency
+        dep =
+            { name = "pkg/dep"
+            , dependencies = [ "elm/core" ]
+            , modules =
+                [ { name = "M"
+                  , comment = ""
+                  , unions = []
+                  , aliases =
+                        [ { name = "Outer"
+                          , comment = ""
+                          , args = [ "c" ]
+                          , tipe = Elm.Type.Record [ ( "outer", Elm.Type.Type "Basics.Int" [] ) ] (Just "c")
+                          }
+                        , { name = "Inner"
+                          , comment = ""
+                          , args = []
+                          , tipe = Elm.Type.Record [ ( "inner", Elm.Type.Type "Basics.Int" [] ) ] Nothing
+                          }
+                        ]
+                  , values =
+                        [ { name = "make"
+                          , comment = ""
+                          , tipe = Elm.Type.Type "M.Outer" [ Elm.Type.Type "M.Inner" [] ]
+                          }
+                        , { name = "takeInt"
+                          , comment = ""
+                          , tipe = Elm.Type.Lambda (Elm.Type.Type "Basics.Int" []) (Elm.Type.Type "Basics.Int" [])
+                          }
+                        ]
+                  , binops = []
+                  }
+                ]
+            }
+
+        modules : Dict ModuleName String
+        modules =
+            Dict.singleton [ "Main" ]
+                (String.ExtraExtra.multilineInput """
+                module Main exposing (main)
+
+                import M
+
+                main = M.takeInt M.make
+                """)
+    in
+    Test.test "a nested extensible alias mismatch reports real fields, not <bug> placeholder" <| \() ->
+    case getDeclTypeWithDeps [ dep, CoreFixture.core ] modules [ "Main" ] "main" of
+        Ok _ ->
+            Expect.fail "should have failed (Int != record)"
+
+        Err err ->
+            Debug.toString err
+                |> String.contains "non-var as extensible"
+                |> Expect.equal False
+                |> Expect.onFail ("error still contains <bug> placeholder: " ++ Debug.toString err)
 
 
 {-| `elm-review-unused` regression: `comparable` check must expand aliases inside a structural type
