@@ -11,6 +11,7 @@ suite : Test
 suite =
     Test.describe "Elm.TypeInference.Type"
         [ toStringSuite
+        , toMultilineStringSuite
         ]
 
 
@@ -73,15 +74,67 @@ toStringSuite =
 
         toTest : ( Type, String ) -> Test
         toTest ( tipe, expected ) =
-            Test.test expected <| \() ->
-            Type.toString tipe
-                |> Expect.equal expected
+            Test.test expected <|
+                \() ->
+                    Type.toString tipe
+                        |> Expect.equal expected
     in
     Test.describe "toString"
         (List.map toTest cases
-            ++ [ Test.test "inferred [[1]] toStrings with parens" <| \() ->
-                    getExprType "[[1]]"
-                        |> Result.map Type.toString
-                        |> Expect.equal (Ok "List (List number)")
+            ++ [ Test.test "inferred [[1]] toStrings with parens" <|
+                    \() ->
+                        getExprType "[[1]]"
+                            |> Result.map Type.toString
+                            |> Expect.equal (Ok "List (List number)")
                ]
         )
+
+
+toMultilineStringSuite : Test
+toMultilineStringSuite =
+    let
+        cases : List ( Type, String )
+        cases =
+            [ ( Function
+                    { from = TypeVar "a"
+                    , to = TypeVar "b"
+                    }
+              , "a -> b"
+              )
+            , ( Function
+                    { from = TypeVar "Foo bar baz"
+                    , to =
+                        Function
+                            { from = TypeVar "Foo bar baz"
+                            , to = TypeVar "Foo bar baz"
+                            }
+                    }
+              , "Foo bar baz\n-> Foo bar baz\n-> Foo bar baz"
+              )
+            , ( Int
+              , "Int"
+              )
+            , ( Record
+                    { fields =
+                        Dict.fromList
+                            [ ( "aaaaaaaaaa", Int )
+                            , ( "bbbbbbbbbb", TypeVar "c" )
+                            , ( "cccccccccc", TypeVar "d" )
+                            ]
+                    }
+              , "{ aaaaaaaaaa : Int\n, bbbbbbbbbb : c\n, cccccccccc : d\n}"
+              )
+            , ( Record { fields = Dict.fromList [ ( "a", Int ) ] }
+              , "{a : Int}"
+              )
+            ]
+
+        toTest : ( Type, String ) -> Test
+        toTest ( tipe, expected ) =
+            Test.test expected <|
+                \() ->
+                    Type.toMultilineString 30 tipe
+                        |> Expect.equal expected
+    in
+    Test.describe "toMultilineString"
+        (List.map toTest cases)

@@ -1,5 +1,5 @@
 module Elm.TypeInference.Type exposing
-    ( Type(..), toString, toTypeAnnotation
+    ( Type(..), toString, toMultilineString, toTypeAnnotation
     , PackageName, VarName
     )
 
@@ -7,7 +7,7 @@ module Elm.TypeInference.Type exposing
 
 This module is not named `Elm.Type` because that already exists in elm/project-metadata-utils.
 
-@docs Type, toString, toTypeAnnotation
+@docs Type, toString, toMultilineString, toTypeAnnotation
 @docs PackageName, VarName
 
 -}
@@ -206,6 +206,189 @@ toString t =
             , shaderSlotToString r.varyingsFields r.varyingsExtensionTypevar
             ]
                 |> String.join " "
+
+
+{-| Display a type, breaking it to new lines when the full type is longer than
+`maxWidth` chars.
+
+Short types stay on one line:
+
+    a -> b
+
+Long `->` chains break one arrow per line:
+
+    Foo bar baz
+    -> Foo bar baz
+    -> Foo bar baz
+
+Long records break one field per line:
+
+     { a : Int
+     , b : String
+     }
+
+-}
+toMultilineString : Int -> Type -> String
+toMultilineString maxWidth t =
+    if String.length (toString t) <= maxWidth then
+        toString t
+
+    else
+        breakType maxWidth t
+
+
+{-| Assumes `toString t` is longer than `maxWidth`.
+-}
+breakType : Int -> Type -> String
+breakType maxWidth t =
+    case t of
+        Function _ ->
+            let
+                ( args, result ) =
+                    flattenFunction t
+            in
+            (List.map (renderFromPart maxWidth) args
+                ++ [ toMultilineString maxWidth result ]
+            )
+                |> String.join "\n-> "
+
+        Record { fields } ->
+            breakRecordFields
+                maxWidth
+                Nothing
+                (Dict.toList fields)
+
+        ExtensibleRecord { fields, extensionTypevar } ->
+            breakRecordFields
+                maxWidth
+                (Just extensionTypevar)
+                (Dict.toList fields)
+
+        List inner ->
+            "List " ++ wrappedMultiline maxWidth inner
+
+        Tuple2 a b ->
+            "( "
+                ++ toMultilineString maxWidth a
+                ++ ", "
+                ++ toMultilineString maxWidth b
+                ++ " )"
+
+        Tuple3 a b c ->
+            "( "
+                ++ toMultilineString maxWidth a
+                ++ ", "
+                ++ toMultilineString maxWidth b
+                ++ ", "
+                ++ toMultilineString maxWidth c
+                ++ " )"
+
+        Named { moduleName, name, arguments } ->
+            let
+                qualifiedName =
+                    Elm.Syntax.ModuleName.Extra.toString moduleName
+                        ++ "."
+                        ++ name
+            in
+            (qualifiedName :: List.map (wrappedMultiline maxWidth) arguments)
+                |> String.join " "
+
+        WebGLShader r ->
+            [ "Shader"
+            , toMultilineString maxWidth (shaderSlotToType r.attributesFields r.attributesExtensionTypevar)
+            , toMultilineString maxWidth (shaderSlotToType r.uniformsFields r.uniformsExtensionTypevar)
+            , toMultilineString maxWidth (shaderSlotToType r.varyingsFields r.varyingsExtensionTypevar)
+            ]
+                |> String.join " "
+
+        _ ->
+            toString t
+
+
+{-| Split a right-nested chain, eg.
+
+    Function { from = _1, to = Function { from = _2, to = Function ... } }
+    --> _1
+        -> _2
+        -> ...
+
+-}
+flattenFunction : Type -> ( List Type, Type )
+flattenFunction t =
+    case t of
+        Function { from, to } ->
+            let
+                ( args, result ) =
+                    flattenFunction to
+            in
+            ( from :: args, result )
+
+        _ ->
+            ( [], t )
+
+
+{-| Render one `->` argument, keeping Function parens
+-}
+renderFromPart : Int -> Type -> String
+renderFromPart maxWidth t =
+    case t of
+        Function _ ->
+            "(" ++ toMultilineString maxWidth t ++ ")"
+
+        _ ->
+            toMultilineString maxWidth t
+
+
+wrappedMultiline : Int -> Type -> String
+wrappedMultiline maxWidth t =
+    case t of
+        Function _ ->
+            "(" ++ toMultilineString maxWidth t ++ ")"
+
+        List _ ->
+            "(" ++ toMultilineString maxWidth t ++ ")"
+
+        WebGLShader _ ->
+            "(" ++ toMultilineString maxWidth t ++ ")"
+
+        Named r ->
+            if List.isEmpty r.arguments then
+                toString t
+
+            else
+                "(" ++ toMultilineString maxWidth t ++ ")"
+
+        _ ->
+            toMultilineString maxWidth t
+
+
+breakRecordFields : Int -> Maybe String -> List ( String, Type ) -> String
+breakRecordFields maxWidth extensionTypevar fields =
+    case fields of
+        [] ->
+            toString
+                (case extensionTypevar of
+                    Nothing ->
+                        Record { fields = Dict.empty }
+
+                    Just var ->
+                        ExtensibleRecord { fields = Dict.empty, extensionTypevar = var }
+                )
+
+        ( firstName, firstType ) :: rest ->
+            let
+                firstLine =
+                    case extensionTypevar of
+                        Nothing ->
+                            "{ " ++ firstName ++ " : " ++ toMultilineString maxWidth firstType
+
+                        Just var ->
+                            "{ " ++ var ++ " | " ++ firstName ++ " : " ++ toMultilineString maxWidth firstType
+
+                restLines =
+                    List.map (\( name, fieldType ) -> "\n, " ++ name ++ " : " ++ toMultilineString maxWidth fieldType) rest
+            in
+            firstLine ++ String.concat restLines ++ "\n}"
 
 
 {-| Convert a `Type` to an `elm-syntax` `TypeAnnotation`.
