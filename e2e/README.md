@@ -26,6 +26,9 @@ npm run test:e2e
 
 # write `tests/<name>/inferred-types.txt` for debugging (off by default):
 ./e2e/run.mjs --write-types
+
+# machine-readable CSV on stdout (header: test,expected,actual,passed,seconds,error):
+./e2e/run.mjs --csv
 ```
 
 Exit code is 0 if all pased, 1 otherwise.

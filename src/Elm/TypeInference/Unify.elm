@@ -6,7 +6,7 @@ import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type exposing (PackageName, VarName)
-import Elm.TypeInference.Type.Internal as Type exposing (MonoType(..))
+import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
 import Elm.TypeInference.TypeVar
     exposing
         ( SuperType(..)
@@ -89,7 +89,7 @@ after a while and provide a type mismatch instead of a hang.
 expandAlias : TypeAliases -> MonoType -> MonoType
 expandAlias typeAliases type_ =
     expandAliasHelp maxAliasDepth typeAliases type_
-        |> Type.collapseExtensible
+        |> TypeI.collapseExtensible
 
 
 {-| This should be enough (any real alias chain like that should be
@@ -296,7 +296,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
         else
             let
                 ( pubT1, pubT2 ) =
-                    Type.toPublicPair rawT1 rawT2
+                    TypeI.toPublicPair rawT1 rawT2
             in
             State.error
                 { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -322,7 +322,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
             typeMismatch () =
                 let
                     ( pubT1, pubT2 ) =
-                        Type.toPublicPair t1 t2
+                        TypeI.toPublicPair t1 t2
                 in
                 State.error
                     { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -434,7 +434,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     let
                         tail : MonoType
                         tail =
-                            Type.id_ tailId
+                            TypeI.id_ tailId
 
                         absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
                         absorb extensionTypevar fields =
@@ -596,7 +596,7 @@ unifyMono cfg isGround1 rawT1 isGround2 rawT2 =
                     let
                         tail : MonoType
                         tail =
-                            Type.id_ tailId
+                            TypeI.id_ tailId
                     in
                     unifyMany
                         cfg
@@ -684,7 +684,7 @@ bind cfg typeVar type_ =
     else if occursCheck typeVar type_ then
         let
             ( pubVar, pubType ) =
-                Type.toPublicPair (TypeVar typeVar) type_
+                TypeI.toPublicPair (TypeVar typeVar) type_
         in
         State.error
             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -703,7 +703,7 @@ bind cfg typeVar type_ =
                     Nothing ->
                         let
                             ( pubVar, pubOther ) =
-                                Type.toPublicPair (TypeVar typeVar) type_
+                                TypeI.toPublicPair (TypeVar typeVar) type_
                         in
                         State.error
                             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -755,7 +755,7 @@ bind cfg typeVar type_ =
                 else
                     let
                         ( pubVar, pubType ) =
-                            Type.toPublicPair (TypeVar typeVar) type_
+                            TypeI.toPublicPair (TypeVar typeVar) type_
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName

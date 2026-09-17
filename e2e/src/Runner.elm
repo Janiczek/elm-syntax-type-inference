@@ -23,7 +23,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.TypeInference exposing (Dependency)
 import Elm.TypeInference.Error as Error
-import Elm.TypeInference.Type as PublicType
+import Elm.TypeInference.Type as Type
 import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra exposing (Step(..))
@@ -342,7 +342,7 @@ tableToLines path (TLT entries) =
                     ++ ":"
                     ++ String.fromInt endCol
                     ++ ": "
-                    ++ PublicType.toString type_
+                    ++ Type.toString type_
             )
 
 

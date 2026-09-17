@@ -22,6 +22,8 @@ let elmCompiler = "elm";
 let writeTypes = false;
 // Full validation unless --skip-checks is passed.
 let canSkipChecks = false;
+// Machine-readable CSV on stdout instead of human-readable lines.
+let csvMode = false;
 
 function parseArgs(argv) {
   const filters = [];
@@ -46,6 +48,10 @@ function parseArgs(argv) {
       canSkipChecks = true;
     } else if (arg === "--no-skip-checks") {
       canSkipChecks = false;
+    } else if (arg === "--csv") {
+      csvMode = true;
+    } else if (arg === "--no-csv") {
+      csvMode = false;
     } else {
       filters.push(arg);
     }
@@ -86,15 +92,60 @@ function ensureDependenciesCached(projectDir, sourceFiles) {
 }
 
 function latestCachedVersion(name) {
-  return fs
-    .readdirSync(path.join(PACKAGES_DIR, name))
+  let entries;
+  try {
+    entries = fs.readdirSync(path.join(PACKAGES_DIR, name));
+  } catch (e) {
+    if (e?.code === "ENOENT") {
+      console.warn(`warning: no cached versions for ${name}, skipping`);
+      return undefined;
+    }
+    throw e;
+  }
+  return entries
     .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
     .at(-1);
 }
 
 function packageDeps(name, version) {
-  return Object.keys(readJson(path.join(PACKAGES_DIR, name, version, "elm.json")).dependencies || {});
+  if (!version) return [];
+  try {
+    return Object.keys(readJson(path.join(PACKAGES_DIR, name, version, "elm.json")).dependencies || {});
+  } catch (e) {
+    if (e?.code === "ENOENT") {
+      console.warn(`warning: missing elm.json for ${name}@${version}, assuming no transitive deps`);
+      return [];
+    }
+    throw e;
+  }
+}
+
+// docs.json is not always present in ~/.elm, download from package.elm-lang.org
+async function loadDocsJson(name, version) {
+  const docsPath = path.join(PACKAGES_DIR, name, version, "docs.json");
+  try {
+    return readJson(docsPath);
+  } catch (e) {
+    if (e?.code !== "ENOENT") throw e;
+  }
+
+  console.warn(`warning: docs.json missing for ${name}@${version}, fetching from package.elm-lang.org...`);
+  try {
+    const res = await fetch(`https://package.elm-lang.org/packages/${name}/${version}/docs.json`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const docs = await res.json();
+    try {
+      fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+      fs.writeFileSync(docsPath, JSON.stringify(docs));
+    } catch {}
+    return docs;
+  } catch (fetchError) {
+    console.warn(
+      `warning: could not fetch docs.json for ${name}@${version}: ${fetchError?.message ?? fetchError}. Using empty docs.`
+    );
+    return [];
+  }
 }
 
 function directDependencyNames(elmJson) {
@@ -114,7 +165,7 @@ function directDependencyNames(elmJson) {
 
 // Resolves elm.json dependencies to exact versions (for packages, pick latest version).
 // Loads their docs.json.
-function resolveDependencies(elmJson) {
+async function resolveDependencies(elmJson) {
   const versions = {};
 
   switch (elmJson.type) {
@@ -131,6 +182,7 @@ function resolveDependencies(elmJson) {
         const name = queue.shift();
         if (versions[name]) continue;
         const version = latestCachedVersion(name);
+        if (!version) continue;
         versions[name] = version;
         queue.push(...packageDeps(name, version));
       }
@@ -141,11 +193,15 @@ function resolveDependencies(elmJson) {
       throw new Error(`Unknown elm.json type: ${elmJson.type}`);
   }
 
-  return Object.entries(versions).map(([name, version]) => ({
-    name,
-    dependsOn: packageDeps(name, version),
-    docsJson: readJson(path.join(PACKAGES_DIR, name, version, "docs.json")),
-  }));
+  const result = [];
+  for (const [name, version] of Object.entries(versions)) {
+    result.push({
+      name,
+      dependsOn: packageDeps(name, version),
+      docsJson: await loadDocsJson(name, version),
+    });
+  }
+  return result;
 }
 
 function buildRunner() {
@@ -197,7 +253,7 @@ function discoverTests(filters) {
 }
 
 async function runTest(name) {
-  process.stdout.write(name);
+  if (!csvMode) process.stdout.write(name);
   const testDir = path.join(TESTS_DIR, name);
   const projectDir = path.join(testDir, "project");
   const expected = readJson(path.join(testDir, "expected.json"));
@@ -212,7 +268,7 @@ async function runTest(name) {
       source: fs.readFileSync(f, "utf8"),
     })),
     directDependencies: directDependencyNames(elmJson),
-    allDependencies: resolveDependencies(elmJson),
+    allDependencies: await resolveDependencies(elmJson),
     canSkipChecks,
   };
 
@@ -230,14 +286,15 @@ async function runTest(name) {
   if (writeTypes) {
     let inferredTypes = "";
     if (result.ok) {
-      if (process.stdout.isTTY) {
-        process.stdout.write("Writing types to inferred-types.txt...");
+      const out = csvMode ? process.stderr : process.stdout;
+      if (out.isTTY) {
+        out.write("Writing types to inferred-types.txt...");
       }
       inferredTypes = await requestInferredTypes(app);
       fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
-      if (process.stdout.isTTY) {
-        process.stdout.clearLine(0);
-        process.stdout.cursorTo(0);
+      if (out.isTTY) {
+        out.clearLine(0);
+        out.cursorTo(0);
       }
     } else {
       fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
@@ -247,8 +304,20 @@ async function runTest(name) {
   return report;
 }
 
+function csvEscape(value) {
+  const s = String(value ?? "");
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 function printReport({ name, expected, result, passed, elapsedSeconds }) {
   const actual = result.ok ? "pass" : "fail";
+  if (csvMode) {
+    const error = result.ok ? "" : (result.error ?? "");
+    console.log(
+      [name, expected.expect, actual, passed, elapsedSeconds.toFixed(3), error].map(csvEscape).join(",")
+    );
+    return;
+  }
   const suffix = passed ? "" : `  (expected: ${expected.expect}, actual: ${actual})`;
   console.log(` ${passed ? "✓ PASS" : "✗ FAIL"} (${elapsedSeconds.toFixed(3)}s)${suffix}`);
 
@@ -269,13 +338,22 @@ async function main() {
   }
 
   let passedCount = 0;
+  if (csvMode) {
+    console.log("test,expected,actual,passed,seconds,error");
+  }
   for (const name of names) {
     const report = await runTest(name);
     if (report.passed) passedCount++;
   }
 
-  console.log("");
-  console.log(`${passedCount}/${names.length} test${names.length > 1 ? "s" : ""} passed`);
+  const summary = `${passedCount}/${names.length} test${names.length > 1 ? "s" : ""} passed`;
+  if (csvMode) {
+    console.error("");
+    console.error(summary);
+  } else {
+    console.log("");
+    console.log(summary);
+  }
   process.exit(passedCount === names.length ? 0 : 1);
 }
 

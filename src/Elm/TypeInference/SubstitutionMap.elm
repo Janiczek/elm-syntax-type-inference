@@ -25,7 +25,7 @@ Once created, `substitute*` functions are the way to consume it.
 import Bitwise
 import Dict exposing (Dict)
 import Elm.TypeInference.Type exposing (VarName)
-import Elm.TypeInference.Type.Internal as Type
+import Elm.TypeInference.Type.Internal as TypeI
     exposing
         ( Id
         , MonoType(..)
@@ -603,7 +603,7 @@ substituteMono store monoType =
                            )
             in
             if needsCollapse then
-                ( Type.collapseExtensible
+                ( TypeI.collapseExtensible
                     (ExtensibleRecord
                         { extensionTypevar = extensionTypevar_
                         , fields = fields_

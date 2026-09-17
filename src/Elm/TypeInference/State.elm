@@ -43,7 +43,7 @@ import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, SubstitutionMap)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
-import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType, Type(..))
+import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType, Type(..))
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.VarSet as VarSet
 import RangeLike exposing (RangeLike)
@@ -552,7 +552,7 @@ instantiate (Forall boundVars monoType) =
                         |> Dict.fromList
             in
             monoType
-                |> Type.mapVarsMono
+                |> TypeI.mapVarsMono
                     (\var ->
                         Dict.get (VarSet.varKey var) renaming
                             |> Maybe.withDefault var
@@ -567,7 +567,7 @@ generalize monoType =
     let
         boundIds : List TypeVar
         boundIds =
-            Type.monoTypeVars substitutedMono
+            TypeI.monoTypeVars substitutedMono
                 |> VarSet.toList
                 |> List.filter
                     (\var -> SubstitutionMap.letRankOf var state.subst > state.letRank)

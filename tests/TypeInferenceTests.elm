@@ -303,7 +303,7 @@ isShaderSet expected actual =
             actual == Dict.fromList expected
 
 
-goodExprs : List ( String, Result Error Type.Type -> Bool )
+goodExprs : List ( String, Result Error Type -> Bool )
 goodExprs =
     [ ( "()", is Unit )
     , ( "123", isNumber )
@@ -406,7 +406,7 @@ goodExprs =
     ]
 
 
-badExprs : List ( String, Result Error Type.Type -> Bool )
+badExprs : List ( String, Result Error Type -> Bool )
 badExprs =
     [ ( "[1, ()]", fails )
     , ( "fn 1", fails )
@@ -1213,7 +1213,7 @@ shaderAnnotationSuite =
 dependenciesSuite : Test
 dependenciesSuite =
     let
-        testWithCore : ( String, Result Error Type.Type -> Bool ) -> Test
+        testWithCore : ( String, Result Error Type -> Bool ) -> Test
         testWithCore ( exprCode, predicate ) =
             Test.test exprCode <| \() ->
             case getExprTypeWithDeps [ CoreFixture.core ] exprCode of

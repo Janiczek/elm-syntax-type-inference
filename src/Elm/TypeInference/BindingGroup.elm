@@ -8,7 +8,7 @@ import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type.Internal as Type exposing (Id, MonoType(..), Type(..))
+import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType(..), Type(..))
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
 import Elm.TypeInference.VarSet as VarSet
@@ -44,7 +44,7 @@ solveGroup cfg members =
                                 member.install scheme
 
                             Nothing ->
-                                member.install (Type.mono (Type.id_ member.id))
+                                member.install (TypeI.mono (TypeI.id_ member.id))
                     )
                     members
                 )
@@ -69,7 +69,7 @@ solveGroup cfg members =
                         State.pure ()
 
                     Nothing ->
-                        State.do (State.generalize (Type.id_ member.id)) <| \scheme ->
+                        State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
                         member.install scheme
             )
             members
@@ -114,12 +114,12 @@ checkOne cfg member =
                 State.do State.getSubst <| \subst ->
                 let
                     ( finalMono, _, _ ) =
-                        SubstitutionMap.substituteMono subst (Type.id_ member.id)
+                        SubstitutionMap.substituteMono subst (TypeI.id_ member.id)
                 in
                 if shaderSlotsTooGeneral annoMono finalMono then
                     let
                         ( pubAnno, pubFinal ) =
-                            Type.toPublicPair annoMono finalMono
+                            TypeI.toPublicPair annoMono finalMono
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -127,10 +127,10 @@ checkOne cfg member =
                         , details = TypeMismatch pubAnno pubFinal
                         }
 
-                else if List.isEmpty (VarSet.toList (Type.monoTypeVars finalMono)) then
+                else if List.isEmpty (VarSet.toList (TypeI.monoTypeVars finalMono)) then
                     let
                         ( pubAnno, pubFinal ) =
-                            Type.toPublicPair annoMono finalMono
+                            TypeI.toPublicPair annoMono finalMono
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -189,7 +189,7 @@ slotTooGeneral annoSlot finalSlot =
         collapsedFields : { extensionTypevar : MonoType, fields : Dict String MonoType } -> Dict String MonoType
         collapsedFields slot =
             case
-                Type.collapseExtensible
+                TypeI.collapseExtensible
                     (ExtensibleRecord
                         { extensionTypevar = slot.extensionTypevar
                         , fields = slot.fields
