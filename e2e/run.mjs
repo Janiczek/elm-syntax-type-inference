@@ -61,6 +61,11 @@ function readJson(p) {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
+function formatError(e) {
+  const message = e?.message ?? String(e);
+  return `run.mjs error: ${message}`;
+}
+
 function findElmFiles(dir) {
   return fs
     .readdirSync(dir, { recursive: true })
@@ -374,51 +379,60 @@ async function runTest(name) {
   const expected = readJson(path.join(testDir, "expected.json"));
   const elmJson = readJson(path.join(projectDir, "elm.json"));
 
-  const sourceFiles = findSourceFiles(projectDir, elmJson);
-  ensureDependenciesCached(projectDir, [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean));
+  try {
+    const sourceFiles = findSourceFiles(projectDir, elmJson);
+    ensureDependenciesCached(projectDir, [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean));
 
-  const { dependencies, versions } = await resolveDependencies(elmJson);
-  const flags = {
-    sources: sourceFiles.map((f) => ({
-      path: path.relative(projectDir, f),
-      source: fs.readFileSync(f, "utf8"),
-    })),
-    directDependencies: directDependencyNames(elmJson),
-    allDependencies: dependencies,
-    exposedModules: exposedModulesFor(elmJson),
-  };
+    const { dependencies, versions } = await resolveDependencies(elmJson);
+    const flags = {
+      sources: sourceFiles.map((f) => ({
+        path: path.relative(projectDir, f),
+        source: fs.readFileSync(f, "utf8"),
+      })),
+      directDependencies: directDependencyNames(elmJson),
+      allDependencies: dependencies,
+      exposedModules: exposedModulesFor(elmJson),
+    };
 
-  const start = process.hrtime.bigint();
-  const { app, outcome } = runLazy(flags, versions);
-  const { result, inferenceMs } = await outcome;
-  const elapsedSeconds =
-    inferenceMs !== null ? inferenceMs / 1000 : Number(process.hrtime.bigint() - start) / 1e9;
+    const start = process.hrtime.bigint();
+    const { app, outcome } = runLazy(flags, versions);
+    const { result, inferenceMs } = await outcome;
+    const elapsedSeconds =
+      inferenceMs !== null ? inferenceMs / 1000 : Number(process.hrtime.bigint() - start) / 1e9;
 
-  const passed = result.ok === (expected.expect === "pass");
-  const report = { name, expected, result, passed, elapsedSeconds };
-  printReport(report);
+    const passed = result.ok === (expected.expect === "pass");
+    const report = { name, expected, result, passed, elapsedSeconds };
+    printReport(report);
 
-  // Outside benchmarked time: only on success ask Elm to serialize
-  // the tables and save them to a file. Skipped unless --write-types.
-  if (writeTypes) {
-    let inferredTypes = "";
-    if (result.ok) {
-      const out = csvMode ? process.stderr : process.stdout;
-      if (out.isTTY) {
-        out.write("Writing types to inferred-types.txt...");
+    // Outside benchmarked time: only on success ask Elm to serialize
+    // the tables and save them to a file. Skipped unless --write-types.
+    if (writeTypes) {
+      let inferredTypes = "";
+      if (result.ok) {
+        const out = csvMode ? process.stderr : process.stdout;
+        if (out.isTTY) {
+          out.write("Writing types to inferred-types.txt...");
+        }
+        inferredTypes = await requestInferredTypes(app);
+        fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
+        if (out.isTTY) {
+          out.clearLine(0);
+          out.cursorTo(0);
+        }
+      } else {
+        fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
       }
-      inferredTypes = await requestInferredTypes(app);
-      fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
-      if (out.isTTY) {
-        out.clearLine(0);
-        out.cursorTo(0);
-      }
-    } else {
-      fs.writeFileSync(path.join(testDir, "inferred-types.txt"), inferredTypes, "utf8");
     }
-  }
 
-  return report;
+    return report;
+  } catch (e) {
+    // e.g. dependency solver found no valid solution
+    // report as failure and let the suite continue.
+    const result = { ok: false, error: formatError(e) };
+    const report = { name, expected, result, passed: false, elapsedSeconds: 0 };
+    printReport(report);
+    return report;
+  }
 }
 
 function csvEscape(value) {
@@ -459,8 +473,20 @@ async function main() {
     console.log("test,expected,actual,passed,seconds,error");
   }
   for (const name of names) {
-    const report = await runTest(name);
-    if (report.passed) passedCount++;
+    try {
+      const report = await runTest(name);
+      if (report.passed) passedCount++;
+    } catch (e) {
+      // runTest already handles errors after expected.json loads;
+      // this is a last resort (e.g. missing expected.json) so the suite continues.
+      const error = formatError(e);
+      if (csvMode) {
+        console.log([name, "?", "fail", false, (0).toFixed(3), error].map(csvEscape).join(","));
+      } else {
+        console.log(` ✗ FAIL (0.000s)`);
+        console.log(`    error: ${error}`);
+      }
+    }
   }
 
   const summary = `${passedCount}/${names.length} test${names.length > 1 ? "s" : ""} passed`;
@@ -474,4 +500,7 @@ async function main() {
   process.exit(passedCount === names.length ? 0 : 1);
 }
 
-main();
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
