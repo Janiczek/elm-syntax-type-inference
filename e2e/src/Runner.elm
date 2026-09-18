@@ -9,6 +9,7 @@ and reports back via ports.
 -}
 
 import Bitwise
+import Char
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Parser
@@ -23,7 +24,7 @@ import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.Type as Type
 import Json.Decode as Decode
 import Json.Encode as Encode
-import List.Extra exposing (Step(..))
+import List.Extra
 import Parser
 import RangeLike exposing (RangeLike)
 import Set exposing (Set)
@@ -260,20 +261,25 @@ run flagsValue =
                     )
 
                 Ok allDependencies ->
-                    case parseAllSources flags.sources of
+                    let
+                        parsedSources : ParsedSources
+                        parsedSources =
+                            parseAllSources flags.sources
+                    in
+                    case keepReachable flags.exposedModules parsedSources.parsed of
                         Err err ->
-                            ( finished Nothing
-                            , result
-                                (Encode.object
-                                    [ ( "ok", Encode.bool False )
-                                    , ( "error", Encode.string ("parse error: " ++ err) )
-                                    ]
-                                )
-                            )
+                            case List.filterMap (failureIfExposed flags.exposedModules) parsedSources.failed of
+                                first :: _ ->
+                                    ( finished Nothing
+                                    , result
+                                        (Encode.object
+                                            [ ( "ok", Encode.bool False )
+                                            , ( "error", Encode.string ("parse error: " ++ first) )
+                                            ]
+                                        )
+                                    )
 
-                        Ok modules ->
-                            case keepReachable flags.exposedModules modules of
-                                Err err ->
+                                [] ->
                                     ( finished Nothing
                                     , result
                                         (Encode.object
@@ -283,7 +289,19 @@ run flagsValue =
                                         )
                                     )
 
-                                Ok kept ->
+                        Ok kept ->
+                            case relevantParseFailures flags.exposedModules kept parsedSources.failed of
+                                first :: _ ->
+                                    ( finished Nothing
+                                    , result
+                                        (Encode.object
+                                            [ ( "ok", Encode.bool False )
+                                            , ( "error", Encode.string ("parse error: " ++ first) )
+                                            ]
+                                        )
+                                    )
+
+                                [] ->
                                     step
                                         { directDependencies = flags.directDependencies
                                         , allDependencies = allDependencies
@@ -403,25 +421,144 @@ buildDependencies rawDeps =
             (Ok [])
 
 
-parseAllSources : List SourceFile -> Result String (Dict (List String) { path : String, file : File })
-parseAllSources sources =
-    sources
-        |> List.Extra.stoppableFoldl
-            (\{ path, source } acc ->
-                case Elm.Parser.parseToFile source of
-                    Ok file ->
-                        let
-                            moduleName : List String
-                            moduleName =
-                                Elm.Syntax.Module.moduleName (Node.value file.moduleDefinition)
-                        in
-                        Continue (Result.map (Dict.insert moduleName { path = path, file = file }) acc)
+type alias ParsedSources =
+    { parsed : Dict ModuleName { path : String, file : File }
+    , failed : List { path : String, error : String }
+    }
 
-                    Err deadEnds ->
-                        -- Abort if something is unparsable.
-                        Stop (Err (path ++ ": " ++ deadEndsToString deadEnds))
-            )
-            (Ok Dict.empty)
+
+{-| Don't abort on first failure; if not reachable from exposed we don't care about them.
+-}
+parseAllSources : List SourceFile -> ParsedSources
+parseAllSources sources =
+    List.foldl
+        (\{ path, source } acc ->
+            case Elm.Parser.parseToFile source of
+                Ok file ->
+                    let
+                        moduleName : List String
+                        moduleName =
+                            Elm.Syntax.Module.moduleName (Node.value file.moduleDefinition)
+                    in
+                    { acc | parsed = Dict.insert moduleName { path = path, file = file } acc.parsed }
+
+                Err deadEnds ->
+                    { acc
+                        | failed =
+                            { path = path
+                            , error = path ++ ": " ++ deadEndsToString deadEnds
+                            }
+                                :: acc.failed
+                    }
+        )
+        { parsed = Dict.empty, failed = [] }
+        sources
+
+
+relevantParseFailures :
+    Maybe (List String)
+    -> Dict ModuleName { path : String, file : File }
+    -> List { path : String, error : String }
+    -> List String
+relevantParseFailures maybeExposed kept failed =
+    case maybeExposed of
+        Nothing ->
+            List.map .error (List.reverse failed)
+
+        Just _ ->
+            let
+                importsSet : Set ModuleName
+                importsSet =
+                    kept
+                        |> Dict.values
+                        |> List.concatMap
+                            (\{ file } ->
+                                (ModuleIndex.fromFile file).imports
+                                    |> List.map (\import_ -> FullModuleName.toModuleName import_.moduleName)
+                            )
+                        |> Set.fromList
+            in
+            List.filterMap (failureIfNeeded importsSet maybeExposed) (List.reverse failed)
+
+
+failureIfExposed : Maybe (List String) -> { path : String, error : String } -> Maybe String
+failureIfExposed maybeExposed { path, error } =
+    case maybeExposed of
+        Nothing ->
+            Nothing
+
+        Just exposedDotted ->
+            let
+                rootsSet : Set ModuleName
+                rootsSet =
+                    exposedDotted
+                        |> List.map (String.split ".")
+                        |> Set.fromList
+            in
+            if List.any (\candidate -> Set.member candidate rootsSet) (pathToCandidateModules path) then
+                Just error
+
+            else
+                Nothing
+
+
+failureIfNeeded : Set ModuleName -> Maybe (List String) -> { path : String, error : String } -> Maybe String
+failureIfNeeded importsSet maybeExposed { path, error } =
+    case failureIfExposed maybeExposed { path = path, error = error } of
+        Just _ ->
+            Just error
+
+        Nothing ->
+            if List.any (\candidate -> Set.member candidate importsSet) (pathToCandidateModules path) then
+                Just error
+
+            else
+                Nothing
+
+
+pathToCandidateModules : String -> List ModuleName
+pathToCandidateModules path =
+    let
+        parts : List String
+        parts =
+            path
+                |> String.replace "\\" "/"
+                |> String.split "/"
+                |> List.filter (\p -> p /= "" && p /= ".")
+
+        withoutExt : List String
+        withoutExt =
+            case List.reverse parts of
+                [] ->
+                    []
+
+                last :: rest ->
+                    let
+                        stem : String
+                        stem =
+                            if String.endsWith ".elm" last then
+                                String.dropRight 4 last
+
+                            else
+                                last
+                    in
+                    List.reverse rest ++ [ stem ]
+
+        suffixes : List (List String)
+        suffixes =
+            List.indexedMap (\i _ -> List.drop i withoutExt) withoutExt
+    in
+    List.filter (List.all isModuleSegment) suffixes
+
+
+isModuleSegment : String -> Bool
+isModuleSegment segment =
+    case String.toList segment of
+        first :: _ ->
+            Char.isUpper first
+
+        [] ->
+            False
 
 
 keepReachable :
