@@ -59,6 +59,8 @@ suite =
         , duplicateImportAliasRegression
         , shadowedListRegression
         , extensibleRecordRegression
+        , extensibleAliasOverlapRegression
+        , customUnionExtensibleAccessRegression
         , annotationsCheckedAgainstBodiesSuite
         , rangeContractSuite
         , publicBoundarySuite
@@ -3103,6 +3105,77 @@ extensibleRecordRegression =
             getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "applyForce"
                 |> Result.map Type.toString
                 |> Expect.equal (Ok "Dict.Dict comparable (Main.Entity comparable a) -> Dict.Dict comparable (Main.Entity comparable a)")
+
+
+extensibleAliasOverlapRegression : Test
+extensibleAliasOverlapRegression =
+    Test.test "extensible alias applied to a record already containing its fields (Confidenceman02-elm-select)" <| \() ->
+    getDeclType
+        (Dict.singleton [ "Main" ]
+            (String.ExtraExtra.multilineInput """
+        module Main exposing (..)
+
+        type alias Base =
+            { value : String, x : String, y : String }
+
+        type alias Ext compatible =
+            { compatible | value : String, x : String }
+
+        type alias Px =
+            Base
+
+        foo : Ext Px
+        foo =
+            { value = "", x = "", y = "" }
+        """)
+        )
+        [ "Main" ]
+        "foo"
+        |> Expect.ok
+
+
+customUnionExtensibleAccessRegression : Test
+customUnionExtensibleAccessRegression =
+    Test.test "two constructors sharing an extensible base with a `comparable` param (Confidenceman02-elm-select basicMenuItem/customMenuItem)" <| \() ->
+    getDeclType
+        (Dict.singleton [ "Main" ]
+            (String.ExtraExtra.multilineInput """
+        module Main exposing (..)
+
+        type alias Base comparable =
+            { comparable | b : Int }
+
+        type alias C1 item =
+            { item : item, label : String }
+
+        type alias C2 item =
+            { item : item, label : String, view : String }
+
+        type U item
+            = A (Base (C1 item))
+            | B (Base (C2 item))
+
+        f : C2 item -> U item
+        f i =
+            B
+                { item = i.item
+                , label = i.label
+                , view = i.view
+                , b = 1
+                }
+
+        g : C1 item -> U item
+        g bsc =
+            A
+                { item = bsc.item
+                , label = bsc.label
+                , b = 1
+                }
+        """)
+        )
+        [ "Main" ]
+        "g"
+        |> Expect.ok
 
 
 annotationsCheckedAgainstBodiesSuite : Test

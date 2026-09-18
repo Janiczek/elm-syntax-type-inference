@@ -130,6 +130,18 @@ expandAliasHelp fuel typeAliases type_ =
                             Just mappings ->
                                 expandAliasHelp (fuel - 1) typeAliases (substituteAliasArgs mappings alias_.type_)
 
+        ExtensibleRecord r ->
+            if fuel <= 0 then
+                type_
+
+            else
+                TypeI.collapseExtensible
+                    (ExtensibleRecord
+                        { extensionTypevar = expandAliasHelp (fuel - 1) typeAliases r.extensionTypevar
+                        , fields = r.fields
+                        }
+                    )
+
         _ ->
             type_
 
@@ -438,34 +450,75 @@ unifyMono cfg rawT1 rawT2 =
                     }
                 -> StateM ()
             recordVsExtensible recordFields er =
-                let
-                    ( residual, matchedEqs, matchedCount ) =
-                        Dict.foldl
-                            (\k v ( res, eqs, n ) ->
-                                case Dict.get k er.fields of
-                                    Just ev ->
-                                        ( res
-                                        , ( v, ev ) :: eqs
-                                        , n + 1
-                                        )
+                case expandAlias cfg.typeAliases er.extensionTypevar of
+                    Record extFields ->
+                        let
+                            ( _, _, overlapEqs ) =
+                                Dict.merge
+                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                                    (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
+                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                                    extFields.fields
+                                    er.fields
+                                    ( Dict.empty, Dict.empty, [] )
 
-                                    Nothing ->
-                                        ( Dict.insert k v res
-                                        , eqs
-                                        , n
-                                        )
-                            )
-                            ( Dict.empty, [], 0 )
-                            recordFields
-                in
-                if matchedCount /= Dict.size er.fields then
-                    typeMismatch ()
+                            combined : Dict VarName MonoType
+                            combined =
+                                Dict.union er.fields extFields.fields
+                        in
+                        State.do (unifyMany cfg overlapEqs) <| \() ->
+                        recordBindings combined recordFields
 
-                else
-                    unifyMany cfg
-                        (( er.extensionTypevar, Record { fields = residual } )
-                            :: matchedEqs
-                        )
+                    ExtensibleRecord extEr ->
+                        let
+                            ( _, _, overlapEqs ) =
+                                Dict.merge
+                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                                    (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
+                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                                    extEr.fields
+                                    er.fields
+                                    ( Dict.empty, Dict.empty, [] )
+
+                            merged : Dict VarName MonoType
+                            merged =
+                                Dict.union er.fields extEr.fields
+                        in
+                        State.do (unifyMany cfg overlapEqs) <| \() ->
+                        recordVsExtensible recordFields
+                            { extensionTypevar = extEr.extensionTypevar
+                            , fields = merged
+                            }
+
+                    _ ->
+                        let
+                            ( residual, matchedEqs, matchedCount ) =
+                                Dict.foldl
+                                    (\k v ( res, eqs, n ) ->
+                                        case Dict.get k er.fields of
+                                            Just ev ->
+                                                ( res
+                                                , ( v, ev ) :: eqs
+                                                , n + 1
+                                                )
+
+                                            Nothing ->
+                                                ( Dict.insert k v res
+                                                , eqs
+                                                , n
+                                                )
+                                    )
+                                    ( Dict.empty, [], 0 )
+                                    recordFields
+                        in
+                        if matchedCount /= Dict.size er.fields then
+                            typeMismatch ()
+
+                        else
+                            unifyMany cfg
+                                (( er.extensionTypevar, Record { fields = residual } )
+                                    :: matchedEqs
+                                )
 
             {- Unify one of a shader's attribute/uniform/varying sets.
 
