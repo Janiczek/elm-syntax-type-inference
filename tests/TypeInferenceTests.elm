@@ -57,6 +57,7 @@ suite =
         , unexposedUnionConstructorIsntFound
         , importWithSpecificExposes
         , duplicateImportAliasRegression
+        , shadowedListRegression
         , extensibleRecordRegression
         , annotationsCheckedAgainstBodiesSuite
         , rangeContractSuite
@@ -2937,6 +2938,41 @@ unexposedUnionConstructorIsntFound =
                             }
                         )
                     )
+
+
+shadowedListRegression : Test
+shadowedListRegression =
+    Test.test "a local two-parameter List alias shadows the implicit List type (Cindiary/elm-id)" <| \() ->
+    getDeclType
+        (Dict.fromList
+            [ ( [ "CoreHelper" ]
+              , String.ExtraExtra.multilineInput """
+        module CoreHelper exposing (CoreList)
+
+        type alias CoreList value =
+            List value
+        """
+              )
+            , ( [ "Main" ]
+              , String.ExtraExtra.multilineInput """
+        module Main exposing (List, singleton)
+
+        import CoreHelper
+
+        type alias List id value =
+            CoreHelper.CoreList ( id, value )
+
+        singleton : id -> value -> List id value
+        singleton id value =
+            [ ( id, value ) ]
+        """
+              )
+            ]
+        )
+        [ "Main" ]
+        "singleton"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "a -> b -> Main.List a b")
 
 
 duplicateImportAliasRegression : Test

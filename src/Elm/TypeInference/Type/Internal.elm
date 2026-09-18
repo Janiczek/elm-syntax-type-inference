@@ -698,57 +698,33 @@ fromTypeAnnotation resolver typeAnnotation =
             let
                 ( moduleName, typeName ) =
                     Node.value name
+
+                args : Result FromTypeAnnotationError (List MonoType)
+                args =
+                    annotations
+                        |> List.map (Node.value >> f)
+                        |> Result.Extra.combine
             in
-            case ( moduleName, typeName ) of
-                ( [], "Int" ) ->
-                    Ok Int
-
-                ( [], "Float" ) ->
-                    Ok Float
-
-                ( [], "Bool" ) ->
-                    Ok Bool
-
-                ( [], "Char" ) ->
-                    Ok Char
-
-                ( [], "String" ) ->
-                    Ok String
-
-                ( [], "List" ) ->
-                    case annotations of
-                        [ single ] ->
-                            f (Node.value single) |> Result.map List
-
-                        _ ->
-                            Err (ImpossibleAnnotation typeAnnotation)
-
-                _ ->
-                    let
-                        args : Result FromTypeAnnotationError (List MonoType)
-                        args =
-                            annotations
-                                |> List.map (Node.value >> f)
-                                |> Result.Extra.combine
-                    in
-                    Result.andThen
-                        (\args_ ->
-                            resolver moduleName typeName
-                                |> Result.mapError AmbiguousModuleName
-                                |> Result.map
-                                    (\( package, fullModuleName ) ->
-                                        collapsePrimitive package fullModuleName typeName args_
-                                            |> Maybe.withDefault
-                                                (UserDefinedType
-                                                    { package = package
-                                                    , moduleName = fullModuleName
-                                                    , name = typeName
-                                                    , args = args_
-                                                    }
-                                                )
-                                    )
-                        )
-                        args
+            -- Resolve names before collapsing primitives: local or imported
+            -- types can shadow implicit names such as List, Int, and String.
+            args
+                |> Result.andThen
+                    (\args_ ->
+                        resolver moduleName typeName
+                            |> Result.mapError AmbiguousModuleName
+                            |> Result.map
+                                (\( package, fullModuleName ) ->
+                                    collapsePrimitive package fullModuleName typeName args_
+                                        |> Maybe.withDefault
+                                            (UserDefinedType
+                                                { package = package
+                                                , moduleName = fullModuleName
+                                                , name = typeName
+                                                , args = args_
+                                                }
+                                            )
+                                )
+                    )
 
         TypeAnnotation.Unit ->
             Ok Unit
