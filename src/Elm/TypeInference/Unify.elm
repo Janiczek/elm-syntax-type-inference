@@ -396,6 +396,32 @@ zipRecordFields bindings1 bindings2 =
         (Just [])
 
 
+{-| A `Shader` annotation can mention a type alias:
+
+    type alias Vertex =
+        { position : Vec2 }
+
+    shader : Shader Vertex { view : Mat4 } { vcoord : Vec2 }
+
+`fromTypeAnnotation` can't expand that alias (it doesn't know them yet).
+Expand the args and retry the collapse here, where aliases are known.
+
+-}
+collapseNamedShader : TypeAliases -> MonoType -> MonoType
+collapseNamedShader typeAliases type_ =
+    case type_ of
+        UserDefinedType ut ->
+            case TypeI.collapsePrimitive ut.package ut.moduleName ut.name (List.map (expandAlias typeAliases) ut.args) of
+                Just collapsed ->
+                    collapsed
+
+                Nothing ->
+                    type_
+
+        _ ->
+            type_
+
+
 unifyMono : UnifyConfig -> MonoType -> MonoType -> StateM ()
 unifyMono cfg rawT1 rawT2 =
     if rawT1 == rawT2 then
@@ -406,10 +432,12 @@ unifyMono cfg rawT1 rawT2 =
             t1 : MonoType
             t1 =
                 expandAlias cfg.typeAliases rawT1
+                    |> collapseNamedShader cfg.typeAliases
 
             t2 : MonoType
             t2 =
                 expandAlias cfg.typeAliases rawT2
+                    |> collapseNamedShader cfg.typeAliases
 
             noSubstitutionNeeded : StateM ()
             noSubstitutionNeeded =

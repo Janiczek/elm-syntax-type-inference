@@ -1216,6 +1216,26 @@ shaderAnnotationSuite =
             """
                     )
                     |> Expect.err
+        , Test.test "an annotation using a type alias for attributes (Zinggi-elm-2d-game regression)" <| \() ->
+        inferShader
+            (header
+                ++ """
+
+            type alias Vertex =
+                { position : Vec3 }
+
+            shader : Shader Vertex { view : Mat4 } { vcoord : Vec2 }
+            shader =
+                [glsl|
+                    attribute vec3 position;
+                    uniform mat4 view;
+                    varying vec2 vcoord;
+                |]
+            """
+                    )
+                    |> Result.map Type.toString
+                    |> Expect.equal
+                        (Ok "Shader {position : Math.Vector3.Vec3} {view : Math.Matrix4.Mat4} {vcoord : Math.Vector2.Vec2}")
         ]
 
 
