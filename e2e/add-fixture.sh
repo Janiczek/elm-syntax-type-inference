@@ -9,6 +9,9 @@
 # - [name]: fixture directory name under e2e/tests/ (default: repo basename, .git stripped)
 # - [pass|fail]: value for expected.json's "expect" field (default: pass)
 #
+# Clones the latest published semver tag, not the default branch.
+# Falls back to the default branch if the repo has no semver-looking tags.
+#
 # Only elm.json plus the module files reachable from its "source-directories"
 # are copied into e2e/tests/<name>/project — non-Elm files (native shims,
 # READMEs, other-language sources, etc.) are left behind.
@@ -50,8 +53,35 @@ fi
 CLONE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CLONE_DIR"' EXIT
 
-echo "Cloning $URL..."
-git clone --depth 1 --quiet "$URL" "$CLONE_DIR"
+# Clone the latest published (semver) tag instead of the default branch, so
+# fixtures track released code rather than in-progress HEAD. Falls back to
+# the default branch if the repo has no semver-looking tags.
+LATEST_TAG="$(
+  git ls-remote --tags --refs "$URL" 2>/dev/null \
+    | awk '{print $2}' \
+    | sed 's#^refs/tags/##' \
+    | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sed 's/^v//' \
+    | sort -V \
+    | tail -n 1 \
+    || true
+)"
+
+if [ -n "$LATEST_TAG" ]; then
+  # Re-derive the actual tag ref name (may have had a "v" prefix).
+  TAG_REF="$(
+    git ls-remote --tags --refs "$URL" 2>/dev/null \
+      | awk '{print $2}' \
+      | sed 's#^refs/tags/##' \
+      | grep -E "^v?${LATEST_TAG}\$" \
+      | head -n 1
+  )"
+  echo "Cloning $URL at tag $TAG_REF..."
+  git clone --depth 1 --quiet --branch "$TAG_REF" "$URL" "$CLONE_DIR"
+else
+  echo "warning: no semver tags found for $URL, cloning default branch" >&2
+  git clone --depth 1 --quiet "$URL" "$CLONE_DIR"
+fi
 
 ELM_JSON="$CLONE_DIR/elm.json"
 if [ ! -f "$ELM_JSON" ]; then
