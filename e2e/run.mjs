@@ -447,7 +447,7 @@ function printReport({ name, expected, result, passed, elapsedSeconds }) {
     const error = expected.expect === "fail" && passed ? "" : rawError;
     // `test,` prefix already written early in main loop, finish rest of line.
     console.log(
-      [expected.expect, actual, passed, elapsedSeconds.toFixed(3), error].map(csvEscape).join(",")
+      [expected.expect, actual, passed, elapsedSeconds.toFixed(4), error].map(csvEscape).join(",")
     );
     return;
   }
