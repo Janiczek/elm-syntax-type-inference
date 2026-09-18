@@ -752,7 +752,7 @@ fromTypeAnnotation resolver typeAnnotation =
                 |> Result.map
                     (\fields_ ->
                         ExtensibleRecord
-                            { extensionTypevar = TypeVar ( Named (Node.value name), Normal )
+                            { extensionTypevar = TypeVar (TypeVar.parse (Node.value name))
                             , fields = fields_
                             }
                     )

@@ -734,9 +734,7 @@ registerCustomType resolver moduleName customType =
                         |> List.map
                             (\g ->
                                 TypeVar
-                                    ( TypeVar.Named (Node.value g)
-                                    , TypeVar.Normal
-                                    )
+                                    (TypeVar.parse (Node.value g))
                             )
                 }
     in
