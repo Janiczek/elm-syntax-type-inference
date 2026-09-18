@@ -409,22 +409,29 @@ importExposesValue target import_ varName =
             else if not (couldBeConstructorName varName) then
                 False
 
-            else if Set.member varName e.opaqueTypes then
-                Set.member varName target.recordAliases
-                    && Set.member varName target.exposedValues
-
             else
-                Set.member varName target.exposedValues
-                    && List.any
-                        (\openType ->
-                            case Dict.get openType target.unionConstructors of
-                                Just ctors ->
-                                    List.member varName ctors
+                let
+                    viaOpenUnion : Bool
+                    viaOpenUnion =
+                        Set.member varName target.exposedValues
+                            && List.any
+                                (\openType ->
+                                    case Dict.get openType target.unionConstructors of
+                                        Just ctors ->
+                                            List.member varName ctors
 
-                                Nothing ->
-                                    False
-                        )
-                        (Set.toList e.openTypes)
+                                        Nothing ->
+                                            False
+                                )
+                                (Set.toList e.openTypes)
+
+                    viaRecordAlias : Bool
+                    viaRecordAlias =
+                        Set.member varName e.opaqueTypes
+                            && Set.member varName target.recordAliases
+                            && Set.member varName target.exposedValues
+                in
+                viaRecordAlias || viaOpenUnion
 
 
 {-| Does this import's own `exposing` clause name this type?

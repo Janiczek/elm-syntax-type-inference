@@ -345,36 +345,34 @@ dependencyImportDefinesValue (Index idx) import_ varName =
             else if not (couldBeConstructorName varName) then
                 Ok Nothing
 
-            else if Set.member varName e.opaqueTypes then
+            else
                 let
-                    isRecord : Bool
-                    isRecord =
-                        Dict.get (FullModuleName.toString import_.moduleName) idx.recordAliases
-                            |> Maybe.withDefault Set.empty
-                            |> Set.member varName
+                    viaRecordAlias : Bool
+                    viaRecordAlias =
+                        Set.member varName e.opaqueTypes
+                            && (Dict.get (FullModuleName.toString import_.moduleName) idx.recordAliases
+                                    |> Maybe.withDefault Set.empty
+                                    |> Set.member varName
+                               )
+
+                    viaOpenUnion : Bool
+                    viaOpenUnion =
+                        case
+                            Dict.get (FullModuleName.toString import_.moduleName) idx.ctorParents
+                                |> Maybe.andThen (Dict.get varName)
+                        of
+                            Just parent ->
+                                Set.member parent e.openTypes
+
+                            Nothing ->
+                                False
                 in
-                if isRecord then
+                if viaRecordAlias || viaOpenUnion then
                     dependencyModuleDefines (Index idx) import_.moduleName varName
                         |> Result.map (Maybe.map (\package -> ( package, import_.moduleName )))
 
                 else
                     Ok Nothing
-
-            else
-                case
-                    Dict.get (FullModuleName.toString import_.moduleName) idx.ctorParents
-                        |> Maybe.andThen (Dict.get varName)
-                of
-                    Just parent ->
-                        if Set.member parent e.openTypes then
-                            dependencyModuleDefines (Index idx) import_.moduleName varName
-                                |> Result.map (Maybe.map (\package -> ( package, import_.moduleName )))
-
-                        else
-                            Ok Nothing
-
-                    Nothing ->
-                        Ok Nothing
 
 
 qualifiedVar :

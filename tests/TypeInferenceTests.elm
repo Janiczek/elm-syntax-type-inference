@@ -55,6 +55,7 @@ suite =
         , unionConstructorReexposeRegression
         , recordConstructorReexposeRegression
         , unexposedUnionConstructorIsntFound
+        , unionConstructorShadowedByAliasRegression
         , selectiveUnionImportRegression
         , importWithSpecificExposes
         , duplicateImportAliasRegression
@@ -2941,6 +2942,41 @@ unexposedUnionConstructorIsntFound =
                             }
                         )
                     )
+
+
+unionConstructorShadowedByAliasRegression : Test
+unionConstructorShadowedByAliasRegression =
+    Test.test "a union constructor sharing its name with a type alias in the same exposing list still resolves (MackeyRMS-elm-ui-with-context Internal.Attr/Attribute)" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.fromList
+                [ ( [ "A" ]
+                  , String.ExtraExtra.multilineInput """
+        module A exposing (Attr(..), Attribute)
+
+        type Attr
+            = Attribute Int
+
+        type alias Attribute =
+            Attr
+        """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (main)
+
+        import A exposing (Attr(..), Attribute)
+
+        main =
+            Attribute 1
+        """
+                          )
+                        ]
+    in
+    getDeclType modules [ "Main" ] "main"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "A.Attr")
 
 
 selectiveUnionImportRegression : Test
