@@ -25,6 +25,7 @@ let elmCompiler = "elm";
 let writeTypes = false;
 // Machine-readable CSV on stdout instead of human-readable lines.
 let csvMode = false;
+let warmupDeps = true;
 
 function parseArgs(argv) {
   const filters = [];
@@ -49,6 +50,10 @@ function parseArgs(argv) {
       csvMode = true;
     } else if (arg === "--no-csv") {
       csvMode = false;
+    } else if (arg === "--warmup-deps") {
+      warmupDeps = true;
+    } else if (arg === "--no-warmup-deps") {
+      warmupDeps = false;
     } else {
       filters.push(arg);
     }
@@ -395,7 +400,9 @@ async function runTest(name) {
 
   try {
     const sourceFiles = findSourceFiles(projectDir, elmJson);
-    ensureDependenciesCached(projectDir, [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean));
+    if (warmupDeps) {
+      ensureDependenciesCached(projectDir, [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean));
+    }
 
     const { dependencies, versions } = await resolveDependencies(elmJson);
     const flags = {
