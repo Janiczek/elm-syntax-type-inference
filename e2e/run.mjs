@@ -110,14 +110,28 @@ function pickWarmupFile(projectDir, sourceFiles, elmJson) {
 
 // Runs `elm make` in the tested directory so the compiler downloads the deps.
 // Compile errors are ignored (tests can be expected to fail).
+// `elm-version` is relaxed to allow us to test with 0.19.2.
 function ensureDependenciesCached(projectDir, sourceFiles) {
   if (sourceFiles.length === 0) return;
+
+  const elmJsonPath = path.join(projectDir, "elm.json");
+  const original = fs.readFileSync(elmJsonPath, "utf8");
+  const elmJson = JSON.parse(original);
+  const patched = elmJson.type === "package" && typeof elmJson["elm-version"] === "string";
+  if (patched) {
+    elmJson["elm-version"] = "0.1.0 <= v < 2.0.0";
+    fs.writeFileSync(elmJsonPath, JSON.stringify(elmJson));
+  }
+
   try {
     execFileSync(elmCompiler, ["make", sourceFiles[0], "--output=/dev/null"], {
       cwd: projectDir,
       stdio: "ignore",
     });
-  } catch {}
+  } catch {
+  } finally {
+    if (patched) fs.writeFileSync(elmJsonPath, original);
+  }
 }
 
 function cachedVersions(name) {
