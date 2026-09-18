@@ -50,7 +50,7 @@ import Elm.TypeInference.Unify exposing (TypeAlias)
 import List.ExtraExtra
 import Maybe.Extra
 import Result.Extra
-import Set
+import Set exposing (Set)
 import TypeLookupTable exposing (TypeLookupTable)
 import TypeLookupTable.Internal
 
@@ -236,7 +236,7 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
 
         Ok (DependencyEnv env) ->
             let
-                reachable : Set.Set PackageName
+                reachable : Set PackageName
                 reachable =
                     reachablePackages deps directDependencies
 
@@ -260,12 +260,12 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
                                 (DependencyEnv { env | typeAliases = Dict.union sourceAliases env.typeAliases })
 
 
-reachablePackages : Dependencies -> List PackageName -> Set.Set PackageName
+reachablePackages : Dependencies -> List PackageName -> Set PackageName
 reachablePackages deps roots =
     reachablePackagesHelp deps roots Set.empty
 
 
-reachablePackagesHelp : Dependencies -> List PackageName -> Set.Set PackageName -> Set.Set PackageName
+reachablePackagesHelp : Dependencies -> List PackageName -> Set PackageName -> Set PackageName
 reachablePackagesHelp deps queue seen =
     case queue of
         [] ->

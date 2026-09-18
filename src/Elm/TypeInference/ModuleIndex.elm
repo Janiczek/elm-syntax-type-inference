@@ -1,15 +1,15 @@
 module Elm.TypeInference.ModuleIndex exposing
-    ( ModuleIndex, ImportIndex
+    ( ModuleIndex, ImportIndex, ExposingIndex(..)
     , fromFile
-    , importCouldExposeValue, importExposesType
+    , importCouldExposeValue, importExposesType, importExposesValue
     , modulesWithAlias, isImportedUnaliased
     )
 
 {-| Precomputed index for name resolution.
 
-@docs ModuleIndex, ImportIndex
+@docs ModuleIndex, ImportIndex, ExposingIndex
 @docs fromFile
-@docs importCouldExposeValue, importExposesType
+@docs importCouldExposeValue, importExposesType, importExposesValue
 @docs modulesWithAlias, isImportedUnaliased
 
 -}
@@ -37,6 +37,8 @@ type alias ModuleIndex =
     , declaredTypes : Set VarName
     , exposedValues : Set VarName
     , exposedTypes : Set VarName
+    , unionConstructors : Dict VarName (List VarName)
+    , recordAliases : Set VarName
     , infixes : Dict VarName VarName
     , imports : List ImportIndex
     }
@@ -57,6 +59,7 @@ type ExposingIndex
         { values : Set VarName -- import Foo exposing (foo, bar)
         , types : Set VarName -- import Foo exposing (Foo, Bar(..))
         , hasOpenedUnion : Bool -- at least one of the exposed types has (..). Used to pre-filter in importCouldExposeValue.
+        , openTypes : Set VarName -- import Foo exposing (Bar(..)): the types exposed with (..)
         , opaqueTypes : Set VarName -- import Foo exposing (Foo)
         }
 
@@ -90,6 +93,8 @@ fromFile file =
     , declaredTypes = decls.types
     , exposedValues = exposedValues exposing_ decls
     , exposedTypes = exposedTypes exposing_ decls
+    , unionConstructors = decls.unionConstructors
+    , recordAliases = decls.recordAliases
     , infixes = decls.infixes
     , imports = List.map (Node.value >> importIndex) file.imports
     }
@@ -320,6 +325,7 @@ importIndex import_ =
                                     { values = Set.insert fn acc.values
                                     , types = acc.types
                                     , hasOpenedUnion = acc.hasOpenedUnion
+                                    , openTypes = acc.openTypes
                                     , opaqueTypes = acc.opaqueTypes
                                     }
 
@@ -327,6 +333,7 @@ importIndex import_ =
                                     { values = Set.insert op acc.values
                                     , types = acc.types
                                     , hasOpenedUnion = acc.hasOpenedUnion
+                                    , openTypes = acc.openTypes
                                     , opaqueTypes = acc.opaqueTypes
                                     }
 
@@ -334,6 +341,7 @@ importIndex import_ =
                                     { values = acc.values
                                     , types = Set.insert name acc.types
                                     , hasOpenedUnion = acc.hasOpenedUnion
+                                    , openTypes = acc.openTypes
                                     , opaqueTypes = Set.insert name acc.opaqueTypes
                                     }
 
@@ -341,12 +349,19 @@ importIndex import_ =
                                     { values = acc.values
                                     , types = Set.insert exposedType.name acc.types
                                     , hasOpenedUnion = acc.hasOpenedUnion || exposedType.open /= Nothing
+                                    , openTypes =
+                                        if exposedType.open /= Nothing then
+                                            Set.insert exposedType.name acc.openTypes
+
+                                        else
+                                            acc.openTypes
                                     , opaqueTypes = acc.opaqueTypes
                                     }
                         )
                         { values = Set.empty
                         , types = Set.empty
                         , hasOpenedUnion = False
+                        , openTypes = Set.empty
                         , opaqueTypes = Set.empty
                         }
                         exposedNodes
@@ -374,6 +389,42 @@ importCouldExposeValue import_ varName =
                    (couldBeConstructorName varName
                         && (e.hasOpenedUnion || Set.member varName e.opaqueTypes)
                    )
+
+
+{-| Does this import actually bring this value into unqualified scope?
+-}
+importExposesValue : ModuleIndex -> ImportIndex -> VarName -> Bool
+importExposesValue target import_ varName =
+    case import_.exposing_ of
+        ExposesNothing ->
+            False
+
+        ExposesAll ->
+            Set.member varName target.exposedValues
+
+        ExposesExplicit e ->
+            if Set.member varName e.values then
+                Set.member varName target.exposedValues
+
+            else if not (couldBeConstructorName varName) then
+                False
+
+            else if Set.member varName e.opaqueTypes then
+                Set.member varName target.recordAliases
+                    && Set.member varName target.exposedValues
+
+            else
+                Set.member varName target.exposedValues
+                    && List.any
+                        (\openType ->
+                            case Dict.get openType target.unionConstructors of
+                                Just ctors ->
+                                    List.member varName ctors
+
+                                Nothing ->
+                                    False
+                        )
+                        (Set.toList e.openTypes)
 
 
 {-| Does this import's own `exposing` clause name this type?

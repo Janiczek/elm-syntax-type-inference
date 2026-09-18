@@ -55,6 +55,7 @@ suite =
         , unionConstructorReexposeRegression
         , recordConstructorReexposeRegression
         , unexposedUnionConstructorIsntFound
+        , selectiveUnionImportRegression
         , importWithSpecificExposes
         , duplicateImportAliasRegression
         , shadowedListRegression
@@ -2940,6 +2941,55 @@ unexposedUnionConstructorIsntFound =
                             }
                         )
                     )
+
+
+selectiveUnionImportRegression : Test
+selectiveUnionImportRegression =
+    Test.test "importing only ScreenSize(..) does not bring Center into scope (EdutainmentLIVE-elm-bootstrap Bootstrap.Text)" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.fromList
+                [ ( [ "Gen" ]
+                  , String.ExtraExtra.multilineInput """
+        module Gen exposing (ScreenSize(..), HorizontalAlign(..))
+
+        type ScreenSize
+            = XS
+            | SM
+
+        type HorizontalAlign
+            = Left
+            | Center
+            | Right
+        """
+                          )
+                , ( [ "TextInternal" ]
+                  , String.ExtraExtra.multilineInput """
+        module TextInternal exposing (TextAlignDir(..))
+
+        type TextAlignDir
+            = Left
+            | Center
+            | Right
+        """
+                          )
+                , ( [ "Main" ]
+                  , String.ExtraExtra.multilineInput """
+        module Main exposing (main)
+
+        import Gen exposing (ScreenSize(..))
+        import TextInternal exposing (TextAlignDir(..))
+
+        main =
+            Center
+        """
+                          )
+                        ]
+    in
+    getDeclType modules [ "Main" ] "main"
+        |> Result.map Type.toString
+        |> Expect.equal (Ok "TextInternal.TextAlignDir")
 
 
 shadowedListRegression : Test

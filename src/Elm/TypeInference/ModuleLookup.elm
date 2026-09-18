@@ -18,14 +18,14 @@ import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
-import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
+import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ExposingIndex(..), ImportIndex, ModuleIndex)
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal exposing (TypeResolver)
 import List.ExtraExtra
 import Result.Extra
 import Result.ExtraExtra
-import Set
+import Set exposing (Set)
 
 
 {-| Precomputed index of `module name -> value/type name -> packages defining it`.
@@ -34,6 +34,8 @@ type Index
     = Index
         { values : NameIndex
         , types : NameIndex
+        , ctorParents : Dict String (Dict VarName VarName)
+        , recordAliases : Dict String (Set VarName)
         }
 
 
@@ -56,6 +58,8 @@ addModule packageName mod (Index idx) =
     Index
         { values = List.foldl (addName packageName mod.name) idx.values (valueNamesOf mod)
         , types = List.foldl (addName packageName mod.name) idx.types (typeNamesOf mod)
+        , ctorParents = addCtorParents mod idx.ctorParents
+        , recordAliases = addRecordAliases mod idx.recordAliases
         }
 
 
@@ -78,6 +82,49 @@ valueNamesOf mod =
 typeNamesOf : Elm.Docs.Module -> List VarName
 typeNamesOf mod =
     List.map .name mod.unions ++ List.map .name mod.aliases
+
+
+addCtorParents : Elm.Docs.Module -> Dict String (Dict VarName VarName) -> Dict String (Dict VarName VarName)
+addCtorParents mod acc =
+    List.foldl
+        (\union inner ->
+            List.foldl
+                (\( ctor, _ ) innerDict ->
+                    Dict.update mod.name
+                        (\maybeCtors ->
+                            maybeCtors
+                                |> Maybe.withDefault Dict.empty
+                                |> Dict.insert ctor union.name
+                                |> Just
+                        )
+                        innerDict
+                )
+                inner
+                union.tags
+        )
+        acc
+        mod.unions
+
+
+addRecordAliases : Elm.Docs.Module -> Dict String (Set VarName) -> Dict String (Set VarName)
+addRecordAliases mod acc =
+    List.foldl
+        (\alias inner ->
+            if isRecordAlias alias then
+                Dict.update mod.name
+                    (\maybeSet ->
+                        maybeSet
+                            |> Maybe.withDefault Set.empty
+                            |> Set.insert alias.name
+                            |> Just
+                    )
+                    inner
+
+            else
+                inner
+        )
+        acc
+        mod.aliases
 
 
 addName :
@@ -109,6 +156,8 @@ emptyIndex =
     Index
         { values = Dict.empty
         , types = Dict.empty
+        , ctorParents = Dict.empty
+        , recordAliases = Dict.empty
         }
 
 
@@ -264,15 +313,68 @@ explicitImportDefinesValue index modules import_ varName =
     case Dict.get import_.moduleName modules of
         Just importedModule ->
             Ok <|
-                if Set.member varName importedModule.exposedValues then
+                if ModuleIndex.importExposesValue importedModule import_ varName then
                     Just ( "", import_.moduleName )
 
                 else
                     Nothing
 
         Nothing ->
-            dependencyModuleDefines index import_.moduleName varName
+            dependencyImportDefinesValue index import_ varName
+
+
+dependencyImportDefinesValue :
+    Index
+    -> ImportIndex
+    -> VarName
+    -> Result ErrorDetails (Maybe ( PackageName, FullModuleName ))
+dependencyImportDefinesValue (Index idx) import_ varName =
+    case import_.exposing_ of
+        ModuleIndex.ExposesNothing ->
+            Ok Nothing
+
+        ModuleIndex.ExposesAll ->
+            dependencyModuleDefines (Index idx) import_.moduleName varName
                 |> Result.map (Maybe.map (\package -> ( package, import_.moduleName )))
+
+        ModuleIndex.ExposesExplicit e ->
+            if Set.member varName e.values then
+                dependencyModuleDefines (Index idx) import_.moduleName varName
+                    |> Result.map (Maybe.map (\package -> ( package, import_.moduleName )))
+
+            else if not (couldBeConstructorName varName) then
+                Ok Nothing
+
+            else if Set.member varName e.opaqueTypes then
+                let
+                    isRecord : Bool
+                    isRecord =
+                        Dict.get (FullModuleName.toString import_.moduleName) idx.recordAliases
+                            |> Maybe.withDefault Set.empty
+                            |> Set.member varName
+                in
+                if isRecord then
+                    dependencyModuleDefines (Index idx) import_.moduleName varName
+                        |> Result.map (Maybe.map (\package -> ( package, import_.moduleName )))
+
+                else
+                    Ok Nothing
+
+            else
+                case
+                    Dict.get (FullModuleName.toString import_.moduleName) idx.ctorParents
+                        |> Maybe.andThen (Dict.get varName)
+                of
+                    Just parent ->
+                        if Set.member parent e.openTypes then
+                            dependencyModuleDefines (Index idx) import_.moduleName varName
+                                |> Result.map (Maybe.map (\package -> ( package, import_.moduleName )))
+
+                        else
+                            Ok Nothing
+
+                    Nothing ->
+                        Ok Nothing
 
 
 qualifiedVar :
@@ -419,6 +521,16 @@ dependencyModuleDefines (Index index) moduleName varName =
 
         _ :: _ :: _ ->
             Err (AmbiguousModuleOwner { moduleName = FullModuleName.toString moduleName, possiblePackages = matches })
+
+
+couldBeConstructorName : VarName -> Bool
+couldBeConstructorName varName =
+    case String.uncons varName of
+        Just ( firstChar, _ ) ->
+            Char.isUpper firstChar
+
+        Nothing ->
+            False
 
 
 isRecordAlias : Elm.Docs.Alias -> Bool
