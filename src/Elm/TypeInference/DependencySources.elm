@@ -33,17 +33,25 @@ aliases deps sources =
         |> Result.map (List.foldl Dict.union Dict.empty)
 
 
-{-| Which packages' `docs.json` types use unknown modules?
+{-| Which packages' `docs.json` types use unknown modules, or types that
+aren't exposed (eg. a `type alias` used in an exposed function's signature,
+but not itself in the module's `exposing` list)?
+
+docs.json can't tell us the underlying (record) shape of such a type, so we
+need the actual source to know whether it's a record we can unify
+structurally against.
+
 -}
 neededPackages : Dependencies -> Dict PackageName (List File) -> List PackageName
 neededPackages deps sources =
     let
-        docsModules : Set String
-        docsModules =
+        docsTypes : Dict String (Set String)
+        docsTypes =
             deps
                 |> Dict.values
-                |> List.ExtraExtra.fastConcatMap (\pkg -> List.map .name pkg.modules)
-                |> Set.fromList
+                |> List.ExtraExtra.fastConcatMap .modules
+                |> List.map (\mod -> ( mod.name, documentedTypeNames mod ))
+                |> Dict.fromList
     in
     deps
         |> Dict.toList
@@ -52,7 +60,7 @@ neededPackages deps sources =
                 if Dict.member package sources then
                     Nothing
 
-                else if List.any (\ref -> not (Set.member ref docsModules)) (docsModuleRefs pkg.modules) then
+                else if List.any (not << isKnownRef docsTypes) (docsModuleRefs pkg.modules) then
                     Just package
 
                 else
@@ -60,7 +68,23 @@ neededPackages deps sources =
             )
 
 
-docsModuleRefs : List Elm.Docs.Module -> List String
+documentedTypeNames : Elm.Docs.Module -> Set String
+documentedTypeNames mod =
+    Set.fromList
+        (List.map .name mod.unions ++ List.map .name mod.aliases)
+
+
+isKnownRef : Dict String (Set String) -> ( String, String ) -> Bool
+isKnownRef docsTypes ( moduleName, typeName ) =
+    case Dict.get moduleName docsTypes of
+        Nothing ->
+            False
+
+        Just typeNames ->
+            Set.member typeName typeNames
+
+
+docsModuleRefs : List Elm.Docs.Module -> List ( String, String )
 docsModuleRefs modules =
     modules
         |> List.ExtraExtra.fastConcatMap
@@ -72,7 +96,7 @@ docsModuleRefs modules =
             )
 
 
-docsTypeRefs : Elm.Type.Type -> List String
+docsTypeRefs : Elm.Type.Type -> List ( String, String )
 docsTypeRefs tipe =
     case tipe of
         Elm.Type.Var _ ->
@@ -95,6 +119,7 @@ docsTypeRefs tipe =
 
              else
                 modulePart qualifiedName
+                    |> List.map (\m -> ( m, typeName ))
             )
                 ++ List.ExtraExtra.fastConcatMap docsTypeRefs args
 
