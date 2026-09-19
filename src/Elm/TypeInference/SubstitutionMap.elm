@@ -694,14 +694,7 @@ resolveBound store k bound =
         ( resolved, flags, store1 ) =
             substituteMono store bound
     in
-    if resolved == bound then
-        -- Skip work, nothing to update.
-        ( resolved
-        , Bitwise.or flags changedFlag
-        , store1
-        )
-
-    else
+    if isChanged flags then
         let
             slot : Slot
             slot =
@@ -717,6 +710,12 @@ resolveBound store k bound =
           , unionFindRanks = store1.unionFindRanks
           , letRanks = store1.letRanks
           }
+        )
+
+    else
+        ( resolved
+        , Bitwise.or flags changedFlag
+        , store1
         )
 
 
