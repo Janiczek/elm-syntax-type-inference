@@ -413,6 +413,7 @@ async function runTest(name) {
       directDependencies: directDependencyNames(elmJson),
       allDependencies: dependencies,
       exposedModules: exposedModulesFor(elmJson),
+      currentPackage: elmJson.type === "package" ? elmJson.name : null,
     };
 
     const start = process.hrtime.bigint();

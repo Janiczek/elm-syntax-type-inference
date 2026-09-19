@@ -76,6 +76,7 @@ type alias Active =
     , files : Dict ModuleName File
     , sourcePaths : Dict ModuleName String
     , dependencySources : Dict String (List File)
+    , currentPackage : Maybe String
     }
 
 
@@ -83,6 +84,7 @@ type alias PendingInference =
     { depEnv : DependencyEnv
     , files : Dict ModuleName File
     , sourcePaths : Dict ModuleName String
+    , currentPackage : Maybe String
     }
 
 
@@ -103,6 +105,7 @@ type alias Flags =
     , directDependencies : List String
     , allDependencies : List RawDependency
     , exposedModules : Maybe (List String)
+    , currentPackage : Maybe String
     }
 
 
@@ -127,11 +130,16 @@ type alias ProvidedPackage =
 
 flagsDecoder : Decode.Decoder Flags
 flagsDecoder =
-    Decode.map4 Flags
+    Decode.map5 Flags
         (Decode.field "sources" (Decode.list sourceFileDecoder))
         (Decode.field "directDependencies" (Decode.list Decode.string))
         (Decode.field "allDependencies" (Decode.list dependencyDecoder))
         (Decode.field "exposedModules" (Decode.nullable (Decode.list Decode.string)))
+        (Decode.oneOf
+            [ Decode.field "currentPackage" (Decode.nullable Decode.string)
+            , Decode.succeed Nothing
+            ]
+        )
 
 
 sourceFileDecoder : Decode.Decoder SourceFile
@@ -308,6 +316,7 @@ run flagsValue =
                                         , files = Dict.map (\_ { file } -> file) kept
                                         , sourcePaths = Dict.map (\_ { path } -> path) kept
                                         , dependencySources = Dict.empty
+                                        , currentPackage = flags.currentPackage
                                         }
 
 
@@ -337,6 +346,7 @@ step active =
                                     { depEnv = depEnv
                                     , files = active.files
                                     , sourcePaths = active.sourcePaths
+                                    , currentPackage = active.currentPackage
                                     }
                         }
                    )
@@ -362,6 +372,7 @@ runInference pending =
     let
         project =
             Elm.TypeInference.inferProject
+                pending.currentPackage
                 pending.depEnv
                 pending.files
 

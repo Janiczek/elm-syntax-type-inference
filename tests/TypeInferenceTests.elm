@@ -24,6 +24,7 @@ import Tests.Elm.TypeInference.Helpers
         , getDeclType
         , getDeclTypeWithDeps
         , getDeclTypeWithDirectAndDeps
+        , getDeclTypeWithPackage
         , getExprType
         , getExprTypeWithDeps
         , inferMainModule
@@ -67,6 +68,7 @@ suite =
         , rangeContractSuite
         , publicBoundarySuite
         , publicSurfaceLeakSuite
+        , kernelSuite
         ]
 
 
@@ -2993,10 +2995,10 @@ unionConstructorShadowedByAliasRegression =
         """
                           )
                         ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "A.Attr")
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "A.Attr")
 
 
 selectiveUnionImportRegression : Test
@@ -3020,8 +3022,8 @@ selectiveUnionImportRegression =
             | Right
         """
                           )
-                , ( [ "TextInternal" ]
-                  , String.ExtraExtra.multilineInput """
+                        , ( [ "TextInternal" ]
+                          , String.ExtraExtra.multilineInput """
         module TextInternal exposing (TextAlignDir(..))
 
         type TextAlignDir
@@ -3030,8 +3032,8 @@ selectiveUnionImportRegression =
             | Right
         """
                           )
-                , ( [ "Main" ]
-                  , String.ExtraExtra.multilineInput """
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
         module Main exposing (main)
 
         import Gen exposing (ScreenSize(..))
@@ -3042,10 +3044,10 @@ selectiveUnionImportRegression =
         """
                           )
                         ]
-    in
-    getDeclType modules [ "Main" ] "main"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "TextInternal.TextAlignDir")
+            in
+            getDeclType modules [ "Main" ] "main"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "TextInternal.TextAlignDir")
 
 
 shadowedListRegression : Test
@@ -3060,9 +3062,9 @@ shadowedListRegression =
         type alias CoreList value =
             List value
         """
-              )
-            , ( [ "Main" ]
-              , String.ExtraExtra.multilineInput """
+                      )
+                    , ( [ "Main" ]
+                      , String.ExtraExtra.multilineInput """
         module Main exposing (List, singleton)
 
         import CoreHelper
@@ -3074,13 +3076,13 @@ shadowedListRegression =
         singleton id value =
             [ ( id, value ) ]
         """
-              )
-            ]
-        )
-        [ "Main" ]
-        "singleton"
-        |> Result.map Type.toString
-        |> Expect.equal (Ok "a -> b -> Main.List a b")
+                      )
+                    ]
+                )
+                [ "Main" ]
+                "singleton"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "a -> b -> Main.List a b")
 
 
 duplicateImportAliasRegression : Test
@@ -3234,10 +3236,10 @@ extensibleAliasOverlapRegression =
         foo =
             { value = "", x = "", y = "" }
         """)
-        )
-        [ "Main" ]
-        "foo"
-        |> Expect.ok
+                )
+                [ "Main" ]
+                "foo"
+                |> Expect.ok
 
 
 customUnionExtensibleAccessRegression : Test
@@ -3278,10 +3280,10 @@ customUnionExtensibleAccessRegression =
                 , b = 1
                 }
         """)
-        )
-        [ "Main" ]
-        "g"
-        |> Expect.ok
+                )
+                [ "Main" ]
+                "g"
+                |> Expect.ok
 
 
 annotationsCheckedAgainstBodiesSuite : Test
@@ -3437,4 +3439,156 @@ annotationsCheckedAgainstBodiesSuite =
                     "x"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Float")
+        ]
+
+
+kernelSuite : Test
+kernelSuite =
+    let
+        kernelModule : String -> String
+        kernelModule body =
+            String.ExtraExtra.multilineInput
+                ("""
+                module Main exposing (x)
+
+                import Elm.Kernel.Browser
+
+                x : Int
+                x =
+                """ ++ body)
+
+        kernelModules : String -> Dict ModuleName String
+        kernelModules body =
+            Dict.singleton [ "Main" ] (kernelModule body)
+
+        inferAs : Maybe String -> String -> Result TestError Type
+        inferAs pkg body =
+            getDeclTypeWithPackage pkg [] [] (kernelModules body) [ "Main" ] "x"
+    in
+    Test.describe "Elm.Kernel.* is an unbound var when allowed"
+        [ Test.test "elm/browser may use kernel (trusts the annotation)" <| \() ->
+        inferAs (Just "elm/browser")
+            "    Elm.Kernel.Browser.call \"focus\""
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Int")
+        , Test.test "elm-explorations/test may use kernel" <| \() ->
+        inferAs (Just "elm-explorations/test")
+            "    Elm.Kernel.Browser.call \"focus\""
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Int")
+        , Test.test "the author's own program (Nothing) may use kernel" <| \() ->
+        inferAs Nothing
+            "    Elm.Kernel.Browser.call \"focus\""
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Int")
+        , Test.test "other packages may not use kernel" <| \() ->
+        inferAs (Just "someone/else")
+            "    Elm.Kernel.Browser.call \"focus\""
+            |> Expect.err
+        , Test.test "elm-tools prefix does not count as elm/" <| \() ->
+        inferAs (Just "elm-tools/thing")
+            "    Elm.Kernel.Browser.call \"focus\""
+            |> Expect.err
+        , Test.test "kernel alias (import as K) works when allowed" <| \() ->
+        getDeclTypeWithPackage (Just "elm/core")
+            []
+            []
+            (Dict.singleton [ "Main" ]
+                (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            import Elm.Kernel.Utils as K
+
+            x : Int
+            x = K.equal 1 2
+            """)
+            )
+            [ "Main" ]
+            "x"
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Int")
+        , Test.test "kernel alias is rejected when not allowed" <| \() ->
+        getDeclTypeWithPackage (Just "someone/else")
+            []
+            []
+            (Dict.singleton [ "Main" ]
+                (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            import Elm.Kernel.Utils as K
+
+            x : Int
+            x = K.equal 1 2
+            """)
+            )
+            [ "Main" ]
+            "x"
+            |> Expect.err
+        , Test.test "non-kernel unknown vars still fail even when kernel is allowed" <| \() ->
+        getDeclTypeWithPackage (Just "elm/core")
+            []
+            []
+            (Dict.singleton [ "Main" ]
+                (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            x : Int
+            x = someUnknownFunction 1
+            """)
+            )
+            [ "Main" ]
+            "x"
+            |> Expect.err
+        , Test.test "kernel module still works when imported (liveness)" <| \() ->
+        getDeclTypeWithPackage (Just "elm/browser")
+            []
+            []
+            (Dict.singleton [ "Main" ]
+                (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            import Elm.Kernel.Browser
+
+            x : Int
+            x = Elm.Kernel.Browser.call "focus"
+            """)
+            )
+            [ "Main" ]
+            "x"
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Int")
+        , Test.test "kernel works without its import, matching the compiler (elm/browser's History uses Elm.Kernel.Json with no import)" <| \() ->
+        getDeclTypeWithPackage (Just "elm/browser")
+            []
+            []
+            (Dict.singleton [ "Main" ]
+                (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            x : Int
+            x = Elm.Kernel.Browser.call "focus"
+            """)
+            )
+            [ "Main" ]
+            "x"
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Int")
+        , Test.test "any kernel module is usable once kernel is allowed, regardless of which kernel imports exist" <| \() ->
+        getDeclTypeWithPackage (Just "elm/browser")
+            []
+            []
+            (Dict.singleton [ "Main" ]
+                (String.ExtraExtra.multilineInput """
+            module Main exposing (x)
+
+            import Elm.Kernel.Browser
+
+            x : Int
+            x = Elm.Kernel.Utils.equal 1 2
+            """)
+            )
+            [ "Main" ]
+            "x"
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Int")
         ]

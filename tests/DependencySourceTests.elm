@@ -48,7 +48,7 @@ suite =
                                             Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
 
                                         Elm.TypeInference.Ready env ->
-                                            (Elm.TypeInference.inferProject env (Dict.singleton [ "Main" ] main)).errors
+                                            (Elm.TypeInference.inferProject Nothing env (Dict.singleton [ "Main" ] main)).errors
                                                 |> Expect.equal Dict.empty
 
                     _ ->
@@ -94,7 +94,7 @@ suite =
                                             Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
 
                                         Elm.TypeInference.Ready env ->
-                                            (Elm.TypeInference.inferProject env (Dict.singleton [ "Main" ] main)).errors
+                                            (Elm.TypeInference.inferProject Nothing env (Dict.singleton [ "Main" ] main)).errors
                                                 |> Expect.equal Dict.empty
 
                     _ ->

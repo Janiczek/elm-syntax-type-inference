@@ -3,9 +3,12 @@ module Tests.Elm.TypeInference.Helpers exposing
     , getDeclType
     , getDeclTypeWithDeps
     , getDeclTypeWithDirectAndDeps
+    , getDeclTypeWithPackage
     , getExprType
     , getExprTypeWithDeps
     , inferMainModule
+    , inferMainModuleWithPackage
+    , runInferenceWithPackage
     )
 
 import Dict exposing (Dict)
@@ -41,13 +44,18 @@ mainModule =
 -}
 inferMainModule : String -> Result TestError ( File, TypeLookupTable )
 inferMainModule moduleCode =
+    inferMainModuleWithPackage Nothing moduleCode
+
+
+inferMainModuleWithPackage : Maybe String -> String -> Result TestError ( File, TypeLookupTable )
+inferMainModuleWithPackage currentPackage moduleCode =
     moduleCode
         |> Elm.Parser.parse
         |> Result.map (Elm.Processing.process Elm.Processing.init)
         |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                runInference [] [] (Dict.singleton mainModule file)
+                runInferenceWithPackage currentPackage [] [] (Dict.singleton mainModule file)
                     |> Result.andThen
                         (\lookupTables ->
                             Dict.get mainModule lookupTables
@@ -63,6 +71,16 @@ runInference :
     -> Dict ModuleName File
     -> Result TestError (Dict ModuleName TypeLookupTable)
 runInference directDependencies allDependencies files =
+    runInferenceWithPackage Nothing directDependencies allDependencies files
+
+
+runInferenceWithPackage :
+    Maybe String
+    -> List String
+    -> List Dependency
+    -> Dict ModuleName File
+    -> Result TestError (Dict ModuleName TypeLookupTable)
+runInferenceWithPackage currentPackage directDependencies allDependencies files =
     case
         Elm.TypeInference.dependencyEnv
             { directDependencies = directDependencies
@@ -81,6 +99,7 @@ runInference directDependencies allDependencies files =
                     }
                 project =
                     Elm.TypeInference.inferProject
+                        currentPackage
                         depEnv
                         files
             in
@@ -139,6 +158,16 @@ inferModules :
     -> Dict ModuleName String
     -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
 inferModules directDependencies allDependencies modules =
+    inferModulesWithPackage Nothing directDependencies allDependencies modules
+
+
+inferModulesWithPackage :
+    Maybe String
+    -> List String
+    -> List Dependency
+    -> Dict ModuleName String
+    -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
+inferModulesWithPackage currentPackage directDependencies allDependencies modules =
     modules
         |> Dict.foldl
             (\moduleName code acc ->
@@ -155,7 +184,7 @@ inferModules directDependencies allDependencies modules =
             (Ok Dict.empty)
         |> Result.andThen
             (\files ->
-                runInference directDependencies allDependencies files
+                runInferenceWithPackage currentPackage directDependencies allDependencies files
                     |> Result.map
                         (\lookupTables ->
                             files
@@ -194,7 +223,19 @@ getDeclTypeWithDirectAndDeps :
     -> String
     -> Result TestError Type
 getDeclTypeWithDirectAndDeps directDependencies dependencies modules moduleName declName =
-    inferModules directDependencies dependencies modules
+    getDeclTypeWithPackage Nothing directDependencies dependencies modules moduleName declName
+
+
+getDeclTypeWithPackage :
+    Maybe String
+    -> List String
+    -> List Dependency
+    -> Dict ModuleName String
+    -> ModuleName
+    -> String
+    -> Result TestError Type
+getDeclTypeWithPackage currentPackage directDependencies dependencies modules moduleName declName =
+    inferModulesWithPackage currentPackage directDependencies dependencies modules
         |> Result.andThen
             (\inferred ->
                 Dict.get moduleName inferred

@@ -62,10 +62,11 @@ import TypeLookupTable.Internal
 {-| Infer every module of a project.
 -}
 inferProject :
-    DependencyEnv
+    Maybe PackageName
+    -> DependencyEnv
     -> Dict ModuleName File
     -> { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
-inferProject depEnv files =
+inferProject currentPackage depEnv files =
     let
         modules : List ProjectModule
         modules =
@@ -139,7 +140,7 @@ inferProject depEnv files =
                     |> List.ExtraExtra.fastConcatMap (List.filterMap (\name -> Dict.get name byName))
         in
         order
-            |> List.foldl (inferOne depEnv)
+            |> List.foldl (inferOne currentPackage depEnv)
                 { tables = Dict.empty
                 , errors = Dict.empty
                 , interfaces = Dict.empty
@@ -311,8 +312,8 @@ type alias ProjectAcc =
     }
 
 
-inferOne : DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
-inferOne depEnv m acc =
+inferOne : Maybe PackageName -> DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
+inferOne currentPackage depEnv m acc =
     let
         imported : Dict FullModuleName ModuleInterface
         imported =
@@ -328,7 +329,7 @@ inferOne depEnv m acc =
                     )
                     Dict.empty
     in
-    case inferModule_ depEnv imported m.file of
+    case inferModule_ currentPackage depEnv imported m.file of
         Ok { table, interface } ->
             { acc
                 | tables = Dict.insert m.key table acc.tables
@@ -364,11 +365,23 @@ type alias ModuleCtx =
       inheritedAliases : Dict GlobalKey TypeAlias
     , depTypeAliases : Dict GlobalKey TypeAlias
     , globalEnv : Dict GlobalKey TypeI.Type
+    , allowKernel : Bool
     }
 
 
-moduleCtx : DependencyEnv -> Dict FullModuleName ModuleInterface -> File -> ModuleCtx
-moduleCtx (DependencyEnv depEnv) importedInterfaces file =
+allowsKernel : Maybe PackageName -> Bool
+allowsKernel currentPackage =
+    case currentPackage of
+        Nothing ->
+            True
+
+        Just name ->
+            String.startsWith "elm/" name
+                || String.startsWith "elm-explorations/" name
+
+
+moduleCtx : Maybe PackageName -> DependencyEnv -> Dict FullModuleName ModuleInterface -> File -> ModuleCtx
+moduleCtx currentPackage (DependencyEnv depEnv) importedInterfaces file =
     let
         thisIndex : ModuleIndex
         thisIndex =
@@ -407,19 +420,21 @@ moduleCtx (DependencyEnv depEnv) importedInterfaces file =
     , inheritedAliases = imported.inheritedAliases
     , depTypeAliases = depEnv.typeAliases
     , globalEnv = imported.globalEnv
+    , allowKernel = allowsKernel currentPackage
     }
 
 
 inferModule_ :
-    DependencyEnv
+    Maybe PackageName
+    -> DependencyEnv
     -> Dict FullModuleName ModuleInterface
     -> File
     -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
-inferModule_ depEnv importedInterfaces file =
+inferModule_ currentPackage depEnv importedInterfaces file =
     let
         ctx : ModuleCtx
         ctx =
-            moduleCtx depEnv importedInterfaces file
+            moduleCtx currentPackage depEnv importedInterfaces file
     in
     (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
     let
@@ -587,6 +602,7 @@ solveModule ctx typeAliases file =
             , thisModule = ctx.thisIndex
             , typeAliases = typeAliases
             , index = ctx.index
+            , allowKernel = ctx.allowKernel
             }
     in
     sccs

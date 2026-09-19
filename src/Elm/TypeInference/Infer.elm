@@ -27,7 +27,7 @@ import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
-import Elm.TypeInference.ModuleIndex exposing (ModuleIndex)
+import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (StateM)
@@ -52,6 +52,7 @@ type alias Ctx =
     , thisModule : ModuleIndex
     , typeAliases : Dict ( PackageName, FullModuleName, VarName ) TypeAlias
     , index : ModuleLookup.Index
+    , allowKernel : Bool
     }
 
 
@@ -137,6 +138,60 @@ lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> StateM MonoType
 lookupVarOrOperator ctx maybeModuleName name =
     State.do (ModuleLookup.findModuleOfVar ctx.index ctx.modules ctx.thisModule maybeModuleName name) <| \( package, moduleName ) ->
     resolveGlobalVar ctx package moduleName name
+
+
+isKernelModule : FullModuleName -> Bool
+isKernelModule full =
+    case FullModuleName.toModuleName full of
+        "Elm" :: "Kernel" :: _ ->
+            True
+
+        _ ->
+            False
+
+
+isKernelQualifier : Ctx -> Maybe FullModuleName -> Bool
+isKernelQualifier ctx maybeQualifier =
+    case maybeQualifier of
+        Nothing ->
+            False
+
+        Just qualifier ->
+            if isKernelModule qualifier then
+                True
+
+            else
+                case qualifier of
+                    ( single, [] ) ->
+                        ModuleIndex.modulesWithAlias ctx.thisModule single
+                            |> List.any isKernelModule
+
+                    _ ->
+                        False
+
+
+isExposedKernelValue : Ctx -> VarName -> Bool
+isExposedKernelValue ctx varName =
+    ctx.thisModule.imports
+        |> List.any
+            (\import_ ->
+                isKernelModule import_.moduleName
+                    && ModuleIndex.importCouldExposeValue import_ varName
+            )
+
+
+isKernelVar : Ctx -> Maybe FullModuleName -> VarName -> Bool
+isKernelVar ctx maybeQualifier varName =
+    if not ctx.allowKernel then
+        False
+
+    else
+        case maybeQualifier of
+            Nothing ->
+                isExposedKernelValue ctx varName
+
+            Just _ ->
+                isKernelQualifier ctx maybeQualifier
 
 
 
@@ -368,8 +423,13 @@ inferExpr ctx exprNode =
                         finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
 
                     Ok Nothing ->
-                        State.do (State.lookupEnv ctx.thisModule.moduleName varName) <| \varType ->
-                        finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
+                        if isKernelVar ctx (FullModuleName.fromModuleName moduleName) varName then
+                            -- Kernel functions are like Debug.todo: "trust me bro"
+                            finish []
+
+                        else
+                            State.do (State.lookupEnv ctx.thisModule.moduleName varName) <| \varType ->
+                            finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
 
                     Err details ->
                         State.error (toError ctx details)
@@ -930,22 +990,53 @@ inferPattern ctx patternNode =
             finish []
 
         NamedPattern customType args ->
-            State.do
-                (ModuleLookup.findModuleOfVar
+            case
+                ModuleLookup.moduleOfVar
                     ctx.index
                     ctx.modules
                     ctx.thisModule
                     (FullModuleName.fromModuleName customType.moduleName)
                     customType.name
-                )
-            <| \( package, fullModuleName ) ->
-            State.do (State.lookupGlobalEnv package fullModuleName customType.name) <| \ctorType ->
-            State.do State.getNextIdAndTick <| \resultId ->
-            State.do (inferMany p args) <| \( argIds, eqs ) ->
-            finish <|
-                ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
-                    :: ( type_, TypeI.id_ resultId, "NamedPattern: result" )
-                    :: eqs
+            of
+                Ok (Just ( package, fullModuleName )) ->
+                    State.do (State.lookupGlobalEnv package fullModuleName customType.name) <| \ctorType ->
+                    State.do State.getNextIdAndTick <| \resultId ->
+                    State.do (inferMany p args) <| \( argIds, eqs ) ->
+                    finish <|
+                        ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
+                            :: ( type_, TypeI.id_ resultId, "NamedPattern: result" )
+                            :: eqs
+
+                Ok Nothing ->
+                    if isKernelVar ctx (FullModuleName.fromModuleName customType.moduleName) customType.name then
+                        State.do State.getNextIdAndTick <| \ctorId ->
+                        State.do State.getNextIdAndTick <| \resultId ->
+                        State.do (inferMany p args) <| \( argIds, eqs ) ->
+                        finish <|
+                            ( TypeI.id_ ctorId, functionType argIds resultId, "NamedPattern: kernel ctor is a fn" )
+                                :: ( type_, TypeI.id_ resultId, "NamedPattern: result" )
+                                :: eqs
+
+                    else
+                        State.do
+                            (ModuleLookup.findModuleOfVar
+                                ctx.index
+                                ctx.modules
+                                ctx.thisModule
+                                (FullModuleName.fromModuleName customType.moduleName)
+                                customType.name
+                            )
+                        <| \( package, fullModuleName ) ->
+                        State.do (State.lookupGlobalEnv package fullModuleName customType.name) <| \ctorType ->
+                        State.do State.getNextIdAndTick <| \resultId ->
+                        State.do (inferMany p args) <| \( argIds, eqs ) ->
+                        finish <|
+                            ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
+                                :: ( type_, TypeI.id_ resultId, "NamedPattern: result" )
+                                :: eqs
+
+                Err details ->
+                    State.error (toError ctx details)
 
         AsPattern p1 varNameNode ->
             State.do (State.addBinding (Node.value varNameNode) (TypeI.mono type_)) <| \() ->
