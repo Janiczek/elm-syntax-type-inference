@@ -12,6 +12,7 @@ module Elm.TypeInference.State exposing
     , existsInEnv
     , fromResult
     , generalize
+    , generalizeBinding
     , getGlobalEnv
     , getNextIdAndTick
     , getNodeIds
@@ -573,3 +574,20 @@ generalize monoType =
                     (\var -> SubstitutionMap.letRankOf var state.subst > state.letRank)
     in
     pure (Forall boundIds substitutedMono)
+
+
+{-| Generalize a lexical binding in place (for `let` destructurings).
+
+Each name gets its own scheme - they are independent.
+
+-}
+generalizeBinding : VarName -> StateM ()
+generalizeBinding var =
+    do get <| \state ->
+    case Dict.get var state.lexicalEnv of
+        Nothing ->
+            pure ()
+
+        Just (Forall _ mono) ->
+            do (generalize mono) <| \scheme ->
+            addBinding var scheme

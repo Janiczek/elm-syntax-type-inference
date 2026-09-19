@@ -820,22 +820,34 @@ solveLetDeclarations ctx declarations =
 
         inferDestructuring : Node LetDeclaration -> Node Pattern -> Node Expression -> StateM ()
         inferDestructuring declNode patternNode exprNode =
-            State.do (State.idForNode declNode) <| \declId ->
-            State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
-            State.do (inferExpr ctx exprNode) <| \( exprId, exprEqs ) ->
             let
-                eqs : List TypeEquation
-                eqs =
-                    ( TypeI.id_ declId, TypeI.id_ patternId, "Let destructuring: alias" )
-                        :: ( TypeI.id_ patternId, TypeI.id_ exprId, "Let destructuring: pattern = expr" )
-                        :: patternEqs
-                        ++ exprEqs
+                boundVars : List VarName
+                boundVars =
+                    Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
 
-                droppedEqs : List ( MonoType, MonoType )
-                droppedEqs =
-                    List.map (\( t1, t2, _ ) -> ( t1, t2 )) eqs
+                inferAndUnify : StateM ()
+                inferAndUnify =
+                    State.do (State.idForNode declNode) <| \declId ->
+                    State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
+                    State.do (inferExpr ctx exprNode) <| \( exprId, exprEqs ) ->
+                    let
+                        eqs : List TypeEquation
+                        eqs =
+                            ( TypeI.id_ declId, TypeI.id_ patternId, "Let destructuring: alias" )
+                                :: ( TypeI.id_ patternId, TypeI.id_ exprId, "Let destructuring: pattern = expr" )
+                                :: patternEqs
+                                ++ exprEqs
+
+                        droppedEqs : List ( MonoType, MonoType )
+                        droppedEqs =
+                            List.map (\( t1, t2, _ ) -> ( t1, t2 )) eqs
+                    in
+                    Unify.unifyMany (unifyConfig ctx) droppedEqs
             in
-            Unify.unifyMany (unifyConfig ctx) droppedEqs
+            State.do (State.withDeeperLetRank inferAndUnify) <| \() ->
+            boundVars
+                |> State.traverse State.generalizeBinding
+                |> State.map (always ())
 
         solveGroup : List Int -> StateM ()
         solveGroup groupIndices =

@@ -2225,6 +2225,52 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
+        , Test.test "let record destructuring generalizes each binding separately (jeongoon/elmnt-scrollpicker regression)" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
+module Main exposing (main)
+
+type alias LengthOrAuto c =
+    { c | value : String, lengthOrAuto : () }
+
+type alias Overflow c =
+    { c | value : String, overflow : () }
+
+mk :
+    Int
+    ->
+        { w : LengthOrAuto c -> String
+        , o : Overflow c -> String
+        }
+mk b =
+    { w = \\_ -> "w"
+    , o = \\_ -> "o"
+    }
+
+main =
+    let
+        { w, o } =
+            mk 1
+    in
+    ( w
+        { value = "x"
+        , lengthOrAuto = ()
+        , extraLength = ()
+        }
+    , o
+        { value = "y"
+        , overflow = ()
+        , extraOverflow = ()
+        }
+    )
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (always ())
+                    |> Expect.equal (Ok ())
         ]
 
 
