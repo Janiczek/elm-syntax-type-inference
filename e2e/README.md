@@ -29,6 +29,12 @@ npm run test:e2e
 
 # machine-readable CSV on stdout (header: test,expected,actual,passed,seconds,error):
 ./e2e/run.mjs --csv
+
+# Speed:
+# Before speedy runs pre-warm with:
+./e2e/run.mjs --warmup-deps    --rebuild
+# Then you can do:
+./e2e/run.mjs --no-warmup-deps --skip-build --jobs=8
 ```
 
 Exit code is 0 if all pased, 1 otherwise.

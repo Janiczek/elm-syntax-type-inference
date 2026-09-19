@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
+// Vibeslopped (sorry!)
+
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import solver from "elm-solve-deps-wasm";
 
 solver.init();
@@ -26,6 +28,19 @@ let writeTypes = false;
 // Machine-readable CSV on stdout instead of human-readable lines.
 let csvMode = false;
 let warmupDeps = true;
+let buildMode = "auto"; // vs "skip" and "rebuild"
+let jobs = 1;
+// When --jobs > 1, skips CSV header and the summary:
+let asShard = false;
+
+function parseJobs(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 1) {
+    console.error(`--jobs needs a positive integer, got: ${value}`);
+    process.exit(1);
+  }
+  return n;
+}
 
 function parseArgs(argv) {
   const filters = [];
@@ -54,6 +69,16 @@ function parseArgs(argv) {
       warmupDeps = true;
     } else if (arg === "--no-warmup-deps") {
       warmupDeps = false;
+    } else if (arg === "--skip-build") {
+      buildMode = "skip";
+    } else if (arg === "--rebuild") {
+      buildMode = "rebuild";
+    } else if (arg === "--jobs") {
+      jobs = parseJobs(argv[++i]);
+    } else if (arg.startsWith("--jobs=")) {
+      jobs = parseJobs(arg.slice("--jobs=".length));
+    } else if (arg === "--as-shard") {
+      asShard = true;
     } else {
       filters.push(arg);
     }
@@ -69,6 +94,27 @@ function readJson(p) {
 function formatError(e) {
   const message = e?.message ?? String(e);
   return `run.mjs error: ${message}`;
+}
+
+// Caches to make batch-testing faster:
+const packageJsonCache = new Map(); // absolute path -> parsed JSON
+const docsJsonCache = new Map(); // "name@version" -> parsed docs.json
+const cachedVersionsCache = new Map(); // package name -> [versions]
+const solutionCache = new Map(); // elm.json text -> { name: version }
+const packageSourcesCache = new Map(); // "name@version" -> { name, sources }
+
+function clearResolverCaches() {
+  cachedVersionsCache.clear();
+  solutionCache.clear();
+}
+
+// memoized readJson, called for files under PACKAGES_DIR
+function readCachedPackageJson(p) {
+  const hit = packageJsonCache.get(p);
+  if (hit !== undefined) return hit;
+  const parsed = readJson(p);
+  packageJsonCache.set(p, parsed);
+  return parsed;
 }
 
 function findElmFiles(dir) {
@@ -139,7 +185,39 @@ function ensureDependenciesCached(projectDir, sourceFiles) {
   }
 }
 
+function versionReadyOnDisk(name, version) {
+  if (!version) return false;
+  const base = path.join(PACKAGES_DIR, name, version);
+  return fs.existsSync(path.join(base, "elm.json")) && fs.existsSync(path.join(base, "src"));
+}
+
+function dependenciesReadyOnDisk(versions) {
+  return Object.entries(versions).every(([name, version]) => versionReadyOnDisk(name, version));
+}
+
+function maybeWarmupDependencies(projectDir, warmupFiles, elmJson) {
+  if (warmupFiles.length === 0) return null;
+  let versions = null;
+  try {
+    versions = versionsFor(elmJson);
+  } catch {
+    versions = null;
+  }
+  if (
+    versions !== null &&
+    dependenciesReadyOnDisk(versions) &&
+    fs.existsSync(path.join(projectDir, "elm-stuff"))
+  ) {
+    return versions;
+  }
+  ensureDependenciesCached(projectDir, warmupFiles);
+  clearResolverCaches();
+  return null;
+}
+
 function cachedVersions(name) {
+  const hit = cachedVersionsCache.get(name);
+  if (hit !== undefined) return hit;
   let entries;
   try {
     entries = fs.readdirSync(path.join(PACKAGES_DIR, name));
@@ -149,15 +227,17 @@ function cachedVersions(name) {
     }
     throw e;
   }
-  return entries
+  const versions = entries
     .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
     .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  cachedVersionsCache.set(name, versions);
+  return versions;
 }
 
 function packageDeps(name, version) {
   if (!version) return [];
   try {
-    return Object.keys(readJson(path.join(PACKAGES_DIR, name, version, "elm.json")).dependencies || {});
+    return Object.keys(readCachedPackageJson(path.join(PACKAGES_DIR, name, version, "elm.json")).dependencies || {});
   } catch (e) {
     if (e?.code === "ENOENT") {
       console.warn(`warning: missing elm.json for ${name}@${version}, assuming no transitive deps`);
@@ -169,9 +249,14 @@ function packageDeps(name, version) {
 
 // docs.json is not always present in ~/.elm, download from package.elm-lang.org
 async function loadDocsJson(name, version) {
+  const key = `${name}@${version}`;
+  const hit = docsJsonCache.get(key);
+  if (hit !== undefined) return hit;
   const docsPath = path.join(PACKAGES_DIR, name, version, "docs.json");
   try {
-    return readJson(docsPath);
+    const docs = readJson(docsPath);
+    docsJsonCache.set(key, docs);
+    return docs;
   } catch (e) {
     if (e?.code !== "ENOENT") throw e;
   }
@@ -185,6 +270,7 @@ async function loadDocsJson(name, version) {
       fs.mkdirSync(path.dirname(docsPath), { recursive: true });
       fs.writeFileSync(docsPath, JSON.stringify(docs));
     } catch {}
+    docsJsonCache.set(key, docs);
     return docs;
   } catch (fetchError) {
     console.warn(
@@ -212,6 +298,9 @@ function directDependencyNames(elmJson) {
 // Resolve the whole graph, not just each package's newest cached version:
 // transitive dependencies can further constrain a direct dependency's range.
 function resolvePackageVersions(elmJson, readPackageJson, listVersions) {
+  const key = JSON.stringify(elmJson);
+  const hit = solutionCache.get(key);
+  if (hit !== undefined) return hit;
   const solution = JSON.parse(
     solver.solve_deps(
       JSON.stringify(elmJson),
@@ -221,46 +310,41 @@ function resolvePackageVersions(elmJson, readPackageJson, listVersions) {
       listVersions
     )
   );
-  return { ...solution.direct, ...solution.indirect };
+  const versions = { ...solution.direct, ...solution.indirect };
+  solutionCache.set(key, versions);
+  return versions;
 }
 
-// Resolves elm.json dependencies to exact (allowed) versions.
-// Loads their docs.json.
-async function resolveDependencies(elmJson) {
-  const versions = {};
-
+function versionsFor(elmJson) {
   switch (elmJson.type) {
     case "application": {
       const { direct, indirect } = elmJson.dependencies;
       const test = elmJson["test-dependencies"] || {};
-      Object.assign(versions, direct, indirect, test.direct, test.indirect);
-      break;
+      return { ...direct, ...indirect, ...test.direct, ...test.indirect };
     }
 
-    case "package": {
-      Object.assign(
-        versions,
-        resolvePackageVersions(
-          elmJson,
-          (name, version) => readJson(path.join(PACKAGES_DIR, name, version, "elm.json")),
-          cachedVersions
-        )
+    case "package":
+      return resolvePackageVersions(
+        elmJson,
+        (name, version) => readCachedPackageJson(path.join(PACKAGES_DIR, name, version, "elm.json")),
+        cachedVersions
       );
-      break;
-    }
 
     default:
       throw new Error(`Unknown elm.json type: ${elmJson.type}`);
   }
+}
 
-  const dependencies = [];
-  for (const [name, version] of Object.entries(versions)) {
-    dependencies.push({
+async function resolveDependencies(elmJson, preResolved = null) {
+  const versions = preResolved ?? versionsFor(elmJson);
+
+  const dependencies = await Promise.all(
+    Object.entries(versions).map(async ([name, version]) => ({
       name,
       dependsOn: packageDeps(name, version),
       docsJson: await loadDocsJson(name, version),
-    });
-  }
+    }))
+  );
   return { dependencies, versions };
 }
 
@@ -270,6 +354,9 @@ function loadPackageSources(name, version) {
     console.warn(`warning: no cached version for ${name}, continuing without its sources`);
     return { name, sources: [] };
   }
+  const key = `${name}@${version}`;
+  const hit = packageSourcesCache.get(key);
+  if (hit !== undefined) return hit;
   let files;
   try {
     files = findElmFiles(path.join(PACKAGES_DIR, name, version, "src"));
@@ -280,13 +367,49 @@ function loadPackageSources(name, version) {
     }
     throw e;
   }
-  return {
+  const result = {
     name,
     sources: files.map((file) => ({ path: file, source: fs.readFileSync(file, "utf8") })),
   };
+  packageSourcesCache.set(key, result);
+  return result;
 }
 
 function buildRunner() {
+  if (buildMode === "skip") {
+    if (!fs.existsSync(ELM_JS)) doBuildRunner();
+    return;
+  }
+  if (buildMode !== "rebuild" && isRunnerFresh()) return;
+  doBuildRunner();
+}
+
+function collectRunnerInputs() {
+  const inputs = [path.join(__dirname, "elm.json")];
+  for (const dir of [path.join(__dirname, "src"), path.join(__dirname, "..", "src")]) {
+    inputs.push(...findElmFiles(dir));
+  }
+  return inputs;
+}
+
+function isRunnerFresh() {
+  let outStat;
+  try {
+    outStat = fs.statSync(ELM_JS);
+  } catch {
+    return false;
+  }
+  try {
+    for (const input of collectRunnerInputs()) {
+      if (fs.statSync(input).mtimeMs >= outStat.mtimeMs) return false;
+    }
+  } catch {
+    return false; // unreadable input: fall back to rebuilding
+  }
+  return true;
+}
+
+function doBuildRunner() {
   try {
     execFileSync(elmCompiler, ["make", "src/Runner.elm", "--optimize", "--output=elm.js"], {
       cwd: __dirname,
@@ -400,11 +523,16 @@ async function runTest(name) {
 
   try {
     const sourceFiles = findSourceFiles(projectDir, elmJson);
+    let preResolved = null;
     if (warmupDeps) {
-      ensureDependenciesCached(projectDir, [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean));
+      preResolved = maybeWarmupDependencies(
+        projectDir,
+        [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean),
+        elmJson
+      );
     }
 
-    const { dependencies, versions } = await resolveDependencies(elmJson);
+    const { dependencies, versions } = await resolveDependencies(elmJson, preResolved);
     const flags = {
       sources: sourceFiles.map((f) => ({
         path: path.relative(projectDir, f),
@@ -492,8 +620,13 @@ async function main() {
     process.exit(1);
   }
 
+  if (!asShard && jobs > 1 && names.length > 1) {
+    await runSharded(names, Math.min(jobs, names.length));
+    return;
+  }
+
   let passedCount = 0;
-  if (csvMode) {
+  if (csvMode && !asShard) {
     console.log("test,expected,actual,passed,seconds,error");
   }
   for (const name of names) {
@@ -516,6 +649,48 @@ async function main() {
   }
 
   const summary = `${passedCount}/${names.length} test${names.length > 1 ? "s" : ""} passed`;
+  if (asShard) {
+    console.error(`${SHARD_DONE_PREFIX}passed=${passedCount} total=${names.length}`);
+  } else if (csvMode) {
+    console.error("");
+    console.error(summary);
+  } else {
+    console.log("");
+    console.log(summary);
+  }
+  process.exit(passedCount === names.length ? 0 : 1);
+}
+
+// --- --jobs sharding -------------------------------------------------------
+
+const SHARD_DONE_PREFIX = "run.mjs shard done: ";
+
+function parentArgsForShard() {
+  const raw = process.argv.slice(2);
+  const out = [];
+  for (let i = 0; i < raw.length; i++) {
+    const a = raw[i];
+    if (a === "--jobs") {
+      i++;
+      continue;
+    }
+    if (a.startsWith("--jobs=") || a === "--as-shard") continue;
+    out.push(a);
+  }
+  return out;
+}
+
+async function runSharded(names, jobCount) {
+  const buckets = Array.from({ length: jobCount }, () => []);
+  names.forEach((n, i) => buckets[i % jobCount].push(n));
+  const chunks = buckets.filter((b) => b.length > 0);
+  if (csvMode) {
+    console.log("test,expected,actual,passed,seconds,error");
+  }
+  let passedCount = 0;
+  await Promise.all(chunks.map((chunk) => runShard(chunk).then((n) => (passedCount += n))));
+
+  const summary = `${passedCount}/${names.length} test${names.length > 1 ? "s" : ""} passed`;
   if (csvMode) {
     console.error("");
     console.error(summary);
@@ -524,6 +699,59 @@ async function main() {
     console.log(summary);
   }
   process.exit(passedCount === names.length ? 0 : 1);
+}
+
+function runShard(chunk) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [process.argv[1], ...parentArgsForShard(), "--as-shard", ...chunk], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let outBuf = "";
+    let errBuf = "";
+    let done = null;
+    const takeDone = (line) => {
+      const m = /^run\.mjs shard done: passed=(\d+) total=(\d+)$/.exec(line);
+      if (m) {
+        done = { passed: Number(m[1]), total: Number(m[2]) };
+        return true;
+      }
+      return false;
+    };
+    child.stdout.on("data", (d) => {
+      // Line-buffered (don't interleave mid-line)
+      outBuf += d;
+      let idx;
+      while ((idx = outBuf.indexOf("\n")) >= 0) {
+        process.stdout.write(outBuf.slice(0, idx + 1));
+        outBuf = outBuf.slice(idx + 1);
+      }
+    });
+    child.stderr.on("data", (d) => {
+      errBuf += d;
+      let idx;
+      while ((idx = errBuf.indexOf("\n")) >= 0) {
+        const line = errBuf.slice(0, idx);
+        errBuf = errBuf.slice(idx + 1);
+        if (!takeDone(line)) process.stderr.write(line + "\n");
+      }
+    });
+    child.on("error", (e) => {
+      process.stderr.write(`run.mjs shard failed to start (${chunk.length} tests): ${e?.message ?? e}\n`);
+      resolve(0);
+    });
+    child.on("close", (code) => {
+      if (outBuf.length > 0) process.stdout.write(outBuf);
+      if (errBuf.length > 0) {
+        if (!takeDone(errBuf)) process.stderr.write(errBuf);
+      }
+      if (done !== null && done.total === chunk.length) {
+        resolve(done.passed);
+      } else {
+        process.stderr.write(`run.mjs shard exited (code=${code}) without reporting (${chunk.length} tests)\n`);
+        resolve(0);
+      }
+    });
+  });
 }
 
 main().catch((e) => {
