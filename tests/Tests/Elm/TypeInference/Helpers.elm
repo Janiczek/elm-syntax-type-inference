@@ -7,8 +7,6 @@ module Tests.Elm.TypeInference.Helpers exposing
     , getExprType
     , getExprTypeWithDeps
     , inferMainModule
-    , inferMainModuleWithPackage
-    , runInferenceWithPackage
     )
 
 import Dict exposing (Dict)
@@ -147,18 +145,6 @@ main =
                                     )
                         )
             )
-
-
-{-| Some tests need to know which deps are direct: user code can't import
-modules from a non-direct dependency.
--}
-inferModules :
-    List String
-    -> List Dependency
-    -> Dict ModuleName String
-    -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
-inferModules directDependencies allDependencies modules =
-    inferModulesWithPackage Nothing directDependencies allDependencies modules
 
 
 inferModulesWithPackage :

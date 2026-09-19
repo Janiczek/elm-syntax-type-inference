@@ -696,9 +696,6 @@ fromTypeAnnotation resolver typeAnnotation =
 
         TypeAnnotation.Typed name annotations ->
             let
-                ( moduleName, typeName ) =
-                    Node.value name
-
                 args : Result FromTypeAnnotationError (List MonoType)
                 args =
                     annotations
@@ -710,6 +707,10 @@ fromTypeAnnotation resolver typeAnnotation =
             args
                 |> Result.andThen
                     (\args_ ->
+                        let
+                            ( moduleName, typeName ) =
+                                Node.value name
+                        in
                         resolver moduleName typeName
                             |> Result.mapError AmbiguousModuleName
                             |> Result.map

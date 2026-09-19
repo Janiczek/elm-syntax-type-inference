@@ -18,7 +18,7 @@ import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
-import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ExposingIndex(..), ImportIndex, ModuleIndex)
+import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal exposing (TypeResolver)
