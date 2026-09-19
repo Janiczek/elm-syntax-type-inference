@@ -43,6 +43,8 @@ type alias ModuleIndex =
     , recordAliases : Set VarName
     , infixes : Dict VarName VarName
     , imports : List ImportIndex
+    , importsByAlias : Dict String (List FullModuleName)
+    , unaliasedImports : Set String
     , effectCommand : Maybe VarName
     , effectSubscription : Maybe VarName
     }
@@ -93,6 +95,10 @@ fromFile file =
 
         ( effectCommand, effectSubscription ) =
             effectTypes file
+
+        imports : List ImportIndex
+        imports =
+            List.map (Node.value >> importIndex) file.imports
     in
     { moduleName = moduleName
     , dottedModuleName = FullModuleName.toString moduleName
@@ -116,7 +122,9 @@ fromFile file =
     , unionConstructors = decls.unionConstructors
     , recordAliases = decls.recordAliases
     , infixes = decls.infixes
-    , imports = List.map (Node.value >> importIndex) file.imports
+    , imports = imports
+    , importsByAlias = importsByAlias imports
+    , unaliasedImports = unaliasedImports imports
     , effectCommand = effectCommand
     , effectSubscription = effectSubscription
     }
@@ -124,7 +132,8 @@ fromFile file =
 
 {-| Magic value names introduced by `effect module` headers.
 
-    effect module Random where { command = MyCmd }
+    effect module Random where { command = MyCmd } exposing (..)
+
     --> `command : MyCmd msg -> Cmd msg` is available unqualified in Random
 
 -}
@@ -140,7 +149,8 @@ effectSubscriptionVar =
 
 {-| The custom type names from an `effect module` header, if any.
 
-    effect module Http where { command = MyCmd, subscription = MySub }
+    effect module Http where { command = MyCmd, subscription = MySub } exposing (..)
+
     --> ( Just "MyCmd", Just "MySub" )
 
 -}
@@ -515,25 +525,52 @@ couldBeConstructorName varName =
             False
 
 
+{-| Alias -> modules imported under it, in import order.
+-}
+importsByAlias : List ImportIndex -> Dict String (List FullModuleName)
+importsByAlias imports =
+    List.foldl
+        (\import_ acc ->
+            case import_.alias_ of
+                Just alias ->
+                    Dict.update alias
+                        (\maybeModules ->
+                            Just (Maybe.withDefault [] maybeModules ++ [ import_.moduleName ])
+                        )
+                        acc
+
+                Nothing ->
+                    acc
+        )
+        Dict.empty
+        imports
+
+
+{-| Dotted names of unaliased imports.
+-}
+unaliasedImports : List ImportIndex -> Set String
+unaliasedImports imports =
+    List.foldl
+        (\import_ acc ->
+            case import_.alias_ of
+                Nothing ->
+                    Set.insert import_.dottedModuleName acc
+
+                Just _ ->
+                    acc
+        )
+        Set.empty
+        imports
+
+
 {-| Every module aliased to the given name, in import order.
 -}
 modulesWithAlias : ModuleIndex -> String -> List FullModuleName
 modulesWithAlias index wantedAlias =
-    index.imports
-        |> List.filterMap
-            (\import_ ->
-                if import_.alias_ == Just wantedAlias then
-                    Just import_.moduleName
-
-                else
-                    Nothing
-            )
+    Dict.get wantedAlias index.importsByAlias
+        |> Maybe.withDefault []
 
 
 isImportedUnaliased : ModuleIndex -> ModuleName -> Bool
 isImportedUnaliased index moduleName =
-    List.any
-        (\import_ ->
-            FullModuleName.toModuleName import_.moduleName == moduleName && import_.alias_ == Nothing
-        )
-        index.imports
+    Set.member (String.join "." moduleName) index.unaliasedImports
