@@ -1,7 +1,4 @@
-module Elm.TypeInference.Error.Internal exposing
-    ( FromTypeAnnotationError(..)
-    , ResolverAmbiguity
-    )
+module Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
 
 {-| Shared error types for type-annotation resolution.
 
@@ -31,4 +28,13 @@ type alias ResolverAmbiguity =
 -}
 type FromTypeAnnotationError
     = ImpossibleAnnotation TypeAnnotation
-    | AmbiguousModuleName ResolverAmbiguity
+    | {- To trigger: have mdgriffith/elm-ui and mdgriffith/style-elements as direct deps (both expose Element.Element).
+         Then this is enough:
+
+             import Element
+
+             thing : Element.Element msg -> Int
+             thing _ = 1
+
+      -}
+      AmbiguousModuleName ResolverAmbiguity
