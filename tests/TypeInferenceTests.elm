@@ -60,6 +60,7 @@ suite =
         , selectiveUnionImportRegression
         , importWithSpecificExposes
         , duplicateImportAliasRegression
+        , duplicateImportAliasValueRegression
         , shadowedListRegression
         , extensibleRecordRegression
         , extensibleAliasOverlapRegression
@@ -3175,6 +3176,74 @@ duplicateImportAliasRegression =
                     getDeclType modules [ "Main" ] "value"
                         |> Result.map Type.toString
                         |> Expect.equal (Ok "B.Bar")
+                ]
+                ()
+
+
+duplicateImportAliasValueRegression : Test
+duplicateImportAliasValueRegression =
+    Test.test "two different modules imported under the same alias resolve a qualified value to whichever one actually exposes it (phollyer/elm-motion regression test)" <| \() ->
+    let
+        modules : Dict ModuleName String
+        modules =
+            Dict.fromList
+                [ ( [ "BuilderTranslate" ]
+                    -- Note this module doesn't expose `default`.
+                  , String.ExtraExtra.multilineInput """
+        module BuilderTranslate exposing (fromTriple)
+
+        default : Float
+        default =
+            0.0
+
+        fromTriple : ( Float, Float, Float ) -> Float
+        fromTriple ( x, _, _ ) =
+            x
+        """
+                          )
+                        , ( [ "PropertyTranslate" ]
+                          , String.ExtraExtra.multilineInput """
+        module PropertyTranslate exposing (Translate, default, toRecord)
+
+        type Translate
+            = Translate { x : Float, y : Float, z : Float }
+
+        default : Translate
+        default =
+            Translate { x = 0, y = 0, z = 0 }
+
+        toRecord : Translate -> { x : Float, y : Float, z : Float }
+        toRecord (Translate coords) =
+            coords
+        """
+                          )
+                        , ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (current)
+
+        import BuilderTranslate as Translate
+        import PropertyTranslate as Translate
+
+        current : Translate.Translate -> { x : Float, y : Float, z : Float }
+        current t =
+            Translate.toRecord t
+
+        fallback : Translate.Translate
+        fallback =
+            Translate.default
+        """
+                          )
+                        ]
+            in
+            Expect.all
+                [ \() ->
+                    getDeclType modules [ "Main" ] "current"
+                        |> Result.map Type.toString
+                        |> Expect.equal (Ok "PropertyTranslate.Translate -> {x : Float, y : Float, z : Float}")
+                , \() ->
+                    getDeclType modules [ "Main" ] "fallback"
+                        |> Result.map Type.toString
+                        |> Expect.equal (Ok "PropertyTranslate.Translate")
                 ]
                 ()
 

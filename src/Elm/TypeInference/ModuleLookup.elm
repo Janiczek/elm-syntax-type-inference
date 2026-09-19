@@ -452,7 +452,7 @@ qualifiedModuleDefines index modules moduleName varName =
     case Dict.get moduleName modules of
         Just moduleIndex ->
             Ok <|
-                if Set.member varName moduleIndex.declaredValues then
+                if Set.member varName moduleIndex.exposedValues then
                     Just ( "", moduleName )
 
                 else
@@ -677,7 +677,7 @@ typeResolverFor ((Index index) as wrappedIndex) modules thisModule qualifier typ
                 Dict.get fullName modules
                     |> Maybe.andThen
                         (\moduleIndex ->
-                            if Set.member typeName moduleIndex.declaredTypes then
+                            if Set.member typeName moduleIndex.exposedTypes then
                                 Just ( "", fullName )
 
                             else
