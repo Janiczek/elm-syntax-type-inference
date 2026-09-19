@@ -12,6 +12,7 @@ module Elm.TypeInference.Type.Internal exposing
     , id_
     , mapVarsMono
     , mono
+    , monoPublicKey
     , monoTypeVars
     , number_
     , toPublicPair
@@ -971,3 +972,167 @@ shaderSlotToPublic f extensionTypevar fields =
             ( Dict.empty
             , Nothing
             )
+
+
+{-| A deduplication key for a normalized monotype inside a single `TypeLookupTable`.
+-}
+monoPublicKey : { alreadyNormalized : Bool } -> MonoType -> String
+monoPublicKey { alreadyNormalized } origMono =
+    let
+        mono_ : MonoType
+        mono_ =
+            if alreadyNormalized then
+                origMono
+
+            else
+                let
+                    (Forall _ normalizedMono) =
+                        normalize (Forall [] origMono)
+                in
+                normalizedMono
+    in
+    monoPublicKeyNormalized mono_
+
+
+monoPublicKeyNormalized : MonoType -> String
+monoPublicKeyNormalized mono_ =
+    case collapseExtensible mono_ of
+        TypeVar typeVar ->
+            "0;" ++ strKey (TypeVar.toString typeVar)
+
+        Function { from, to } ->
+            "1;"
+                ++ strKey (monoPublicKeyNormalized from)
+                ++ strKey (monoPublicKeyNormalized to)
+
+        Int ->
+            "2;"
+
+        Float ->
+            "3;"
+
+        Char ->
+            "4;"
+
+        String ->
+            "5;"
+
+        Bool ->
+            "6;"
+
+        List inner ->
+            "7;" ++ strKey (monoPublicKeyNormalized inner)
+
+        Unit ->
+            "8;"
+
+        Tuple2 t1 t2 ->
+            "9;"
+                ++ strKey (monoPublicKeyNormalized t1)
+                ++ strKey (monoPublicKeyNormalized t2)
+
+        Tuple3 t1 t2 t3 ->
+            "10;"
+                ++ strKey (monoPublicKeyNormalized t1)
+                ++ strKey (monoPublicKeyNormalized t2)
+                ++ strKey (monoPublicKeyNormalized t3)
+
+        Record { fields } ->
+            "11;" ++ strKey (recordKeyOf fields)
+
+        ExtensibleRecord { extensionTypevar, fields } ->
+            "12;"
+                ++ strKey (extNameOf extensionTypevar)
+                ++ strKey (recordKeyOf fields)
+
+        UserDefinedType r ->
+            "13;"
+                ++ strKey r.package
+                ++ strKey (moduleNameKey (FullModuleName.toModuleName r.moduleName))
+                ++ strKey r.name
+                ++ strKey (argsKeyOf r.args)
+
+        WebGLShader r ->
+            "14;"
+                ++ shaderSlotKey r.attributesExtension r.attributes
+                ++ shaderSlotKey r.uniformsExtension r.uniforms
+                ++ shaderSlotKey r.varyingsExtension r.varyings
+
+
+extNameOf : MonoType -> String
+extNameOf extensionTypevar =
+    case extensionTypevar of
+        TypeVar var ->
+            TypeVar.toString var
+
+        _ ->
+            "<elm-syntax-type-inference bug: non-var as extensible record base>"
+
+
+recordKeyOf : Dict VarName MonoType -> String
+recordKeyOf fields =
+    String.fromInt (Dict.size fields)
+        ++ ";"
+        ++ String.concat
+            (List.map
+                (\( k, v ) -> strKey k ++ strKey (monoPublicKeyNormalized v))
+                (Dict.toList fields)
+            )
+
+
+argsKeyOf : List MonoType -> String
+argsKeyOf args =
+    String.fromInt (List.length args)
+        ++ ";"
+        ++ String.concat (List.map (\arg -> strKey (monoPublicKeyNormalized arg)) args)
+
+
+shaderSlotKey : MonoType -> Dict VarName MonoType -> String
+shaderSlotKey extensionTypevar fields =
+    case
+        collapseExtensible
+            (ExtensibleRecord
+                { extensionTypevar = extensionTypevar
+                , fields = fields
+                }
+            )
+    of
+        Record r ->
+            strKey (recordKeyOf r.fields)
+                ++ maybeStrKey Nothing
+
+        TypeVar var ->
+            strKey "0;"
+                ++ maybeStrKey (Just (TypeVar.toString var))
+
+        ExtensibleRecord r ->
+            strKey (recordKeyOf r.fields)
+                ++ maybeStrKey (Just (extNameOf r.extensionTypevar))
+
+        _ ->
+            strKey "0;"
+                ++ maybeStrKey Nothing
+
+
+strKey : String -> String
+strKey s =
+    String.fromInt (String.length s)
+        ++ ":"
+        ++ s
+
+
+moduleNameKey : List String -> String
+moduleNameKey parts =
+    String.fromInt (List.length parts)
+        ++ ";"
+        ++ String.concat (List.map strKey parts)
+
+
+maybeStrKey : Maybe String -> String
+maybeStrKey m =
+    case m of
+        Nothing ->
+            "0;"
+
+        Just s ->
+            "1;" ++ strKey s

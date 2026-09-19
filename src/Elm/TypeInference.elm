@@ -477,13 +477,11 @@ moduleResult ctx outgoingAliases =
                             ( monoType, _, accSubst1 ) =
                                 SubstitutionMap.substituteMono accSubst (TypeI.id_ id)
 
-                            pubType : Type
-                            pubType =
-                                TypeI.toPublicType { alreadyNormalized = False } monoType
-
+                            -- Majority of types will be pooled already,
+                            -- we don't need to convert between types.
                             key : String
                             key =
-                                publicTypeKey pubType
+                                TypeI.monoPublicKey { alreadyNormalized = False } monoType
                         in
                         case Dict.get key accPool of
                             Just canonical ->
@@ -493,6 +491,11 @@ moduleResult ctx outgoingAliases =
                                 )
 
                             Nothing ->
+                                let
+                                    pubType : Type
+                                    pubType =
+                                        TypeI.toPublicType { alreadyNormalized = False } monoType
+                                in
                                 ( Dict.insert rangeLike pubType accDict
                                 , Dict.insert key pubType accPool
                                 , accSubst1
@@ -915,225 +918,3 @@ registerEffectSubscription ctx =
                     State.addGlobalBinding
                         ( "", ctx.thisIndex.moduleName, ModuleIndex.effectSubscriptionVar )
                         (TypeI.closeOver magicType)
-
-
-
--- TYPE INTERNING
-
-
-{-| Lossless string key for a public `Type`, used to deduplicate identical
-types inside one module's `TypeLookupTable` so the table stores one shared
-object per distinct type instead of one copy per range.
-
-`Dict.toList` is already sorted, so equal field sets give equal keys
-regardless of insertion order. Every embedded string is length-prefixed
-(`strKey`) so concatenations stay injective.
-
-Examples:
-
-    publicTypeKey Int
-    --> "2;"
-
-    publicTypeKey (TypeVar "a")
-    --> "0;1:a"
-
-    publicTypeKey (Function { from = Int, to = Bool })
-    --> "1;2:2;2:6;"
-
-    publicTypeKey (List Int)
-    --> "7;2:2;"
-
-    publicTypeKey (Record { fields = Dict.fromList [ ( "x", Int ) ] })
-    --> "11;9:1;1:x2:2;"
-
-    publicTypeKey (ExtensibleRecord { fields = Dict.fromList [ ( "x", Int ) ], extensionTypevar = "r" })
-    --> "12;1:r9:1;1:x2:2;"
-
-    publicTypeKey (Named { package = "elm/core", moduleName = [ "Maybe" ], name = "Maybe", arguments = [ Int ] })
-    --> "13;8:elm/core9:1;5:Maybe5:Maybe6:1;2:2;"
-
-Field order doesn't matter — both give the same key:
-
-    publicTypeKey (Record { fields = Dict.fromList [ ( "a", Bool ), ( "b", Int ) ] })
-        == publicTypeKey (Record { fields = Dict.fromList [ ( "b", Int ), ( "a", Bool ) ] })
-    --> True
-
--}
-publicTypeKey : Type -> String
-publicTypeKey t =
-    case t of
-        Type.TypeVar n ->
-            "0;" ++ strKey n
-
-        Type.Function { from, to } ->
-            "1;" ++ strKey (publicTypeKey from) ++ strKey (publicTypeKey to)
-
-        Type.Int ->
-            "2;"
-
-        Type.Float ->
-            "3;"
-
-        Type.Char ->
-            "4;"
-
-        Type.String ->
-            "5;"
-
-        Type.Bool ->
-            "6;"
-
-        Type.List inner ->
-            "7;" ++ strKey (publicTypeKey inner)
-
-        Type.Unit ->
-            "8;"
-
-        Type.Tuple2 a b ->
-            "9;" ++ strKey (publicTypeKey a) ++ strKey (publicTypeKey b)
-
-        Type.Tuple3 a b c ->
-            "10;" ++ strKey (publicTypeKey a) ++ strKey (publicTypeKey b) ++ strKey (publicTypeKey c)
-
-        Type.Record { fields } ->
-            "11;" ++ strKey (recordFieldsKey fields)
-
-        Type.ExtensibleRecord { fields, extensionTypevar } ->
-            "12;" ++ strKey extensionTypevar ++ strKey (recordFieldsKey fields)
-
-        Type.Named { package, moduleName, name, arguments } ->
-            "13;"
-                ++ strKey package
-                ++ strKey (moduleNameKey moduleName)
-                ++ strKey name
-                ++ strKey (typeArgsKey arguments)
-
-        Type.WebGLShader r ->
-            "14;"
-                ++ strKey (recordFieldsKey r.attributesFields)
-                ++ maybeStrKey r.attributesExtensionTypevar
-                ++ strKey (recordFieldsKey r.uniformsFields)
-                ++ maybeStrKey r.uniformsExtensionTypevar
-                ++ strKey (recordFieldsKey r.varyingsFields)
-                ++ maybeStrKey r.varyingsExtensionTypevar
-
-
-{-| Length-prefix a string so concatenated keys stay injective.
-
-Examples:
-
-    strKey "Int"
-    --> "3:Int"
-
-    strKey ""
-    --> "0:"
-
-The prefix keeps splits unambiguous:
-
-    strKey "ab" ++ strKey "c"
-    --> "2:ab1:c"
-
-    strKey "a" ++ strKey "bc"
-    --> "1:a2:bc"
-
--}
-strKey : String -> String
-strKey s =
-    String.fromInt (String.length s)
-        ++ ":"
-        ++ s
-
-
-{-| Key for a module name: segment count plus length-prefixed segments.
-
-Examples:
-
-    moduleNameKey [ "List" ]
-    --> "1;4:List"
-
-    moduleNameKey []
-    --> "0;"
-
-    moduleNameKey [ "Maybe", "Extra" ]
-    --> "2;5:Maybe5:Extra"
-
--}
-moduleNameKey : ModuleName -> String
-moduleNameKey parts =
-    String.fromInt (List.length parts)
-        ++ ";"
-        ++ String.concat (List.map strKey parts)
-
-
-{-| Key for type arguments: argument count plus length-prefixed `publicTypeKey`s.
-
-Examples:
-
-    typeArgsKey []
-    --> "0;"
-
-    typeArgsKey [ Int ]
-    --> "1;2:2;"
-
-    typeArgsKey [ Int, Bool ]
-    --> "2;2:2;2:6;"
-
--}
-typeArgsKey : List Type -> String
-typeArgsKey args =
-    String.fromInt (List.length args)
-        ++ ";"
-        ++ String.concat (List.map (\a -> strKey (publicTypeKey a)) args)
-
-
-{-| Key for record fields: field count plus sorted length-prefixed pairs.
-
-Examples:
-
-    recordFieldsKey Dict.empty
-    --> "0;"
-
-    recordFieldsKey (Dict.fromList [ ( "x", Type.Int ) ])
-    --> "1;1:x2:2;"
-
-Insertion order doesn't matter:
-
-    recordFieldsKey (Dict.fromList [ ( "a", Type.Bool ), ( "b", Type.Int ) ])
-    --> "2;1:a2:6;1:b2:2;"
-
-    recordFieldsKey (Dict.fromList [ ( "a", Type.Bool ), ( "b", Type.Int ) ])
-        == recordFieldsKey (Dict.fromList [ ( "b", Type.Int ), ( "a", Type.Bool ) ])
-    --> True
-
--}
-recordFieldsKey : Dict String Type -> String
-recordFieldsKey fields =
-    String.fromInt (Dict.size fields)
-        ++ ";"
-        ++ String.concat
-            (List.map
-                (\( k, v ) -> strKey k ++ strKey (publicTypeKey v))
-                (Dict.toList fields)
-            )
-
-
-{-| Key for an optional extension type variable, with a tag so `Nothing`
-can't collide with `Just`.
-
-Examples:
-
-    maybeStrKey Nothing
-    --> "0;"
-
-    maybeStrKey (Just "r")
-    --> "1;1:r"
-
--}
-maybeStrKey : Maybe String -> String
-maybeStrKey m =
-    case m of
-        Nothing ->
-            "0;"
-
-        Just s ->
-            "1;" ++ strKey s
