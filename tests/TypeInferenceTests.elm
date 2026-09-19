@@ -2187,6 +2187,43 @@ main =
                 getDeclType modules [ "Main" ] "main"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "( {a : Char}, Char )")
+        , Test.test "an annotated let function breaks the cycle so a polymorphic helper generalizes (tron-gui changeLabel regression)" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
+module Main exposing (main)
+
+type T
+    = A Int
+    | B String
+
+main =
+    let
+        -- must be unannotated
+        f x =
+            let
+                _ =
+                    g (A 0)
+            in
+            x
+
+        g : T -> T
+        g t =
+            case t of
+                A n ->
+                    A (f n)
+
+                B s ->
+                    B (f s)
+    in
+    g
+"""
+                in
+                getDeclType modules [ "Main" ] "main"
+                    |> Result.map (always ())
+                    |> Expect.equal (Ok ())
         ]
 
 
@@ -3502,11 +3539,11 @@ kernelSuite =
             x : Int
             x = K.equal 1 2
             """)
-            )
-            [ "Main" ]
-            "x"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Int")
+                    )
+                    [ "Main" ]
+                    "x"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Int")
         , Test.test "kernel alias is rejected when not allowed" <| \() ->
         getDeclTypeWithPackage (Just "someone/else")
             []
@@ -3520,10 +3557,10 @@ kernelSuite =
             x : Int
             x = K.equal 1 2
             """)
-            )
-            [ "Main" ]
-            "x"
-            |> Expect.err
+                    )
+                    [ "Main" ]
+                    "x"
+                    |> Expect.err
         , Test.test "non-kernel unknown vars still fail even when kernel is allowed" <| \() ->
         getDeclTypeWithPackage (Just "elm/core")
             []
@@ -3535,10 +3572,10 @@ kernelSuite =
             x : Int
             x = someUnknownFunction 1
             """)
-            )
-            [ "Main" ]
-            "x"
-            |> Expect.err
+                    )
+                    [ "Main" ]
+                    "x"
+                    |> Expect.err
         , Test.test "kernel module still works when imported (liveness)" <| \() ->
         getDeclTypeWithPackage (Just "elm/browser")
             []
@@ -3552,11 +3589,11 @@ kernelSuite =
             x : Int
             x = Elm.Kernel.Browser.call "focus"
             """)
-            )
-            [ "Main" ]
-            "x"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Int")
+                    )
+                    [ "Main" ]
+                    "x"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Int")
         , Test.test "kernel works without its import, matching the compiler (elm/browser's History uses Elm.Kernel.Json with no import)" <| \() ->
         getDeclTypeWithPackage (Just "elm/browser")
             []
@@ -3568,11 +3605,11 @@ kernelSuite =
             x : Int
             x = Elm.Kernel.Browser.call "focus"
             """)
-            )
-            [ "Main" ]
-            "x"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Int")
+                    )
+                    [ "Main" ]
+                    "x"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Int")
         , Test.test "any kernel module is usable once kernel is allowed, regardless of which kernel imports exist" <| \() ->
         getDeclTypeWithPackage (Just "elm/browser")
             []
@@ -3586,9 +3623,9 @@ kernelSuite =
             x : Int
             x = Elm.Kernel.Utils.equal 1 2
             """)
-            )
-            [ "Main" ]
-            "x"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Int")
+                    )
+                    [ "Main" ]
+                    "x"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Int")
         ]

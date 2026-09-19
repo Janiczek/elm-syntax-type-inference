@@ -737,6 +737,9 @@ inferRecordSetters ctx fieldSetters =
 
 {-| Solve decls in `let..in` in dependency order.
 `let` functions and `let` destructurings are available at the same time.
+
+Annotated functions are installed before the non-annotated ones' cycle.
+
 -}
 solveLetDeclarations : Ctx -> List (Node LetDeclaration) -> StateM ()
 solveLetDeclarations ctx declarations =
@@ -768,6 +771,21 @@ solveLetDeclarations ctx declarations =
                     )
                 |> Dict.fromList
 
+        hasLetAnnotation : Node LetDeclaration -> Bool
+        hasLetAnnotation declNode =
+            case Node.value declNode of
+                LetFunction fn ->
+                    fn.signature /= Nothing
+
+                LetDestructuring _ _ ->
+                    False
+
+        isAnnotatedIndex : Int -> Bool
+        isAnnotatedIndex index =
+            Dict.get index byIndex
+                |> Maybe.map hasLetAnnotation
+                |> Maybe.withDefault False
+
         bodyOf : Node LetDeclaration -> Expression
         bodyOf declNode =
             case Node.value declNode of
@@ -793,6 +811,8 @@ solveLetDeclarations ctx declarations =
                                 else
                                     Nothing
                             )
+                        -- Annotated bindings have already been pre-installed.
+                        |> List.filter (\target -> not (isAnnotatedIndex target))
 
         sccs : List (List Int)
         sccs =
@@ -849,7 +869,33 @@ solveLetDeclarations ctx declarations =
                         inferDestructuring declNode patternNode exprNode
                     )
                 |> State.map (always ())
+
+        preinstallAnnotated : StateM ()
+        preinstallAnnotated =
+            declarations
+                |> State.traverse
+                    (\declNode ->
+                        case Node.value declNode of
+                            LetFunction fn ->
+                                case fn.signature of
+                                    Nothing ->
+                                        State.pure ()
+
+                                    Just _ ->
+                                        State.do (annotationType ctx fn.signature) <| \maybeMono ->
+                                        case maybeMono of
+                                            Nothing ->
+                                                State.pure ()
+
+                                            Just mono ->
+                                                State.addBinding (functionName fn) (TypeI.closeOver mono)
+
+                            LetDestructuring _ _ ->
+                                State.pure ()
+                    )
+                |> State.map (always ())
     in
+    State.do preinstallAnnotated <| \() ->
     sccs
         |> State.traverse solveGroup
         |> State.map (always ())
