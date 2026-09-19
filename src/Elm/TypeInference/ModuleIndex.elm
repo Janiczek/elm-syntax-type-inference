@@ -3,6 +3,7 @@ module Elm.TypeInference.ModuleIndex exposing
     , fromFile
     , importCouldExposeValue, importExposesType, importExposesValue
     , modulesWithAlias, isImportedUnaliased
+    , effectCommandVar, effectSubscriptionVar
     )
 
 {-| Precomputed index for name resolution.
@@ -11,6 +12,7 @@ module Elm.TypeInference.ModuleIndex exposing
 @docs fromFile
 @docs importCouldExposeValue, importExposesType, importExposesValue
 @docs modulesWithAlias, isImportedUnaliased
+@docs effectCommandVar, effectSubscriptionVar
 
 -}
 
@@ -41,6 +43,8 @@ type alias ModuleIndex =
     , recordAliases : Set VarName
     , infixes : Dict VarName VarName
     , imports : List ImportIndex
+    , effectCommand : Maybe VarName
+    , effectSubscription : Maybe VarName
     }
 
 
@@ -86,10 +90,26 @@ fromFile file =
                 (Node.value >> addDeclaration)
                 emptyDeclarations
                 file.declarations
+
+        ( effectCommand, effectSubscription ) =
+            effectTypes file
     in
     { moduleName = moduleName
     , dottedModuleName = FullModuleName.toString moduleName
-    , declaredValues = decls.values
+    , declaredValues =
+        decls.values
+            |> (if effectCommand /= Nothing then
+                    Set.insert effectCommandVar
+
+                else
+                    identity
+               )
+            |> (if effectSubscription /= Nothing then
+                    Set.insert effectSubscriptionVar
+
+                else
+                    identity
+               )
     , declaredTypes = decls.types
     , exposedValues = exposedValues exposing_ decls
     , exposedTypes = exposedTypes exposing_ decls
@@ -97,7 +117,43 @@ fromFile file =
     , recordAliases = decls.recordAliases
     , infixes = decls.infixes
     , imports = List.map (Node.value >> importIndex) file.imports
+    , effectCommand = effectCommand
+    , effectSubscription = effectSubscription
     }
+
+
+{-| Magic value names introduced by `effect module` headers.
+
+    effect module Random where { command = MyCmd }
+    --> `command : MyCmd msg -> Cmd msg` is available unqualified in Random
+
+-}
+effectCommandVar : VarName
+effectCommandVar =
+    "command"
+
+
+effectSubscriptionVar : VarName
+effectSubscriptionVar =
+    "subscription"
+
+
+{-| The custom type names from an `effect module` header, if any.
+
+    effect module Http where { command = MyCmd, subscription = MySub }
+    --> ( Just "MyCmd", Just "MySub" )
+
+-}
+effectTypes : File -> ( Maybe VarName, Maybe VarName )
+effectTypes file =
+    case Node.value file.moduleDefinition of
+        Module.EffectModule { command, subscription } ->
+            ( Maybe.map Node.value command
+            , Maybe.map Node.value subscription
+            )
+
+        _ ->
+            ( Nothing, Nothing )
 
 
 

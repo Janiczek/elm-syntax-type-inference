@@ -447,6 +447,7 @@ inferModule_ currentPackage depEnv importedInterfaces file =
             Dict.union outgoingAliases ctx.depTypeAliases
     in
     State.do (registerConstructorsAndPorts ctx file) <| \() ->
+    State.do (registerEffectMagic ctx) <| \() ->
     State.do (solveModule ctx typeAliases file) <| \() ->
     State.do (moduleResult ctx outgoingAliases) <| \result ->
     State.pure result
@@ -809,6 +810,111 @@ registerPort resolver moduleName sig =
                     (TypeI.closeOver t)
             )
         |> Result.Extra.merge
+
+
+{-| Register the magic `command` / `subscription` values for `effect module`s.
+
+The Elm compiler magically provides:
+
+    command : MyCmd msg -> Cmd msg
+
+    subscription : MySub msg -> Sub msg
+
+`MyCmd` / `MySub` are the custom types named in the module header
+
+    effect module Random where { command = MyCmd } exposing (..)
+
+-}
+registerEffectMagic : ModuleCtx -> StateM ()
+registerEffectMagic ctx =
+    if ctx.allowKernel then
+        State.do (registerEffectCommand ctx) <| \() ->
+        registerEffectSubscription ctx
+
+    else
+        State.pure ()
+
+
+registerEffectCommand : ModuleCtx -> StateM ()
+registerEffectCommand ctx =
+    case ctx.thisIndex.effectCommand of
+        Nothing ->
+            State.pure ()
+
+        Just myCmdName ->
+            case ctx.resolver [] "Cmd" of
+                Err _ ->
+                    State.pure ()
+
+                Ok ( cmdPackage, cmdModule ) ->
+                    let
+                        msgVar : MonoType
+                        msgVar =
+                            TypeVar (TypeVar.parse "msg")
+
+                        magicType : MonoType
+                        magicType =
+                            Function
+                                { from =
+                                    UserDefinedType
+                                        { package = ""
+                                        , moduleName = ctx.thisIndex.moduleName
+                                        , name = myCmdName
+                                        , args = [ msgVar ]
+                                        }
+                                , to =
+                                    UserDefinedType
+                                        { package = cmdPackage
+                                        , moduleName = cmdModule
+                                        , name = "Cmd"
+                                        , args = [ msgVar ]
+                                        }
+                                }
+                    in
+                    State.addGlobalBinding
+                        ( "", ctx.thisIndex.moduleName, ModuleIndex.effectCommandVar )
+                        (TypeI.closeOver magicType)
+
+
+registerEffectSubscription : ModuleCtx -> StateM ()
+registerEffectSubscription ctx =
+    case ctx.thisIndex.effectSubscription of
+        Nothing ->
+            State.pure ()
+
+        Just mySubName ->
+            case ctx.resolver [] "Sub" of
+                Err _ ->
+                    State.pure ()
+
+                Ok ( subPackage, subModule ) ->
+                    let
+                        msgVar : MonoType
+                        msgVar =
+                            TypeVar (TypeVar.parse "msg")
+
+                        magicType : MonoType
+                        magicType =
+                            Function
+                                { from =
+                                    UserDefinedType
+                                        { package = ""
+                                        , moduleName = ctx.thisIndex.moduleName
+                                        , name = mySubName
+                                        , args = [ msgVar ]
+                                        }
+                                , to =
+                                    UserDefinedType
+                                        { package = subPackage
+                                        , moduleName = subModule
+                                        , name = "Sub"
+                                        , args = [ msgVar ]
+                                        }
+                                }
+                    in
+                    State.addGlobalBinding
+                        ( "", ctx.thisIndex.moduleName, ModuleIndex.effectSubscriptionVar )
+                        (TypeI.closeOver magicType)
 
 
 

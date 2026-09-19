@@ -70,6 +70,7 @@ suite =
         , publicBoundarySuite
         , publicSurfaceLeakSuite
         , kernelSuite
+        , effectSuite
         ]
 
 
@@ -3743,4 +3744,113 @@ kernelSuite =
                     "x"
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Int")
+        ]
+
+
+effectSuite : Test
+effectSuite =
+    let
+        commandModule : String
+        commandModule =
+            String.ExtraExtra.multilineInput """
+            effect module Main where { command = MyCmd } exposing (x)
+
+            import Platform.Cmd exposing (Cmd)
+
+            type MyCmd msg
+                = Foo msg
+
+            x : MyCmd msg -> Cmd msg
+            x c =
+                command c
+            """
+
+        subscriptionModule : String
+        subscriptionModule =
+            String.ExtraExtra.multilineInput """
+            effect module Main where { subscription = MySub } exposing (x)
+
+            import Platform.Sub exposing (Sub)
+
+            type MySub msg
+                = Bar msg
+
+            x : MySub msg -> Sub msg
+            x s =
+                subscription s
+            """
+
+        bothModule : String
+        bothModule =
+            String.ExtraExtra.multilineInput """
+            effect module Main where { command = MyCmd, subscription = MySub } exposing (x, y)
+
+            import Platform.Cmd exposing (Cmd)
+            import Platform.Sub exposing (Sub)
+
+            type MyCmd msg
+                = Foo msg
+
+            type MySub msg
+                = Bar msg
+
+            x : MyCmd msg -> Cmd msg
+            x c =
+                command c
+
+            y : MySub msg -> Sub msg
+            y s =
+                subscription s
+            """
+
+        inferAs : Maybe String -> String -> String -> Result TestError Type
+        inferAs pkg moduleCode declName =
+            getDeclTypeWithPackage pkg [] [] (Dict.singleton [ "Main" ] moduleCode) [ "Main" ] declName
+    in
+    Test.describe "effect module command/subscription magic"
+        [ Test.test "command works in elm/* packages" <| \() ->
+            inferAs (Just "elm/random") commandModule "x"
+                |> Result.map Type.toString
+                |> Expect.ok
+        , Test.test "command works in elm-explorations/* packages" <| \() ->
+            inferAs (Just "elm-explorations/test") commandModule "x"
+                |> Result.map Type.toString
+                |> Expect.ok
+        , Test.test "command works in author program (Nothing)" <| \() ->
+            inferAs Nothing commandModule "x"
+                |> Result.map Type.toString
+                |> Expect.ok
+        , Test.test "command rejected in other packages" <| \() ->
+            inferAs (Just "someone/else") commandModule "x"
+                |> Expect.err
+        , Test.test "subscription works in elm/* packages" <| \() ->
+            inferAs (Just "elm/time") subscriptionModule "x"
+                |> Result.map Type.toString
+                |> Expect.ok
+        , Test.test "subscription rejected in other packages" <| \() ->
+            inferAs (Just "someone/else") subscriptionModule "x"
+                |> Expect.err
+        , Test.test "command and subscription can coexist (elm/http style)" <| \() ->
+            inferAs (Just "elm/http") bothModule "x"
+                |> Result.map Type.toString
+                |> Expect.ok
+        , Test.test "non-effect module cannot use command even when allowed" <| \() ->
+            inferAs (Just "elm/random")
+                (String.ExtraExtra.multilineInput """
+                module Main exposing (x)
+
+                x : Int
+                x =
+                    command
+                """)
+                "x"
+                |> Expect.err
+        , Test.test "command has the right type (MyCmd msg -> Cmd msg)" <| \() ->
+            inferAs (Just "elm/random") commandModule "x"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "Main.MyCmd a -> Platform.Cmd.Cmd a")
+        , Test.test "subscription has the right type (MySub msg -> Sub msg)" <| \() ->
+            inferAs (Just "elm/time") subscriptionModule "x"
+                |> Result.map Type.toString
+                |> Expect.equal (Ok "Main.MySub a -> Platform.Sub.Sub a")
         ]
