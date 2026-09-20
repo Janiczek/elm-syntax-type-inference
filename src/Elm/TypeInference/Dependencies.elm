@@ -11,6 +11,7 @@ module Elm.TypeInference.Dependencies exposing
 
 import Dict exposing (Dict)
 import Elm.Docs
+import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Type
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
@@ -75,29 +76,51 @@ resolverFor moduleMapping deps selfPackage =
                     )
                     Dict.empty
 
-        moduleIdOf : String -> ModuleId
+        moduleIdOf : String -> Result ErrorDetails ModuleId
         moduleIdOf dotted =
             if String.isEmpty dotted then
-                -1
+                -- Impossible in principle (Elm compiler generates docs.json with fully qualified types).
+                -- Possible in practice (if somebody hand-crafts a docs.json file).
+                Err
+                    (AmbiguousModuleOwner
+                        { moduleName = dotted
+                        , possiblePackages = []
+                        }
+                    )
 
             else
-                ModuleIds.getIdByDotted dotted moduleMapping
-                    |> Maybe.withDefault -1
+                case ModuleIds.getIdByDotted dotted moduleMapping of
+                    Just moduleId ->
+                        Ok moduleId
+
+                    Nothing ->
+                        -- Impossible if we pre-intern docs modules properly.
+                        -- Possible if we have a bug.
+                        Err
+                            (AmbiguousModuleOwner
+                                { moduleName = dotted
+                                , possiblePackages = []
+                                }
+                            )
     in
     \moduleNameStr ->
-        case Dict.get moduleNameStr ownersByModule |> Maybe.withDefault [] of
-            [] ->
-                Ok ( selfPackage, moduleIdOf moduleNameStr )
+        moduleIdOf moduleNameStr
+            |> Result.andThen
+                (\moduleId ->
+                    case Dict.get moduleNameStr ownersByModule |> Maybe.withDefault [] of
+                        [] ->
+                            Ok ( selfPackage, moduleId )
 
-            [ owner ] ->
-                Ok ( owner, moduleIdOf moduleNameStr )
+                        [ owner ] ->
+                            Ok ( owner, moduleId )
 
-            matches ->
-                Err <|
-                    AmbiguousModuleOwner
-                        { moduleName = moduleNameStr
-                        , possiblePackages = matches
-                        }
+                        matches ->
+                            Err <|
+                                AmbiguousModuleOwner
+                                    { moduleName = moduleNameStr
+                                    , possiblePackages = matches
+                                    }
+                )
 
 
 fromDocsType : Resolver -> Elm.Type.Type -> Result ErrorDetails MonoType
@@ -173,12 +196,20 @@ fromDocsFields resolver fields =
         fields
 
 
-register : ModuleIds.Mapping -> Dependencies -> StateM (Dict ( PackageName, ModuleId, VarName ) TypeAlias)
+register : ModuleIds.Mapping -> Dependencies -> StateM ( Dict ( PackageName, ModuleId, VarName ) TypeAlias, ModuleIds.Mapping )
 register moduleMapping deps =
+    let
+        moduleMapping1 : ModuleIds.Mapping
+        moduleMapping1 =
+            deps
+                |> Dict.values
+                |> List.concatMap .modules
+                |> List.foldl (\mod acc -> ModuleIds.intern (FullModuleName.fromDotted mod.name) acc |> Tuple.second) moduleMapping
+    in
     deps
         |> Dict.toList
-        |> State.traverse (\( pkgName, pkg ) -> registerPackage moduleMapping deps pkgName pkg)
-        |> State.map (List.foldl Dict.union Dict.empty)
+        |> State.traverse (\( pkgName, pkg ) -> registerPackage moduleMapping1 deps pkgName pkg)
+        |> State.map (\dicts -> ( List.foldl Dict.union Dict.empty dicts, moduleMapping1 ))
 
 
 registerPackage :
@@ -205,30 +236,40 @@ registerModule :
     -> Elm.Docs.Module
     -> StateM (Dict ( PackageName, ModuleId, VarName ) TypeAlias)
 registerModule moduleMapping pkgName resolver mod =
-    let
-        moduleId : ModuleId
-        moduleId =
-            ModuleIds.getIdByDotted mod.name moduleMapping
-                |> Maybe.withDefault -1
+    case ModuleIds.getIdByDotted mod.name moduleMapping of
+        Nothing ->
+            -- Impossible if we intern modules properly.
+            -- Possible if we have a bug.
+            State.error
+                { moduleName = ModuleNameExtra.fromDotted mod.name
+                , declarationNames = []
+                , details =
+                    AmbiguousModuleOwner
+                        { moduleName = mod.name
+                        , possiblePackages = []
+                        }
+                }
 
-        toError : ErrorDetails -> Error
-        toError details =
-            { moduleName = ModuleNameExtra.fromDotted mod.name
-            , declarationNames = []
-            , details = details
-            }
+        Just moduleId ->
+            let
+                toError : ErrorDetails -> Error
+                toError details =
+                    { moduleName = ModuleNameExtra.fromDotted mod.name
+                    , declarationNames = []
+                    , details = details
+                    }
 
-        addBinding : VarName -> Elm.Type.Type -> StateM ()
-        addBinding name tipe =
-            State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <| \monoType ->
-            State.addGlobalBinding ( pkgName, moduleId, name ) (TypeI.closeOver monoType)
-    in
-    State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
-    State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
-    State.do (State.traverse (registerUnion pkgName moduleId mod.name resolver) mod.unions) <| \_ ->
-    mod.aliases
-        |> State.traverse (registerAlias pkgName moduleId mod.name resolver)
-        |> State.map (List.filterMap identity >> Dict.fromList)
+                addBinding : VarName -> Elm.Type.Type -> StateM ()
+                addBinding name tipe =
+                    State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <| \monoType ->
+                    State.addGlobalBinding ( pkgName, moduleId, name ) (TypeI.closeOver monoType)
+            in
+            State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
+            State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
+            State.do (State.traverse (registerUnion pkgName moduleId mod.name resolver) mod.unions) <| \_ ->
+            mod.aliases
+                |> State.traverse (registerAlias pkgName moduleId mod.name resolver)
+                |> State.map (List.filterMap identity >> Dict.fromList)
 
 
 registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> StateM ()

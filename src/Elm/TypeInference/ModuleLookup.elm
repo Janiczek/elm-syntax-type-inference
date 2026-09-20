@@ -46,44 +46,31 @@ type alias NameIndex =
 
 buildIndex : ModuleIds.Mapping -> Dependencies -> ( Index, ModuleIds.Mapping )
 buildIndex moduleMapping deps =
-    let
-        allNames : List FullModuleName
-        allNames =
-            deps
-                |> Dict.values
-                |> List.ExtraExtra.fastConcatMap (\pkg -> List.map (\m -> FullModuleName.fromDotted m.name) pkg.modules)
-
-        moduleMapping1 : ModuleIds.Mapping
-        moduleMapping1 =
+    Dict.foldl
+        (\packageName pkg outerAcc ->
             List.foldl
-                (\name acc -> ModuleIds.intern name acc |> Tuple.second)
-                moduleMapping
-                allNames
-    in
-    ( Dict.foldl
-        (\packageName pkg acc ->
-            List.foldl (addModule moduleMapping1 packageName) acc pkg.modules
+                (\mod innerAcc -> addModule packageName mod innerAcc)
+                outerAcc
+                pkg.modules
         )
-        emptyIndex
+        ( emptyIndex, moduleMapping )
         deps
-    , moduleMapping1
-    )
 
 
-addModule : ModuleIds.Mapping -> PackageName -> Elm.Docs.Module -> Index -> Index
-addModule moduleMapping packageName mod (Index idx) =
+addModule : PackageName -> Elm.Docs.Module -> ( Index, ModuleIds.Mapping ) -> ( Index, ModuleIds.Mapping )
+addModule packageName mod ( Index idx, moduleMapping ) =
     let
-        moduleId : ModuleId
-        moduleId =
-            ModuleIds.getIdByDotted mod.name moduleMapping
-                |> Maybe.withDefault -1
+        ( moduleId, moduleMapping1 ) =
+            ModuleIds.intern (FullModuleName.fromDotted mod.name) moduleMapping
     in
-    Index
+    ( Index
         { values = List.foldl (addName moduleId packageName) idx.values (valueNamesOf mod)
         , types = List.foldl (addName moduleId packageName) idx.types (typeNamesOf mod)
         , ctorParents = addCtorParents moduleId mod idx.ctorParents
         , recordAliases = addRecordAliases moduleId mod idx.recordAliases
         }
+    , moduleMapping1
+    )
 
 
 valueNamesOf : Elm.Docs.Module -> List VarName
@@ -763,18 +750,27 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                             , possiblePackages = matchingPackages
                             }
 
-        defaultId : ModuleId
+        defaultId : Result ResolverAmbiguity ModuleId
         defaultId =
-            candidates
-                |> List.head
-                |> Maybe.withDefault
-                    (if List.isEmpty qualifier then
-                        thisModule.moduleId
+            case candidates |> List.head of
+                Just head ->
+                    Ok head
 
-                     else
-                        ModuleIds.getId (FullModuleName.fromModuleName_ qualifier) moduleMapping
-                            |> Maybe.withDefault -1
-                    )
+                Nothing ->
+                    if List.isEmpty qualifier then
+                        Ok thisModule.moduleId
+
+                    else
+                        case ModuleIds.getId (FullModuleName.fromModuleName_ qualifier) moduleMapping of
+                            Just lid ->
+                                Ok lid
+
+                            Nothing ->
+                                -- Unknown qualifier (not imported/implicit/interned).
+                                Err
+                                    { moduleName = String.join "." qualifier
+                                    , possiblePackages = []
+                                    }
     in
     candidates
         |> List.ExtraExtra.fastConcatMap
@@ -793,7 +789,12 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                     Nothing ->
                         implicitTypeModule qualifier typeName
             )
-        |> Result.map
-            (Maybe.withDefault
-                ( "", defaultId )
+        |> Result.andThen
+            (\maybeFound ->
+                case maybeFound of
+                    Just found ->
+                        Ok found
+
+                    Nothing ->
+                        Result.map (\id -> ( "", id )) defaultId
             )

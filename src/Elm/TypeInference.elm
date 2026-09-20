@@ -236,14 +236,14 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
 
         baseEnv : Result Error DependencyEnv
         baseEnv =
-            (State.do (Dependencies.register moduleMapping1 deps) <| \depAliases ->
+            (State.do (Dependencies.register moduleMapping1 deps) <| \( depAliases, moduleMapping2 ) ->
             State.do State.getGlobalEnv <| \globalEnv ->
             State.pure <|
                 DependencyEnv
                     { globalEnv = globalEnv
                     , typeAliases = depAliases
                     , index = depIndex
-                    , moduleMapping = moduleMapping1
+                    , moduleMapping = moduleMapping2
                     }
             )
                 |> State.run State.empty
