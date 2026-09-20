@@ -35,10 +35,10 @@ import Elm.TypeInference.TypeVar as TypeVar
         )
 import Elm.TypeInference.VarSet as VarSet
     exposing
-        ( VarKey
+        ( GenKey
+        , NamedKey
         , VarSet
         , superTypeTag
-        , varKey
         )
 import Result.Extra
 import Set exposing (Set)
@@ -583,22 +583,42 @@ normalize ((Forall boundVars monoType) as type_) =
                     ( Dict.empty, [] )
                 |> (\( _, vars ) -> List.reverse vars)
 
-        subst : Dict VarKey TypeVar
-        subst =
-            List.map2 (\var newVar -> ( varKey var, newVar ))
-                allVars
-                newVars
-                |> Dict.fromList
+        ( substGen, substNamed ) =
+            List.map2 Tuple.pair allVars newVars
+                |> List.foldl
+                    (\( ( style, super ), newVar ) ( genAcc, namedAcc ) ->
+                        case style of
+                            Generated theId ->
+                                ( Dict.insert (VarSet.genKeyFrom theId super) newVar genAcc
+                                , namedAcc
+                                )
+
+                            Named name ->
+                                ( genAcc
+                                , Dict.insert (VarSet.namedKeyFrom name super) newVar namedAcc
+                                )
+                    )
+                    ( Dict.empty, Dict.empty )
     in
     type_
         |> mapVars
-            (\var ->
-                case Dict.get (varKey var) subst of
-                    Nothing ->
-                        var
+            (\(( style, super ) as var) ->
+                case style of
+                    Generated theId ->
+                        case Dict.get (VarSet.genKeyFrom theId super) substGen of
+                            Nothing ->
+                                var
 
-                    Just newVar ->
-                        newVar
+                            Just newVar ->
+                                newVar
+
+                    Named name ->
+                        case Dict.get (VarSet.namedKeyFrom name super) substNamed of
+                            Nothing ->
+                                var
+
+                            Just newVar ->
+                                newVar
             )
 
 

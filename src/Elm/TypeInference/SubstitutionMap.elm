@@ -30,17 +30,19 @@ import Elm.TypeInference.Type.Internal as TypeI
         , MonoType(..)
         , Type(..)
         )
-import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
-import Elm.TypeInference.VarSet as VarSet exposing (VarKey)
+import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar, TypeVarStyle(..))
+import Elm.TypeInference.VarSet as VarSet exposing (GenKey, NamedKey)
 
 
 type alias SubstitutionMap =
-    { -- Each var's data
-      slots : Dict VarKey Slot
+    { -- Each var's data. PERF: split by key kind so generated vars (the hot path) use Int comparisons
+      slotsGen : Dict GenKey Slot
+    , slotsNamed : Dict NamedKey Slot
     , -- Union-find rank per root (missing = 0): approximate tree height,
       -- bumped on equal-union-find-rank merge to keep `find` chains short.
       -- Performance heuristic.
-      unionFindRanks : Dict VarKey Int
+      unionFindRanksGen : Dict GenKey Int
+    , unionFindRanksNamed : Dict NamedKey Int
     , -- Let-rank of each generated id at the moment it was created.
       -- Lowered to min(side1,side2) on unify.
       -- Important for "business logic": `State.generalize` quantifies vars above current let-rank.
@@ -50,10 +52,74 @@ type alias SubstitutionMap =
 
 empty : SubstitutionMap
 empty =
-    { slots = Dict.empty
-    , unionFindRanks = Dict.empty
+    { slotsGen = Dict.empty
+    , slotsNamed = Dict.empty
+    , unionFindRanksGen = Dict.empty
+    , unionFindRanksNamed = Dict.empty
     , letRanks = Dict.empty
     }
+
+
+getSlot : TypeVar -> SubstitutionMap -> Maybe Slot
+getSlot ( style, super ) store =
+    case style of
+        Generated theId ->
+            Dict.get (VarSet.genKeyFrom theId super) store.slotsGen
+
+        Named name ->
+            Dict.get (VarSet.namedKeyFrom name super) store.slotsNamed
+
+
+insertSlot : TypeVar -> Slot -> SubstitutionMap -> SubstitutionMap
+insertSlot ( style, super ) slot store =
+    case style of
+        Generated theId ->
+            { store | slotsGen = Dict.insert (VarSet.genKeyFrom theId super) slot store.slotsGen }
+
+        Named name ->
+            { store | slotsNamed = Dict.insert (VarSet.namedKeyFrom name super) slot store.slotsNamed }
+
+
+removeSlot : TypeVar -> SubstitutionMap -> SubstitutionMap
+removeSlot ( style, super ) store =
+    case style of
+        Generated theId ->
+            { store | slotsGen = Dict.remove (VarSet.genKeyFrom theId super) store.slotsGen }
+
+        Named name ->
+            { store | slotsNamed = Dict.remove (VarSet.namedKeyFrom name super) store.slotsNamed }
+
+
+memberSlot : TypeVar -> SubstitutionMap -> Bool
+memberSlot ( style, super ) store =
+    case style of
+        Generated theId ->
+            Dict.member (VarSet.genKeyFrom theId super) store.slotsGen
+
+        Named name ->
+            Dict.member (VarSet.namedKeyFrom name super) store.slotsNamed
+
+
+getRank : TypeVar -> SubstitutionMap -> Int
+getRank ( style, super ) store =
+    case style of
+        Generated theId ->
+            Dict.get (VarSet.genKeyFrom theId super) store.unionFindRanksGen
+                |> Maybe.withDefault 0
+
+        Named name ->
+            Dict.get (VarSet.namedKeyFrom name super) store.unionFindRanksNamed
+                |> Maybe.withDefault 0
+
+
+insertRank : TypeVar -> Int -> SubstitutionMap -> SubstitutionMap
+insertRank ( style, super ) rank store =
+    case style of
+        Generated theId ->
+            { store | unionFindRanksGen = Dict.insert (VarSet.genKeyFrom theId super) rank store.unionFindRanksGen }
+
+        Named name ->
+            { store | unionFindRanksNamed = Dict.insert (VarSet.namedKeyFrom name super) rank store.unionFindRanksNamed }
 
 
 {-| How deeply nested inside `let`/binding groups a type variable was created.
@@ -144,7 +210,7 @@ findRoot store var =
     let
         go : List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
         go path current =
-            case Dict.get (VarSet.varKey current) store.slots of
+            case getSlot current store of
                 Just (Link next) ->
                     go (current :: path) next
 
@@ -155,14 +221,10 @@ findRoot store var =
 
                     else
                         ( current
-                        , { slots =
-                                List.foldl
-                                    (\pathVar acc -> Dict.insert (VarSet.varKey pathVar) (Link current) acc)
-                                    store.slots
-                                    path
-                          , unionFindRanks = store.unionFindRanks
-                          , letRanks = store.letRanks
-                          }
+                        , List.foldl
+                            (\pathVar acc -> insertSlot pathVar (Link current) acc)
+                            store
+                            path
                         )
     in
     go [] var
@@ -175,10 +237,7 @@ The caller must have run the occurs check first (`Unify.bind` does).
 -}
 bindRoot : TypeVar -> MonoType -> SubstitutionMap -> SubstitutionMap
 bindRoot var type_ store =
-    { slots = Dict.insert (VarSet.varKey var) (Bound type_) store.slots
-    , unionFindRanks = store.unionFindRanks
-    , letRanks = store.letRanks
-    }
+    insertSlot var (Bound type_) store
         |> lowerLetRanksTo (letRankOf var store) type_
 
 
@@ -190,10 +249,7 @@ and the more constrained one has to win.
 -}
 linkTo : { child : TypeVar, parent : TypeVar } -> SubstitutionMap -> SubstitutionMap
 linkTo { child, parent } store =
-    { slots = Dict.insert (VarSet.varKey child) (Link parent) store.slots
-    , unionFindRanks = store.unionFindRanks
-    , letRanks = store.letRanks
-    }
+    insertSlot child (Link parent) store
         |> setVarLetRank parent (min (letRankOf child store) (letRankOf parent store))
 
 
@@ -202,64 +258,44 @@ linkTo { child, parent } store =
 union : TypeVar -> TypeVar -> SubstitutionMap -> SubstitutionMap
 union a b store =
     let
-        keyA : VarKey
-        keyA =
-            VarSet.varKey a
-
-        keyB : VarKey
-        keyB =
-            VarSet.varKey b
-
         unionFindRankA : Int
         unionFindRankA =
-            unionFindRankOf store keyA
+            unionFindRankOf store a
 
         unionFindRankB : Int
         unionFindRankB =
-            unionFindRankOf store keyB
+            unionFindRankOf store b
 
         mergedLetRank : LetRank
         mergedLetRank =
             min (letRankOf a store) (letRankOf b store)
     in
     if unionFindRankA < unionFindRankB then
-        { slots = Dict.insert keyA (Link b) store.slots
-        , unionFindRanks = store.unionFindRanks
-        , letRanks = store.letRanks
-        }
+        insertSlot a (Link b) store
             |> setVarLetRank b mergedLetRank
 
     else if unionFindRankB < unionFindRankA then
-        { slots = Dict.insert keyB (Link a) store.slots
-        , unionFindRanks = store.unionFindRanks
-        , letRanks = store.letRanks
-        }
+        insertSlot b (Link a) store
             |> setVarLetRank a mergedLetRank
 
     else
-        { slots = Dict.insert keyB (Link a) store.slots
-        , unionFindRanks = Dict.insert keyA (unionFindRankA + 1) store.unionFindRanks
-        , letRanks = store.letRanks
-        }
+        insertSlot b (Link a) store
+            |> insertRank a (unionFindRankA + 1)
             |> setVarLetRank a mergedLetRank
 
 
 {-| Union-find rank of a root (missing = 0). Tree-height heuristic only.
 -}
-unionFindRankOf : SubstitutionMap -> VarKey -> Int
-unionFindRankOf store k =
-    Dict.get k store.unionFindRanks
-        |> Maybe.withDefault 0
+unionFindRankOf : SubstitutionMap -> TypeVar -> Int
+unionFindRankOf store var =
+    getRank var store
 
 
 {-| Record the let-rank of a freshly allocated generated id.
 -}
 stampIdAtLetRank : Id -> LetRank -> SubstitutionMap -> SubstitutionMap
 stampIdAtLetRank id letRank store =
-    { slots = store.slots
-    , unionFindRanks = store.unionFindRanks
-    , letRanks = Dict.insert id letRank store.letRanks
-    }
+    { store | letRanks = Dict.insert id letRank store.letRanks }
 
 
 {-| Overwrite an id's let-rank. Used when a binding-group placeholder was
@@ -285,10 +321,7 @@ setVarLetRank : TypeVar -> LetRank -> SubstitutionMap -> SubstitutionMap
 setVarLetRank var letRank store =
     case Tuple.first var of
         TypeVar.Generated id ->
-            { slots = store.slots
-            , unionFindRanks = store.unionFindRanks
-            , letRanks = Dict.insert id letRank store.letRanks
-            }
+            { store | letRanks = Dict.insert id letRank store.letRanks }
 
         TypeVar.Named _ ->
             store
@@ -392,12 +425,9 @@ substitute store (Forall boundVars monoType) =
                 ( didIntersect, restricted ) =
                     List.foldl
                         (\var ( found, acc ) ->
-                            if Dict.member (VarSet.varKey var) acc.slots then
+                            if memberSlot var acc then
                                 ( True
-                                , { slots = Dict.remove (VarSet.varKey var) acc.slots
-                                  , unionFindRanks = acc.unionFindRanks
-                                  , letRanks = acc.letRanks
-                                  }
+                                , removeSlot var acc
                                 )
 
                             else
@@ -430,12 +460,7 @@ substituteMono store monoType =
     case monoType of
         -- The main interesting part
         TypeVar var ->
-            let
-                k : VarKey
-                k =
-                    VarSet.varKey var
-            in
-            case Dict.get k store.slots of
+            case getSlot var store of
                 Nothing ->
                     -- Unbound root.
                     ( monoType
@@ -450,24 +475,21 @@ substituteMono store monoType =
                     )
 
                 Just (Bound bound) ->
-                    resolveBound store k bound
+                    resolveBound store var bound
 
                 Just (Link _) ->
                     let
                         ( root, store1 ) =
                             findRoot store var
                     in
-                    case Dict.get (VarSet.varKey root) store1.slots of
+                    case getSlot root store1 of
                         Just (Bound bound) ->
-                            resolveBound store1 k bound
+                            resolveBound store1 var bound
 
                         Just (Ground groundType) ->
                             ( groundType
                             , groundAndChanged
-                            , { slots = Dict.insert k (Ground groundType) store1.slots
-                              , unionFindRanks = store1.unionFindRanks
-                              , letRanks = store1.letRanks
-                              }
+                            , insertSlot var (Ground groundType) store1
                             )
 
                         _ ->
@@ -688,8 +710,8 @@ substituteMono store monoType =
 If we manage to get to a Ground type, cache the answer.
 If not, at least compress the path you walked (it will still have to be walked again later).
 -}
-resolveBound : SubstitutionMap -> VarKey -> MonoType -> ( MonoType, Flags, SubstitutionMap )
-resolveBound store k bound =
+resolveBound : SubstitutionMap -> TypeVar -> MonoType -> ( MonoType, Flags, SubstitutionMap )
+resolveBound store var bound =
     let
         ( resolved, flags, store1 ) =
             substituteMono store bound
@@ -706,10 +728,7 @@ resolveBound store k bound =
         in
         ( resolved
         , Bitwise.or flags changedFlag
-        , { slots = Dict.insert k slot store1.slots
-          , unionFindRanks = store1.unionFindRanks
-          , letRanks = store1.letRanks
-          }
+        , insertSlot var slot store1
         )
 
     else
@@ -776,14 +795,10 @@ Leaves both union-find ranks and let-ranks empty (all zero).
 -}
 test_fromList : List ( TypeVar, MonoType ) -> SubstitutionMap
 test_fromList list =
-    { slots =
-        List.foldl
-            (\( var, type_ ) acc -> Dict.insert (VarSet.varKey var) (test_slotFor type_) acc)
-            Dict.empty
-            list
-    , unionFindRanks = Dict.empty
-    , letRanks = Dict.empty
-    }
+    List.foldl
+        (\( var, type_ ) acc -> insertSlot var (test_slotFor type_) acc)
+        empty
+        list
 
 
 test_slotFor : MonoType -> Slot

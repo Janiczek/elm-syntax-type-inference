@@ -14,7 +14,6 @@ import Elm.TypeInference.Type as Type exposing (PackageName, Type(..))
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType)
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
-import Elm.TypeInference.VarSet as VarSet
 import Expect
 import String.ExtraExtra
 import Test exposing (Test)
@@ -2574,7 +2573,7 @@ linkToRankSuite =
 
         unionFindRankOfVar : SubstitutionMap.SubstitutionMap -> TypeVar -> Int
         unionFindRankOfVar subst var =
-            SubstitutionMap.unionFindRankOf subst (VarSet.varKey var)
+            SubstitutionMap.unionFindRankOf subst var
     in
     Test.describe "SubstitutionMap: linkTo rank handling"
         [ Test.test "linkTo resolves child to parent" <| \() ->

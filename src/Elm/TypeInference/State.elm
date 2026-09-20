@@ -46,7 +46,7 @@ import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, SubstitutionMap)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType, Type(..))
-import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
+import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar, TypeVarStyle(..))
 import Elm.TypeInference.VarSet as VarSet
 import RangeLike exposing (RangeLike)
 
@@ -550,24 +550,38 @@ instantiate (Forall boundVars monoType) =
         _ ->
             do (traverse (always getNextIdAndTick) boundVars) <| \varIds ->
             let
-                renaming : Dict VarSet.VarKey TypeVar
-                renaming =
-                    List.map2
-                        (\(( _, super ) as var) freshId ->
-                            ( VarSet.varKey var
-                            , -- keep the constraint (eg. `number`)
-                              ( TypeVar.Generated freshId, super )
+                ( renamingGen, renamingNamed ) =
+                    List.map2 Tuple.pair boundVars varIds
+                        |> List.foldl
+                            (\( ( style, super ), freshId ) ( genAcc, namedAcc ) ->
+                                case style of
+                                    Generated theId ->
+                                        ( Dict.insert (VarSet.genKeyFrom theId super)
+                                            ( TypeVar.Generated freshId, super )
+                                            genAcc
+                                        , namedAcc
+                                        )
+
+                                    Named name ->
+                                        ( genAcc
+                                        , Dict.insert (VarSet.namedKeyFrom name super)
+                                            ( TypeVar.Generated freshId, super )
+                                            namedAcc
+                                        )
                             )
-                        )
-                        boundVars
-                        varIds
-                        |> Dict.fromList
+                            ( Dict.empty, Dict.empty )
             in
             monoType
                 |> TypeI.mapVarsMono
-                    (\var ->
-                        Dict.get (VarSet.varKey var) renaming
-                            |> Maybe.withDefault var
+                    (\( ( style, super ) as var) ->
+                        case style of
+                            Generated theId ->
+                                Dict.get (VarSet.genKeyFrom theId super) renamingGen
+                                    |> Maybe.withDefault var
+
+                            Named name ->
+                                Dict.get (VarSet.namedKeyFrom name super) renamingNamed
+                                    |> Maybe.withDefault var
                     )
                 |> pure
 

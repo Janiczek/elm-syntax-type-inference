@@ -1,14 +1,16 @@
 module Elm.TypeInference.VarSet exposing
-    ( VarKey
+    ( GenKey
+    , NamedKey
     , VarSet
     , diff
     , empty
     , fromList
+    , genKeyFrom
     , insert
+    , namedKeyFrom
     , superTypeTag
     , toList
     , union
-    , varKey
     )
 
 {-| An ordered set of `TypeVar`s, and the `TypeVar` identity it's keyed on.
@@ -23,29 +25,36 @@ import Elm.TypeInference.TypeVar
 import Set exposing (Set)
 
 
-{-| `comparable` encoding of `TypeVar` to be able to use Dict: (id, superTypeTag, name)
+{-| `comparable` encoding of a generated `TypeVar`: `id * 5 + superTypeTag`.
 -}
-type alias VarKey =
-    ( Int, Int, String )
+type alias GenKey =
+    Int
+
+
+{-| `comparable` encoding of a named `TypeVar`: `(superTypeTag, name)`.
+-}
+type alias NamedKey =
+    ( Int, String )
 
 
 {-|
 
-    varKey (Generated 5, Number)
-    --> (5, 1 {- Number -}, "")
-
-    varKey (Named "hello", Comparable)
-    --> (-1, 2 {- Comparable -}, "hello")
+    genKeyFrom 5 Number --> 5 * 5 + 1 == 26
 
 -}
-varKey : TypeVar -> VarKey
-varKey ( style, superType ) =
-    case style of
-        Generated theId ->
-            ( theId, superTypeTag superType, "" )
+genKeyFrom : Int -> SuperType -> GenKey
+genKeyFrom theId superType =
+    theId * 5 + superTypeTag superType
 
-        Named name ->
-            ( -1, superTypeTag superType, name )
+
+{-|
+
+    namedKeyFrom "hello" Comparable --> (2, "hello")
+
+-}
+namedKeyFrom : String -> SuperType -> NamedKey
+namedKeyFrom name superType =
+    ( superTypeTag superType, name )
 
 
 superTypeTag : SuperType -> Int
@@ -71,62 +80,116 @@ superTypeTag superType =
 -}
 type alias VarSet =
     { order : List TypeVar
-    , members : Set VarKey
+    , membersGen : Set GenKey
+    , membersNamed : Set NamedKey
     }
 
 
 empty : VarSet
 empty =
-    { order = [], members = Set.empty }
+    { order = []
+    , membersGen = Set.empty
+    , membersNamed = Set.empty
+    }
 
 
 insert : TypeVar -> VarSet -> VarSet
-insert var s =
-    { order = var :: s.order
-    , members = Set.insert (varKey var) s.members
-    }
+insert (( style, super ) as var) s =
+    case style of
+        Generated theId ->
+            { order = var :: s.order
+            , membersGen = Set.insert (genKeyFrom theId super) s.membersGen
+            , membersNamed = s.membersNamed
+            }
+
+        Named name ->
+            { order = var :: s.order
+            , membersGen = s.membersGen
+            , membersNamed = Set.insert (namedKeyFrom name super) s.membersNamed
+            }
 
 
 toList : VarSet -> List TypeVar
 toList s =
     let
-        go : Set VarKey -> List TypeVar -> List TypeVar -> List TypeVar
-        go seen remaining acc =
+        go : Set GenKey -> Set NamedKey -> List TypeVar -> List TypeVar -> List TypeVar
+        go seenGen seenNamed remaining acc =
             case remaining of
                 [] ->
                     List.reverse acc
 
-                var :: rest ->
-                    let
-                        k : VarKey
-                        k =
-                            varKey var
-                    in
-                    if Set.member k seen then
-                        go seen rest acc
+                (( style, super ) as var) :: rest ->
+                    case style of
+                        Generated theId ->
+                            let
+                                k : GenKey
+                                k =
+                                    genKeyFrom theId super
+                            in
+                            if Set.member k seenGen then
+                                go seenGen seenNamed rest acc
 
-                    else
-                        go (Set.insert k seen) rest (var :: acc)
+                            else
+                                go (Set.insert k seenGen) seenNamed rest (var :: acc)
+
+                        Named name ->
+                            let
+                                k : NamedKey
+                                k =
+                                    namedKeyFrom name super
+                            in
+                            if Set.member k seenNamed then
+                                go seenGen seenNamed rest acc
+
+                            else
+                                go seenGen (Set.insert k seenNamed) rest (var :: acc)
     in
-    go Set.empty s.order []
+    go Set.empty Set.empty s.order []
 
 
 union : VarSet -> VarSet -> VarSet
 union l r =
     { order = l.order ++ r.order
-    , members = Set.union l.members r.members
+    , membersGen = Set.union l.membersGen r.membersGen
+    , membersNamed = Set.union l.membersNamed r.membersNamed
     }
 
 
 diff : VarSet -> VarSet -> VarSet
 diff l r =
-    { order = List.filter (\var -> not (Set.member (varKey var) r.members)) l.order
-    , members = Set.diff l.members r.members
+    { order =
+        List.filter
+            (\(( style, super ) as var) ->
+                case style of
+                    Generated theId ->
+                        not (Set.member (genKeyFrom theId super) r.membersGen)
+
+                    Named name ->
+                        not (Set.member (namedKeyFrom name super) r.membersNamed)
+            )
+            l.order
+    , membersGen = Set.diff l.membersGen r.membersGen
+    , membersNamed = Set.diff l.membersNamed r.membersNamed
     }
 
 
 fromList : List TypeVar -> VarSet
 fromList vars =
+    let
+        ( genKeys, namedKeys ) =
+            List.foldl
+                (\( style, super ) ( genAcc, namedAcc ) ->
+                    case style of
+                        Generated theId ->
+                            ( genKeyFrom theId super :: genAcc, namedAcc )
+
+                        Named name ->
+                            ( genAcc, namedKeyFrom name super :: namedAcc )
+                )
+                ( [], [] )
+                vars
+    in
     { order = List.reverse vars
-    , members = Set.fromList (List.map varKey vars)
+    , membersGen = Set.fromList genKeys
+    , membersNamed = Set.fromList namedKeys
     }
