@@ -31,7 +31,106 @@ type alias Error =
     }
 
 
-{-| Types of errors.
+{-| Types of errors:
+
+  - **`ImpossibleExpr`, `ImpossiblePattern` and `ImpossibleType`:** for
+    hand-crafted `elm-syntax` Files with nonsensical data, like a function call
+    without arguments or a 4-tuple. You should never be able to reach these when
+    using `elm-syntax`'s parser on real Elm files.
+
+  - **`ImpossibleDocsType`:** Similar but for hand-crafted `docs.json`. Real
+    `docs.json` files emitted by the Elm compiler should never produce these.
+
+  - **`MissingModuleName`:** Raised when `Elm.TypeInference.project` is called
+    with a Dict key `[]`.
+
+  - **`ModuleNotFound`:** Raised when `Elm.TypeInference.inferModule` is called
+    with module that's not part of the indexed `Project`.
+
+  - **`VarNotFound`:**
+
+        module Main exposing (foo)
+
+        foo =
+            bar
+
+        --> VarNotFound
+        --    { usedIn = [ "Main" ]
+        --    , varName = "bar"
+        --    }
+
+  - **`AmbiguousName`:**
+
+        module Main exposing (foo)
+
+        import A exposing (thing)
+        import B exposing (thing)
+
+        foo =
+            thing
+
+        --> AmbiguousName
+        --    { usedIn = [ "Main" ]
+        --    , varName = "thing"
+        --    , possibleModules = [ [ "A" ], [ "B" ] ]
+        --    }
+
+  - **`AmbiguousModuleOwner`:**
+
+    Raised when two direct dependencies expose a module of the same name, eg.
+    `mdgriffith/elm-ui` and `mdgriffith/style-elements` (both expose `Element`):
+
+        module Main exposing (foo)
+
+        import Element
+
+        foo _ =
+            Element.text "hi"
+
+        --> AmbiguousModuleOwner
+        --    { moduleName = "Element"
+        --    , possiblePackages =
+        --        [ "mdgriffith/elm-ui"
+        --        , "mdgriffith/style-elements"
+        --        ]
+        --    }
+
+  - **`TypeMismatch`:**
+
+        module Main exposing (foo)
+
+        foo : Int
+        foo =
+            "abc"
+
+        --> TypeMismatch Type.Int Type.String
+
+  - **`InfiniteType`:**
+
+        module Main exposing (foo)
+
+        foo x =
+            x x
+
+        --> InfiniteType
+        --    (Type.TypeVar "a")
+        --    (Type.Function
+        --      { from = Type.TypeVar "a"
+        --      , to = Type.TypeVar "b"
+        --      }
+        --    )
+
+  - **`ConstraintMismatch`:**
+
+        module Main exposing (foo)
+
+        foo x =
+            x + "a"
+
+        --> ConstraintMismatch
+        --    (Type.TypeVar "number")
+        --    Type.String
+
 -}
 type ErrorDetails
     = -- Syntax errors
@@ -49,7 +148,6 @@ type ErrorDetails
     | TypeMismatch Type Type
     | InfiniteType Type Type
     | ConstraintMismatch Type Type
-    | InternalInconsistency Type Type
 
 
 {-| Render an error for diagnostic output.
@@ -142,13 +240,6 @@ detailsToString details =
                 [ "Constraint mismatch"
                 , parenIfHasSpace (Type.toString varType)
                 , parenIfHasSpace (Type.toString type_)
-                ]
-
-        InternalInconsistency t1 t2 ->
-            String.join " "
-                [ "Internal inconsistency"
-                , parenIfHasSpace (Type.toString t1)
-                , parenIfHasSpace (Type.toString t2)
                 ]
 
 
