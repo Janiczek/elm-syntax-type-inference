@@ -5,7 +5,7 @@ module Elm.TypeInference.Type exposing
 
 {-| A data structure representing the Elm types.
 
-This module is not named `Elm.Type` because that already exists in elm/project-metadata-utils.
+_Note:_ This module is not named `Elm.Type` because that already exists in `elm/project-metadata-utils`.
 
 @docs Type, toString, toMultilineString, toTypeAnnotation
 @docs PackageName, VarName
@@ -19,15 +19,17 @@ import Elm.Syntax.Node as Node
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 
 
-{-| Eg. "elm/core".
-Comes from elm.json dependency keys.
+{-| Eg. `"elm/core"`.
+Comes from `elm.json` dependency keys.
+
 Empty string for the user's project.
+
 -}
 type alias PackageName =
     String
 
 
-{-| An alias for var names (eg. "foobar" in `\foobar -> foobar + 1`).
+{-| Eg. `"foobar"` in `\foobar -> foobar + 1`.
 -}
 type alias VarName =
     String
@@ -121,7 +123,7 @@ paren t =
 
 {-| Display a type.
 
-    Function { from = Int, to = TypeVar "a" }
+    toString (Function { from = Int, to = TypeVar "a" })
     --> "Int -> a"
 
 -}
