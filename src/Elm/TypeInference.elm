@@ -185,7 +185,7 @@ type DependencyEnv
 -}
 type DependencyEnvOutcome
     = Ready DependencyEnv
-    | NeedSources { neededPackages : List PackageName }
+    | NeedPackageSources (Dict PackageName (List String))
     | Failed Error
 
 
@@ -193,7 +193,7 @@ type DependencyEnvOutcome
 
 Start by running `dependencyEnv` with empty `sourcesToResolveAmbiguity`.
 
-If you get `NeedSources` back, read those Elm files from the dependencies in
+If you get `NeedPackageSources` back, read those Elm files from the dependencies in
 your ELM\_HOME and supply them in `sourcesToResolveAmbiguity` in the next call.
 
 If you get `Failed` back, the dependencies' `docs.json` types could not be
@@ -259,29 +259,28 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
                 reachable =
                     reachablePackages deps directDependencies
 
-                needed : List PackageName
+                needed : Dict PackageName (List String)
                 needed =
-                    DependencySources.neededPackages deps sourcesToResolveAmbiguity
-                        |> List.filter (\pkg -> Set.member pkg reachable)
-                        |> List.sort
+                    DependencySources.neededSources deps sourcesToResolveAmbiguity
+                        |> List.filter (\( pkg, _ ) -> Set.member pkg reachable)
+                        |> Dict.fromList
             in
-            case needed of
-                _ :: _ ->
-                    NeedSources { neededPackages = needed }
+            if Dict.isEmpty needed then
+                case DependencySources.aliases env.moduleMapping deps sourcesToResolveAmbiguity of
+                    Err err ->
+                        Failed err
 
-                [] ->
-                    case DependencySources.aliases env.moduleMapping deps sourcesToResolveAmbiguity of
-                        Err err ->
-                            Failed err
+                    Ok ( sourceAliases, moduleMapping2 ) ->
+                        Ready
+                            (DependencyEnv
+                                { env
+                                    | typeAliases = Dict.union sourceAliases env.typeAliases
+                                    , moduleMapping = moduleMapping2
+                                }
+                            )
 
-                        Ok ( sourceAliases, moduleMapping2 ) ->
-                            Ready
-                                (DependencyEnv
-                                    { env
-                                        | typeAliases = Dict.union sourceAliases env.typeAliases
-                                        , moduleMapping = moduleMapping2
-                                    }
-                                )
+            else
+                NeedPackageSources needed
 
 
 reachablePackages : Dependencies -> List PackageName -> Set PackageName

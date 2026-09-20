@@ -89,8 +89,8 @@ testExpr ( exprCode, predicate ) =
                 |> Expect.equal True
                 |> Expect.onFail ("Has failed in a bad way: " ++ Debug.toString err)
 
-        Err (MissingDependencySources packages) ->
-            Expect.fail ("Has failed (but shouldn't): missing dependency sources: " ++ String.join ", " packages)
+        Err (MissingDependencySources needed) ->
+            Expect.fail ("Has failed (but shouldn't): missing dependency sources: " ++ Debug.toString needed)
 
         Ok type_ ->
             predicate (Ok type_)

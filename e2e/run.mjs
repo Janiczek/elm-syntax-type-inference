@@ -101,7 +101,6 @@ const packageJsonCache = new Map(); // absolute path -> parsed JSON
 const docsJsonCache = new Map(); // "name@version" -> parsed docs.json
 const cachedVersionsCache = new Map(); // package name -> [versions]
 const solutionCache = new Map(); // elm.json text -> { name: version }
-const packageSourcesCache = new Map(); // "name@version" -> { name, sources }
 
 function clearResolverCaches() {
   cachedVersionsCache.clear();
@@ -348,31 +347,17 @@ async function resolveDependencies(elmJson, preResolved = null) {
   return { dependencies, versions };
 }
 
-// Lazily load dependency's `.elm` files for a `requestPackageSources` round-trip.
-function loadPackageSources(name, version) {
-  if (!version) {
-    console.warn(`warning: no cached version for ${name}, continuing without its sources`);
-    return { name, sources: [] };
-  }
-  const key = `${name}@${version}`;
-  const hit = packageSourcesCache.get(key);
-  if (hit !== undefined) return hit;
-  let files;
+function loadRequestedFile(name, version, file) {
+  const abs = path.join(PACKAGES_DIR, name, version, file);
   try {
-    files = findElmFiles(path.join(PACKAGES_DIR, name, version, "src"));
+    return { path: abs, source: fs.readFileSync(abs, "utf8") };
   } catch (e) {
     if (e?.code === "ENOENT") {
-      console.warn(`warning: no sources for ${name}@${version}, continuing without them`);
-      return { name, sources: [] };
+      console.warn(`warning: no source for ${name}@${version} file ${file} at ${abs}, continuing without it`);
+      return null;
     }
     throw e;
   }
-  const result = {
-    name,
-    sources: files.map((file) => ({ path: file, source: fs.readFileSync(file, "utf8") })),
-  };
-  packageSourcesCache.set(key, result);
-  return result;
 }
 
 function buildRunner() {
@@ -455,23 +440,40 @@ function runLazy(flags, versions) {
       finalResult = value;
       maybeFinish();
     };
-    const onSourcesRequest = (packages) => {
+    const onSourcesRequest = (requests) => {
       rounds += 1;
-      const fresh = packages.filter((name) => !provided.has(name));
-      if (rounds > 10 || fresh.length === 0) {
+      const freshByPackage = new Map();
+      for (const [name, files] of Object.entries(requests)) {
+        for (const file of files) {
+          const key = `${name}:${file}`;
+          if (!provided.has(key)) {
+            provided.add(key);
+            if (!freshByPackage.has(name)) freshByPackage.set(name, []);
+            freshByPackage.get(name).push(file);
+          }
+        }
+      }
+      if (rounds > 10 || freshByPackage.size === 0) {
         cleanup();
         resolve({
           result: {
             ok: false,
-            error: `could not load package sources for: ${packages.join(", ")}`,
+            error: `could not load package sources for: ${JSON.stringify(requests)}`,
           },
           inferenceMs: null,
         });
         return;
       }
-      const payload = fresh.map((name) => {
-        provided.add(name);
-        return loadPackageSources(name, versions[name]);
+      const payload = [...freshByPackage.entries()].map(([name, files]) => {
+        const version = versions[name];
+        if (!version) {
+          console.warn(`warning: no cached version for ${name}, continuing without its sources`);
+          return { name, sources: [] };
+        }
+        const sources = files
+          .map((file) => loadRequestedFile(name, version, file))
+          .filter((s) => s !== null);
+        return { name, sources };
       });
       app.ports.providePackageSources.send(payload);
     };

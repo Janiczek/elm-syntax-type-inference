@@ -29,9 +29,9 @@ suite =
                             Elm.TypeInference.Ready _ ->
                                 Expect.fail "First pass should request sources for example/css"
 
-                            Elm.TypeInference.NeedSources { neededPackages } ->
-                                if neededPackages /= [ "example/css" ] then
-                                    Expect.fail ("Should request example/css, requested: " ++ Debug.toString neededPackages)
+                            Elm.TypeInference.NeedPackageSources needed ->
+                                if needed /= Dict.singleton "example/css" [ "src/Css/Internal.elm" ] then
+                                    Expect.fail ("Should request example/css, requested: " ++ Debug.toString needed)
 
                                 else
                                     case
@@ -44,7 +44,7 @@ suite =
                                         Elm.TypeInference.Failed err ->
                                             Expect.fail ("Second pass should succeed: " ++ Debug.toString err)
 
-                                        Elm.TypeInference.NeedSources still ->
+                                        Elm.TypeInference.NeedPackageSources still ->
                                             Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
 
                                         Elm.TypeInference.Ready env ->
@@ -75,9 +75,9 @@ suite =
                             Elm.TypeInference.Ready _ ->
                                 Expect.fail "First pass should request sources for example/duration"
 
-                            Elm.TypeInference.NeedSources { neededPackages } ->
-                                if neededPackages /= [ "example/duration" ] then
-                                    Expect.fail ("Should request example/duration, requested: " ++ Debug.toString neededPackages)
+                            Elm.TypeInference.NeedPackageSources needed ->
+                                if needed /= Dict.singleton "example/duration" [ "src/Duration.elm" ] then
+                                    Expect.fail ("Should request example/duration, requested: " ++ Debug.toString needed)
 
                                 else
                                     case
@@ -90,7 +90,7 @@ suite =
                                         Elm.TypeInference.Failed err ->
                                             Expect.fail ("Second pass should succeed: " ++ Debug.toString err)
 
-                                        Elm.TypeInference.NeedSources still ->
+                                        Elm.TypeInference.NeedPackageSources still ->
                                             Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
 
                                         Elm.TypeInference.Ready env ->

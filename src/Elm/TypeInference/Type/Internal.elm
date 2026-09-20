@@ -799,9 +799,7 @@ toPublicType moduleMapping { alreadyNormalized } origMono =
 
 moduleIdToModuleName : ModuleIds.Mapping -> ModuleId -> List String
 moduleIdToModuleName moduleMapping moduleId =
-    ModuleIds.getName moduleId moduleMapping
-        |> Maybe.map FullModuleName.toModuleName
-        |> Maybe.withDefault [ "<unknown module>" ]
+    ModuleIds.moduleNameForDisplay moduleId moduleMapping
 
 
 {-| Convert two `MonoType`s to public `Type`s with a shared normalization.

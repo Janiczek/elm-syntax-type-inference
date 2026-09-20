@@ -132,56 +132,49 @@ runFrames edges frames acc =
             case frame.remaining of
                 [] ->
                     -- Done exploring `frame.node`'s neighbours.
-                    let
-                        v : comparable
-                        v =
-                            frame.node
-
-                        vIndex : Int
-                        vIndex =
-                            Dict.get v acc.index |> Maybe.withDefault -1
-
-                        vLowlink : Int
-                        vLowlink =
-                            Dict.get v acc.lowlink |> Maybe.withDefault -1
-
-                        accAfterPop : Acc comparable
-                        accAfterPop =
-                            if vLowlink == vIndex then
-                                let
-                                    ( component, remainingStack ) =
-                                        splitOffComponent v acc.nodeStack
-                                in
-                                { index = acc.index
-                                , lowlink = acc.lowlink
-                                , onStack = List.foldl Set.remove acc.onStack component
-                                , nodeStack = remainingStack
-                                , sccs = component :: acc.sccs
-                                , counter = acc.counter
-                                }
-
-                            else
-                                acc
-                    in
-                    case outerFrames of
-                        [] ->
-                            runFrames edges outerFrames accAfterPop
-
-                        parent :: _ ->
+                    case ( Dict.get frame.node acc.index, Dict.get frame.node acc.lowlink ) of
+                        ( Just vIndex, Just vLowlink ) ->
                             let
-                                parentLowlink : Int
-                                parentLowlink =
-                                    Dict.get parent.node accAfterPop.lowlink |> Maybe.withDefault -1
+                                accAfterPop : Acc comparable
+                                accAfterPop =
+                                    if vLowlink == vIndex then
+                                        let
+                                            ( component, remainingStack ) =
+                                                splitOffComponent frame.node acc.nodeStack
+                                        in
+                                        { index = acc.index
+                                        , lowlink = acc.lowlink
+                                        , onStack = List.foldl Set.remove acc.onStack component
+                                        , nodeStack = remainingStack
+                                        , sccs = component :: acc.sccs
+                                        , counter = acc.counter
+                                        }
+
+                                    else
+                                        acc
                             in
-                            runFrames edges
-                                outerFrames
-                                { index = accAfterPop.index
-                                , lowlink = Dict.insert parent.node (min parentLowlink vLowlink) accAfterPop.lowlink
-                                , onStack = accAfterPop.onStack
-                                , nodeStack = accAfterPop.nodeStack
-                                , sccs = accAfterPop.sccs
-                                , counter = accAfterPop.counter
-                                }
+                            case outerFrames of
+                                [] ->
+                                    runFrames edges outerFrames accAfterPop
+
+                                parent :: _ ->
+                                    case Dict.get parent.node accAfterPop.lowlink of
+                                        Just parentLowlink ->
+                                            runFrames edges
+                                                outerFrames
+                                                { index = accAfterPop.index
+                                                , lowlink = Dict.insert parent.node (min parentLowlink vLowlink) accAfterPop.lowlink
+                                                , onStack = accAfterPop.onStack
+                                                , nodeStack = accAfterPop.nodeStack
+                                                , sccs = accAfterPop.sccs
+                                                , counter = accAfterPop.counter
+                                                }
+
+                                        Nothing ->
+                                            runFrames edges outerFrames accAfterPop
+
+                        _ ->
+                            runFrames edges outerFrames acc
 
                 w :: ws ->
                     let
@@ -199,24 +192,20 @@ runFrames edges frames acc =
                             (initNode w acc)
 
                     else if Set.member w acc.onStack then
-                        let
-                            wIndex : Int
-                            wIndex =
-                                Dict.get w acc.index |> Maybe.withDefault -1
+                        case ( Dict.get w acc.index, Dict.get frame.node acc.lowlink ) of
+                            ( Just wIndex, Just vLowlink ) ->
+                                runFrames edges
+                                    framesWithNextNeighbour
+                                    { index = acc.index
+                                    , lowlink = Dict.insert frame.node (min vLowlink wIndex) acc.lowlink
+                                    , onStack = acc.onStack
+                                    , nodeStack = acc.nodeStack
+                                    , sccs = acc.sccs
+                                    , counter = acc.counter
+                                    }
 
-                            vLowlink : Int
-                            vLowlink =
-                                Dict.get frame.node acc.lowlink |> Maybe.withDefault -1
-                        in
-                        runFrames edges
-                            framesWithNextNeighbour
-                            { index = acc.index
-                            , lowlink = Dict.insert frame.node (min vLowlink wIndex) acc.lowlink
-                            , onStack = acc.onStack
-                            , nodeStack = acc.nodeStack
-                            , sccs = acc.sccs
-                            , counter = acc.counter
-                            }
+                            _ ->
+                                runFrames edges framesWithNextNeighbour acc
 
                     else
                         -- `w` belongs to an already-completed component

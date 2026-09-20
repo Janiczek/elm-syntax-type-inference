@@ -186,16 +186,12 @@ emptyIndex =
 
 moduleIdToModuleName : ModuleIds.Mapping -> ModuleId -> ModuleName
 moduleIdToModuleName moduleMapping moduleId =
-    ModuleIds.getName moduleId moduleMapping
-        |> Maybe.map FullModuleName.toModuleName
-        |> Maybe.withDefault [ "<unknown module>" ]
+    ModuleIds.moduleNameForDisplay moduleId moduleMapping
 
 
 moduleIdToString : ModuleIds.Mapping -> ModuleId -> String
 moduleIdToString moduleMapping moduleId =
-    ModuleIds.getName moduleId moduleMapping
-        |> Maybe.map FullModuleName.toString
-        |> Maybe.withDefault "<unknown module>"
+    ModuleIds.dottedForDisplay moduleId moduleMapping
 
 
 {-| Find the package and interned module id of the var.

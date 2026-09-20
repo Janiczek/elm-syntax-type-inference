@@ -1,4 +1,4 @@
-module Elm.TypeInference.DependencySources exposing (aliases, neededPackages, referencedModules)
+module Elm.TypeInference.DependencySources exposing (aliases, neededSources, referencedModules)
 
 {-| Get type alias bodies from dependency source files.
 We need the alias bodies to know if they're records or unions, for type inference later.
@@ -8,6 +8,7 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.Declaration as Declaration
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.Module as Module
 import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
@@ -90,8 +91,8 @@ need the actual source to know whether it's a record we can unify
 structurally against.
 
 -}
-neededPackages : Dependencies -> Dict PackageName (List File) -> List PackageName
-neededPackages deps sources =
+neededSources : Dependencies -> Dict PackageName (List File) -> List ( PackageName, List String )
+neededSources deps sources =
     let
         docsTypes : Dict String (Set String)
         docsTypes =
@@ -105,15 +106,59 @@ neededPackages deps sources =
         |> Dict.toList
         |> List.filterMap
             (\( package, pkg ) ->
-                if Dict.member package sources then
-                    Nothing
+                let
+                    unknownModules : List String
+                    unknownModules =
+                        docsModuleRefs pkg.modules
+                            |> List.filter (not << isKnownRef docsTypes)
+                            |> List.map Tuple.first
+                            |> Set.fromList
+                            |> Set.toList
+                            |> List.sort
 
-                else if List.any (not << isKnownRef docsTypes) (docsModuleRefs pkg.modules) then
-                    Just package
+                    supplied : Set String
+                    supplied =
+                        suppliedModuleNames package sources
 
-                else
-                    Nothing
+                    remaining : List String
+                    remaining =
+                        unknownModules
+                            |> List.filter (\m -> not (Set.member m supplied))
+                            |> List.map moduleToFilePath
+                in
+                case remaining of
+                    [] ->
+                        Nothing
+
+                    _ :: _ ->
+                        Just ( package, remaining )
             )
+
+
+{-| Dotted module name to its source path inside the package.
+
+    "Css.Internal" --> "src/Css/Internal.elm"
+
+-}
+moduleToFilePath : String -> String
+moduleToFilePath dotted =
+    "src/" ++ String.join "/" (String.split "." dotted) ++ ".elm"
+
+
+suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
+suppliedModuleNames package sources =
+    Dict.get package sources
+        |> Maybe.withDefault []
+        |> List.map fileDottedName
+        |> Set.fromList
+
+
+fileDottedName : File -> String
+fileDottedName file =
+    file.moduleDefinition
+        |> Node.value
+        |> Module.moduleName
+        |> String.join "."
 
 
 documentedTypeNames : Elm.Docs.Module -> Set String

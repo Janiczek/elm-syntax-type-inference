@@ -532,9 +532,7 @@ lookupGlobalEnv moduleMapping package moduleId var =
 
 moduleIdToModuleName : ModuleIds.Mapping -> ModuleId -> List String
 moduleIdToModuleName moduleMapping moduleId =
-    ModuleIds.getName moduleId moduleMapping
-        |> Maybe.map FullModuleName.toModuleName
-        |> Maybe.withDefault [ "<unknown>" ]
+    ModuleIds.moduleNameForDisplay moduleId moduleMapping
 
 
 {-| Give a scheme's quantified variables fresh IDs.

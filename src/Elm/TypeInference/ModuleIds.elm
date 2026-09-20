@@ -3,10 +3,12 @@ module Elm.TypeInference.ModuleIds exposing
     , ModuleId
     , basicsId
     , charId
+    , dottedForDisplay
     , empty
     , getId
     , getIdByDotted
     , getName
+    , getNameForDisplay
     , intern
     , listId
     , mathMatrix4Id
@@ -14,6 +16,7 @@ module Elm.TypeInference.ModuleIds exposing
     , mathVector3Id
     , mathVector4Id
     , maybeId
+    , moduleNameForDisplay
     , platformCmdId
     , platformId
     , platformSubId
@@ -31,6 +34,7 @@ Allows fast Int comparison instead of deep equality on FullModuleName.
 
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.ModuleName exposing (ModuleName)
 
 
 type alias ModuleId =
@@ -205,3 +209,21 @@ getId full moduleMapping =
 getName : ModuleId -> Mapping -> Maybe FullModuleName
 getName moduleId moduleMapping =
     Dict.get moduleId moduleMapping.byId
+
+
+getNameForDisplay : ModuleId -> Mapping -> FullModuleName
+getNameForDisplay moduleId moduleMapping =
+    Dict.get moduleId moduleMapping.byId
+        |> Maybe.withDefault ( "<unknown module id>", [] )
+
+
+moduleNameForDisplay : ModuleId -> Mapping -> ModuleName
+moduleNameForDisplay moduleId moduleMapping =
+    getNameForDisplay moduleId moduleMapping
+        |> FullModuleName.toModuleName
+
+
+dottedForDisplay : ModuleId -> Mapping -> String
+dottedForDisplay moduleId moduleMapping =
+    getNameForDisplay moduleId moduleMapping
+        |> FullModuleName.toString

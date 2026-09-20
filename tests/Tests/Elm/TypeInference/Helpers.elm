@@ -28,7 +28,7 @@ import TypeLookupTable.Internal
 type TestError
     = CouldntParse
     | CouldntInfer Error
-    | MissingDependencySources (List String)
+    | MissingDependencySources (Dict String (List String))
     | CouldntFindMainModule
     | CouldntFindMainDeclaration
 
@@ -108,8 +108,8 @@ runInferenceWithPackage currentPackage directDependencies allDependencies files 
                 err :: _ ->
                     Err (CouldntInfer err)
 
-        Elm.TypeInference.NeedSources { neededPackages } ->
-            Err (MissingDependencySources neededPackages)
+        Elm.TypeInference.NeedPackageSources needed ->
+            Err (MissingDependencySources needed)
 
 
 getExprType : String -> Result TestError Type

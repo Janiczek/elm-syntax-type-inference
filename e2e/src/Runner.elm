@@ -41,7 +41,7 @@ port inferredTypes : String -> Cmd msg
 port requestInferredTypes : (Decode.Value -> msg) -> Sub msg
 
 
-port requestPackageSources : List String -> Cmd msg
+port requestPackageSources : Encode.Value -> Cmd msg
 
 
 port providePackageSources : (Decode.Value -> msg) -> Sub msg
@@ -214,12 +214,19 @@ update msg model =
                                 merged =
                                     List.foldl
                                         (\pkg acc ->
-                                            Dict.insert pkg.name
-                                                (List.filterMap
-                                                    (\sf -> Elm.Parser.parseToFile sf.source |> Result.toMaybe)
-                                                    pkg.sources
-                                                )
-                                                acc
+                                            let
+                                                newFiles : List File
+                                                newFiles =
+                                                    List.filterMap
+                                                        (\sf -> Elm.Parser.parseToFile sf.source |> Result.toMaybe)
+                                                        pkg.sources
+
+                                                existing : List File
+                                                existing =
+                                                    Dict.get pkg.name acc
+                                                        |> Maybe.withDefault []
+                                            in
+                                            Dict.insert pkg.name (existing ++ newFiles) acc
                                         )
                                         active.dependencySources
                                         provided
@@ -333,9 +340,9 @@ step active =
         Elm.TypeInference.Failed depEnvError ->
             reportDepEnvError active.files depEnvError
 
-        Elm.TypeInference.NeedSources { neededPackages } ->
+        Elm.TypeInference.NeedPackageSources needed ->
             ( { active = Just active, pending = Nothing, inference = Nothing }
-            , requestPackageSources neededPackages
+            , requestPackageSources (Encode.dict identity (Encode.list Encode.string) needed)
             )
 
         Elm.TypeInference.Ready depEnv ->
