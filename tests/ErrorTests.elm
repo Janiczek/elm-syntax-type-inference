@@ -1,18 +1,5 @@
 module ErrorTests exposing (suite)
 
-{-| End-to-end tests for `Elm.TypeInference.Error.toString`: for every
-`ErrorDetails` variant that's actually reachable from real inputs (Elm
-source, a `docs.json`-shaped `Dependency`, or the `Dict ModuleName File`
-passed into `Elm.TypeInference.project`), start from that input, run it
-through the real inference pipeline, and check the message it produces.
-
-The variants that `elm-syntax`'s own parser (or the Elm compiler's own
-`docs.json` generator) can never actually produce - `ImpossibleExpr`,
-`ImpossiblePattern`, `ImpossibleType` - are skipped; see
-`Elm.TypeInference.Error`'s doc comment for why.
-
--}
-
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.File exposing (File)
