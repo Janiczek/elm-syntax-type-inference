@@ -1,10 +1,12 @@
 module Elm.Syntax.ModuleName.Extra exposing
     ( dottedToFilePath
     , fromDotted
+    , isSegment
     , splitLastDot
     , toString
     )
 
+import Char
 import Elm.Syntax.ModuleName exposing (ModuleName)
 
 
@@ -49,6 +51,23 @@ toFilePath moduleName =
 dottedToFilePath : String -> String
 dottedToFilePath dotted =
     toFilePath (fromDotted dotted)
+
+
+{-|
+
+    "Foo" -> True
+    "foo" -> False
+    "" -> False
+
+-}
+isSegment : String -> Bool
+isSegment segment =
+    case String.toList segment of
+        first :: _ ->
+            Char.isUpper first
+
+        [] ->
+            False
 
 
 {-|
