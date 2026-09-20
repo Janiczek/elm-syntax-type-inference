@@ -111,6 +111,10 @@ runInferenceWithPackage currentPackage directDependencies allDependencies files 
 
                 Ok proj0 ->
                     let
+                        tablesAndErrors :
+                            { tables : Dict ModuleName TypeLookupTable
+                            , errors : Dict ModuleName Error
+                            }
                         tablesAndErrors =
                             Elm.TypeInference.inferModules files proj0
                                 |> Tuple.first
