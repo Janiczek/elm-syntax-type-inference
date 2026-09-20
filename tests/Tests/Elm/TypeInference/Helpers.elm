@@ -140,7 +140,7 @@ main =
                                     (\lookupTable ->
                                         file.declarations
                                             |> List.Extra.find (\declNode -> getFunctionName (Node.value declNode) == Just "main")
-                                            |> Maybe.andThen (\mainNode -> TypeLookupTable.get (Node.range mainNode) lookupTable)
+                                            |> Maybe.andThen (\mainNode -> Tuple.first (TypeLookupTable.get (Node.range mainNode) lookupTable))
                                             |> Result.fromMaybe CouldntFindMainDeclaration
                                     )
                         )
@@ -179,7 +179,7 @@ inferModulesWithPackage currentPackage directDependencies allDependencies module
                                         ( file
                                         , lookupTables
                                             |> Dict.get moduleName
-                                            |> Maybe.withDefault (TypeLookupTable.Internal.TLT Dict.empty)
+                                            |> Maybe.withDefault TypeLookupTable.Internal.empty
                                         )
                                     )
                         )
@@ -230,7 +230,7 @@ getDeclTypeWithPackage currentPackage directDependencies dependencies modules mo
                         (\( file, lookupTable ) ->
                             file.declarations
                                 |> List.Extra.find (\declNode -> getFunctionName (Node.value declNode) == Just declName)
-                                |> Maybe.andThen (\declNode -> TypeLookupTable.get (Node.range declNode) lookupTable)
+                                |> Maybe.andThen (\declNode -> Tuple.first (TypeLookupTable.get (Node.range declNode) lookupTable))
                                 |> Result.fromMaybe CouldntFindMainDeclaration
                         )
             )

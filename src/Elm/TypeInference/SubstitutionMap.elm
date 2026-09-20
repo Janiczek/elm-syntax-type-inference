@@ -4,6 +4,7 @@ module Elm.TypeInference.SubstitutionMap exposing
     , SubstitutionMap
     , bindRoot
     , empty
+    , forLookup
     , letRankOf
     , linkTo
     , setIdLetRank
@@ -54,6 +55,18 @@ empty : SubstitutionMap
 empty =
     { slotsGen = Dict.empty
     , slotsNamed = Dict.empty
+    , unionFindRanksGen = Dict.empty
+    , unionFindRanksNamed = Dict.empty
+    , letRanks = Dict.empty
+    }
+
+
+{-| Prepare for TypeLookupTable: drop state `substitute*` doesn't need.
+-}
+forLookup : SubstitutionMap -> SubstitutionMap
+forLookup store =
+    { slotsGen = store.slotsGen
+    , slotsNamed = store.slotsNamed
     , unionFindRanksGen = Dict.empty
     , unionFindRanksNamed = Dict.empty
     , letRanks = Dict.empty

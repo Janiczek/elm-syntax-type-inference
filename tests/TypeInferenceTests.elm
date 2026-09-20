@@ -490,6 +490,7 @@ main = [1.0, 2]"""
                                 { start = { row = 3, column = 14 }
                                 , end = { row = 3, column = 15 }
                                 }
+                            >> Tuple.first
                         )
                     |> Expect.equal (Ok (Just Float))
         , Test.test "a top-level function reports its function type, not its body's" <| \() ->
@@ -503,6 +504,7 @@ main x = x"""
                                 { start = { row = 3, column = 1 }
                                 , end = { row = 3, column = 11 }
                                 }
+                            >> Tuple.first
                             >> Maybe.map Type.toString
                         )
                     |> Expect.equal (Ok (Just "a -> a"))
@@ -531,6 +533,7 @@ main = 1""" of
                                     , end = { row = 3, column = 9 }
                                     }
                                     table
+                                    |> Tuple.first
                                     |> Expect.notEqual Nothing
                             , \_ ->
                                 TypeLookupTable.get
@@ -538,6 +541,7 @@ main = 1""" of
                                     , end = { row = 3, column = 9 }
                                     }
                                     table
+                                    |> Tuple.first
                                     |> Expect.equal Nothing
                             ]
                             ()
@@ -561,6 +565,7 @@ main = { a = 1, b = 'x' }""" |> inferMainModule of
                                     , end = { row = 3, column = 11 }
                                     }
                                     table
+                                    |> Tuple.first
                                     |> isNumberLike
                                     |> Expect.equal True
                             , \_ ->
@@ -569,6 +574,7 @@ main = { a = 1, b = 'x' }""" |> inferMainModule of
                                     , end = { row = 3, column = 18 }
                                     }
                                     table
+                                    |> Tuple.first
                                     |> Expect.equal (Just Char)
                             ]
                             ()
@@ -589,6 +595,7 @@ main rec = { rec | a = 1 }""" |> inferMainModule of
                             , end = { row = 3, column = 21 }
                             }
                             table
+                            |> Tuple.first
                             |> isNumberLike
                             |> Expect.equal True
         , Test.test "signature node and signature name node share the declared type" <| \() ->
@@ -613,6 +620,7 @@ main = 1""" |> inferMainModule of
                                     , end = { row = 3, column = 11 }
                                     }
                                     table
+                                    |> Tuple.first
                                     |> Expect.equal (Just Int)
                             , \_ ->
                                 TypeLookupTable.get
@@ -620,6 +628,7 @@ main = 1""" |> inferMainModule of
                                     , end = { row = 3, column = 5 }
                                     }
                                     table
+                                    |> Tuple.first
                                     |> Expect.equal (Just Int)
                             ]
                             ()
@@ -640,6 +649,7 @@ main = 1"""
                                 { start = { row = 3, column = 1 }
                                 , end = { row = 3, column = 15 }
                                 }
+                            >> Tuple.first
                         )
                     |> Expect.equal (Ok Nothing)
         , Test.test "type-alias declaration nodes have no entry" <| \() ->
@@ -659,6 +669,7 @@ main = 1"""
                                 { start = { row = 3, column = 1 }
                                 , end = { row = 3, column = 29 }
                                 }
+                            >> Tuple.first
                         )
                     |> Expect.equal (Ok Nothing)
         ]

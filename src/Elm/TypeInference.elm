@@ -44,7 +44,7 @@ import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (GlobalKey, StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type exposing (PackageName, Type, VarName)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeResolver)
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
@@ -493,40 +493,6 @@ moduleResult ctx outgoingAliases =
     State.do State.getSubst <| \substitutionMap ->
     State.do State.getGlobalEnv <| \globalEnv ->
     let
-        ( typesByRange, _, _ ) =
-            nodeIds
-                |> Dict.foldl
-                    (\rangeLike id ( accDict, accPool, accSubst ) ->
-                        let
-                            ( monoType, _, accSubst1 ) =
-                                SubstitutionMap.substituteMono accSubst (TypeI.id_ id)
-
-                            -- Majority of types will be pooled already,
-                            -- we don't need to convert between types.
-                            key : String
-                            key =
-                                TypeI.monoPublicKey { alreadyNormalized = False } monoType
-                        in
-                        case Dict.get key accPool of
-                            Just canonical ->
-                                ( Dict.insert rangeLike canonical accDict
-                                , accPool
-                                , accSubst1
-                                )
-
-                            Nothing ->
-                                let
-                                    pubType : Type
-                                    pubType =
-                                        TypeI.toPublicType ctx.moduleMapping { alreadyNormalized = False } monoType
-                                in
-                                ( Dict.insert rangeLike pubType accDict
-                                , Dict.insert key pubType accPool
-                                , accSubst1
-                                )
-                    )
-                    ( Dict.empty, Dict.empty, substitutionMap )
-
         exposedValues : Dict VarName TypeI.Type
         exposedValues =
             ctx.thisIndex.exposedValues
@@ -542,7 +508,14 @@ moduleResult ctx outgoingAliases =
                     Dict.empty
     in
     State.pure
-        { table = TypeLookupTable.Internal.TLT typesByRange
+        { table =
+            TypeLookupTable.Internal.TLT
+                { nodeIds = nodeIds
+                , subst = SubstitutionMap.forLookup substitutionMap
+                , moduleMapping = ctx.moduleMapping
+                , cache = Dict.empty
+                , pool = Dict.empty
+                }
         , interface =
             { moduleIndex = ctx.thisIndex
             , values = exposedValues

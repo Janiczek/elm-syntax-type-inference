@@ -391,9 +391,12 @@ function runLazy(flags, versions) {
   let rounds = 0;
 
   // Benchmark state.
-  // We only hold last attempt (`inferenceStarted`..`inferenceStopped`).
+  //   `inferenceStarted`..`inferenceStopped`   -- Elm.TypeInference.inferProject
+  //   `resolutionStarted`..`resolutionStopped` -- TypeLookupTable.get on every node
   let inferenceStart = null;
   let inferenceStop = null;
+  let resolutionStart = null;
+  let resolutionStop = null;
   let finalResult = null;
   const outcome = new Promise((resolve) => {
     const cleanup = () => {
@@ -401,14 +404,18 @@ function runLazy(flags, versions) {
       app.ports.requestPackageSources.unsubscribe(onSourcesRequest);
       app.ports.inferenceStarted.unsubscribe(onInferenceStarted);
       app.ports.inferenceStopped.unsubscribe(onInferenceStopped);
+      app.ports.resolutionStarted.unsubscribe(onResolutionStarted);
+      app.ports.resolutionStopped.unsubscribe(onResolutionStopped);
     };
     const maybeFinish = () => {
-      // `result` may arrive before `inferenceStopped`, wait for both
-      if (finalResult !== null && (inferenceStop !== null || inferenceStart === null)) {
+      // `result` may arrive before the phase-end ports, wait for all of them.
+      const timed = inferenceStart === null || (inferenceStop !== null && resolutionStop !== null);
+      if (finalResult !== null && timed) {
         cleanup();
         resolve({
           result: finalResult,
           inferenceMs: inferenceStop !== null ? inferenceStop - inferenceStart : null,
+          resolutionMs: resolutionStop !== null ? resolutionStop - resolutionStart : null,
         });
       }
     };
@@ -437,6 +444,7 @@ function runLazy(flags, versions) {
             error: `could not load package sources for: ${JSON.stringify(requests)}`,
           },
           inferenceMs: null,
+          resolutionMs: null,
         });
         return;
       }
@@ -457,6 +465,7 @@ function runLazy(flags, versions) {
         resolve({
           result: { ok: false, error: formatError(e) },
           inferenceMs: null,
+          resolutionMs: null,
         });
       });
     };
@@ -469,10 +478,21 @@ function runLazy(flags, versions) {
       inferenceStop = nowMs();
       maybeFinish();
     };
+    const onResolutionStarted = () => {
+      resolutionStart = nowMs();
+      resolutionStop = null;
+      app.ports.beginResolution.send(null);
+    };
+    const onResolutionStopped = () => {
+      resolutionStop = nowMs();
+      maybeFinish();
+    };
     app.ports.result.subscribe(onResult);
     app.ports.requestPackageSources.subscribe(onSourcesRequest);
     app.ports.inferenceStarted.subscribe(onInferenceStarted);
     app.ports.inferenceStopped.subscribe(onInferenceStopped);
+    app.ports.resolutionStarted.subscribe(onResolutionStarted);
+    app.ports.resolutionStopped.subscribe(onResolutionStopped);
   });
   return { app, outcome };
 }
@@ -526,12 +546,13 @@ async function runTest(name) {
 
     const start = process.hrtime.bigint();
     const { app, outcome } = runLazy(flags, versions);
-    const { result, inferenceMs } = await outcome;
-    const elapsedSeconds =
-      inferenceMs !== null ? inferenceMs / 1000 : Number(process.hrtime.bigint() - start) / 1e9;
+    const { result, inferenceMs, resolutionMs } = await outcome;
+    const wallSeconds = Number(process.hrtime.bigint() - start) / 1e9;
+    const inferenceSeconds = inferenceMs !== null ? inferenceMs / 1000 : wallSeconds;
+    const resolutionSeconds = resolutionMs !== null ? resolutionMs / 1000 : 0;
 
     const passed = result.ok === (expected.expect === "pass");
-    const report = { name, expected, result, passed, elapsedSeconds };
+    const report = { name, expected, result, passed, inferenceSeconds, resolutionSeconds };
     printReport(report);
 
     // Outside benchmarked time: only on success ask Elm to serialize
@@ -559,7 +580,7 @@ async function runTest(name) {
     // e.g. dependency solver found no valid solution
     // report as failure and let the suite continue.
     const result = { ok: false, error: formatError(e) };
-    const report = { name, expected, result, passed: false, elapsedSeconds: 0 };
+    const report = { name, expected, result, passed: false, inferenceSeconds: 0, resolutionSeconds: 0 };
     printReport(report);
     return report;
   }
@@ -570,18 +591,32 @@ function csvEscape(value) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-function printReport({ name, expected, result, passed, elapsedSeconds }) {
+function printReport({ name, expected, result, passed, inferenceSeconds, resolutionSeconds }) {
   const actual = result.ok ? "pass" : "fail";
+  const totalSeconds = inferenceSeconds + resolutionSeconds;
+  const inferenceMs = inferenceSeconds * 1000;
+  const resolutionMs = resolutionSeconds * 1000;
+  const totalMs = totalSeconds * 1000;
   if (config.csv) {
     const rawError = result.ok ? "" : (result.error ?? "");
     const error = expected.expect === "fail" && passed ? "" : rawError;
     console.log(
-      [name, expected.expect, actual, passed, elapsedSeconds.toFixed(4), error].map(csvEscape).join(",")
+      [
+        name,
+        expected.expect,
+        actual,
+        passed,
+        totalMs.toFixed(2),
+        inferenceMs.toFixed(2),
+        resolutionMs.toFixed(2),
+        error,
+      ].map(csvEscape).join(",")
     );
     return;
   }
   const suffix = passed ? "" : `  (expected: ${expected.expect}, actual: ${actual})`;
-  console.log(`${name} ${passed ? "✓ PASS" : "✗ FAIL"} (${elapsedSeconds.toFixed(3)}s)${suffix}`);
+  const split = `${inferenceMs.toFixed(2)}ms infer + ${resolutionMs.toFixed(2)}ms resolve`;
+  console.log(`${name} ${passed ? "✓ PASS" : "✗ FAIL"} (${totalMs.toFixed(2)}ms = ${split})${suffix}`);
 
   if (!result.ok && result.error) {
     console.log(`    error: ${result.error}`);
@@ -590,7 +625,7 @@ function printReport({ name, expected, result, passed, elapsedSeconds }) {
 
 function printCsvHeader() {
   if (config.csv && !config.asShard) {
-    console.log("test,expected,actual,passed,seconds,error");
+    console.log("test,expected,actual,passed,total ms,inference ms,resolution ms,error");
   }
 }
 
@@ -637,7 +672,8 @@ async function main() {
         expected: { expect: "?" },
         result: { ok: false, error: formatError(e) },
         passed: false,
-        elapsedSeconds: 0,
+        inferenceSeconds: 0,
+        resolutionSeconds: 0,
       });
     }
   }

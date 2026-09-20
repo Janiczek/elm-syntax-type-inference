@@ -27,7 +27,7 @@ npm run test:e2e
 # write `tests/<name>/inferred-types.txt` for debugging (off by default):
 ./e2e/run.mjs --write-types
 
-# machine-readable CSV on stdout (header: test,expected,actual,passed,seconds,error):
+# machine-readable CSV on stdout
 ./e2e/run.mjs --csv
 
 # Speed:

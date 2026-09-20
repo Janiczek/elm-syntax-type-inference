@@ -3,8 +3,9 @@ port module Runner exposing (main)
 {-| Used by e2e/run.mjs.
 
 Reads Elm project's source files and dependency docs.json files, parses
-everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`
-and reports back via ports.
+everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`,
+resolves every type out of the resulting (lazy) `TypeLookupTable`s, and reports
+back via ports.
 
 -}
 
@@ -18,6 +19,7 @@ import Elm.Syntax.Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
+import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference exposing (Dependency, DependencyEnv)
 import Elm.TypeInference.Error as Error
 import Elm.TypeInference.ModuleIds as ModuleIds
@@ -29,6 +31,7 @@ import List.Extra
 import Parser
 import RangeLike exposing (RangeLike)
 import Set exposing (Set)
+import TypeLookupTable
 import TypeLookupTable.Internal exposing (TypeLookupTable(..))
 
 
@@ -54,6 +57,15 @@ port inferenceStopped : Encode.Value -> Cmd msg
 
 
 port beginInference : (Decode.Value -> msg) -> Sub msg
+
+
+port resolutionStarted : Encode.Value -> Cmd msg
+
+
+port resolutionStopped : Encode.Value -> Cmd msg
+
+
+port beginResolution : (Decode.Value -> msg) -> Sub msg
 
 
 type alias Model =
@@ -92,6 +104,7 @@ type alias PendingInference =
 type alias PendingTables =
     { sourcePaths : Dict ModuleName String
     , tables : Dict ModuleName TypeLookupTable
+    , summary : Encode.Value
     }
 
 
@@ -99,6 +112,7 @@ type Msg
     = GotInferredTypesRequest Decode.Value
     | GotPackageSources Decode.Value
     | GotBeginInference Decode.Value
+    | GotBeginResolution Decode.Value
 
 
 type alias Flags =
@@ -241,6 +255,14 @@ update msg model =
                 Just pending ->
                     runInference pending
 
+        GotBeginResolution _ ->
+            case model.pending of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just pending ->
+                    runResolution pending
+
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
@@ -248,6 +270,7 @@ subscriptions _ =
         [ requestInferredTypes GotInferredTypesRequest
         , providePackageSources GotPackageSources
         , beginInference GotBeginInference
+        , beginResolution GotBeginResolution
         ]
 
 
@@ -406,13 +429,45 @@ runInference pending =
         (Just
             { sourcePaths = pending.sourcePaths
             , tables = project.tables
+            , summary = summary
             }
         )
     , Cmd.batch
         [ inferenceStopped Encode.null
-        , result summary
+        , resolutionStarted Encode.null
         ]
     )
+
+
+{-| Phase two: pull every type out of the lazy tables.
+
+Inference only hands back "range -> type variable"; the rest happens in `TypeLookupTable.get`.
+
+-}
+runResolution : PendingTables -> ( Model, Cmd Msg )
+runResolution pending =
+    ( finished (Just { pending | tables = Dict.map (\_ -> resolveWholeTable) pending.tables })
+    , Cmd.batch
+        [ resolutionStopped Encode.null
+        , result pending.summary
+        ]
+    )
+
+
+resolveWholeTable : TypeLookupTable -> TypeLookupTable
+resolveWholeTable table =
+    List.foldl
+        (\range acc -> Tuple.second (TypeLookupTable.get range acc))
+        table
+        (allNodeRanges table)
+
+
+allNodeRanges : TypeLookupTable -> List Range
+allNodeRanges (TLT tlt) =
+    tlt.nodeIds
+        |> Dict.keys
+        |> List.sortBy rangeSortKey
+        |> List.map rangeLikeToRange
 
 
 buildDependencies : List RawDependency -> Result String (List Dependency)
@@ -677,31 +732,43 @@ tablesToString paths tables =
 
 
 tableToLines : String -> TypeLookupTable -> List String
-tableToLines path (TLT entries) =
-    entries
-        |> Dict.toList
-        |> List.sortBy (\( rangeLike, _ ) -> rangeSortKey rangeLike)
-        |> List.map
-            (\( rangeLike, type_ ) ->
-                let
-                    ( startRow, startCol ) =
-                        unpackPos (Tuple.first rangeLike)
-
-                    ( endRow, endCol ) =
-                        unpackPos (Tuple.second rangeLike)
-                in
-                path
-                    ++ ":"
-                    ++ String.fromInt startRow
-                    ++ ":"
-                    ++ String.fromInt startCol
-                    ++ "-"
-                    ++ String.fromInt endRow
-                    ++ ":"
-                    ++ String.fromInt endCol
-                    ++ ": "
-                    ++ Type.toString type_
+tableToLines path table =
+    allNodeRanges table
+        |> List.filterMap
+            (\range ->
+                TypeLookupTable.get range table
+                    |> Tuple.first
+                    |> Maybe.map (lineFor path range)
             )
+
+
+lineFor : String -> Range -> Type.Type -> String
+lineFor path range type_ =
+    path
+        ++ ":"
+        ++ String.fromInt range.start.row
+        ++ ":"
+        ++ String.fromInt range.start.column
+        ++ "-"
+        ++ String.fromInt range.end.row
+        ++ ":"
+        ++ String.fromInt range.end.column
+        ++ ": "
+        ++ Type.toString type_
+
+
+rangeLikeToRange : RangeLike -> Range
+rangeLikeToRange rangeLike =
+    let
+        ( startRow, startCol ) =
+            unpackPos (Tuple.first rangeLike)
+
+        ( endRow, endCol ) =
+            unpackPos (Tuple.second rangeLike)
+    in
+    { start = { row = startRow, column = startCol }
+    , end = { row = endRow, column = endCol }
+    }
 
 
 rangeSortKey : RangeLike -> List Int
