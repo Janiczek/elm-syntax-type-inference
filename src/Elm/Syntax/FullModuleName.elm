@@ -8,6 +8,7 @@ module Elm.Syntax.FullModuleName exposing
     )
 
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import NonemptyList exposing (NonemptyList)
 
 
@@ -56,9 +57,7 @@ fromModuleName_ moduleName =
 -}
 fromDotted : String -> FullModuleName
 fromDotted dotted =
-    dotted
-        |> String.split "."
-        |> fromModuleName_
+    fromModuleName_ (ModuleNameExtra.fromDotted dotted)
 
 
 {-|
@@ -77,7 +76,5 @@ toModuleName fullModuleName =
 
 -}
 toString : FullModuleName -> String
-toString moduleName =
-    moduleName
-        |> NonemptyList.toList
-        |> String.join "."
+toString fullModuleName =
+    ModuleNameExtra.toString (toModuleName fullModuleName)

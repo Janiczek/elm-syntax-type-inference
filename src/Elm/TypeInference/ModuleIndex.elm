@@ -25,6 +25,7 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Import
 import Elm.Syntax.Module as Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
@@ -597,4 +598,4 @@ modulesWithAlias index wantedAlias =
 
 isImportedUnaliased : ModuleIndex -> ModuleName -> Bool
 isImportedUnaliased index moduleName =
-    Set.member (String.join "." moduleName) index.unaliasedImports
+    Set.member (ModuleNameExtra.toString moduleName) index.unaliasedImports

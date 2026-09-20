@@ -4,7 +4,6 @@ module Elm.TypeInference.Dependencies exposing
     , Resolver
     , fromList
     , register
-    , splitLastDot
     )
 
 {-| Dependency types from docs.json.
@@ -12,6 +11,7 @@ module Elm.TypeInference.Dependencies exposing
 
 import Dict exposing (Dict)
 import Elm.Docs
+import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Type
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
@@ -100,26 +100,6 @@ resolverFor moduleMapping deps selfPackage =
                         }
 
 
-{-| "Platform.Cmd.Cmd" -> ("Platform.Cmd", "Cmd")
--}
-splitLastDot : String -> ( String, String )
-splitLastDot qualifiedName =
-    let
-        parts : List String
-        parts =
-            String.split "." qualifiedName
-    in
-    case List.reverse parts of
-        [] ->
-            ( "", qualifiedName )
-
-        [ single ] ->
-            ( "", single )
-
-        last :: rest ->
-            ( rest |> List.reverse |> String.join ".", last )
-
-
 fromDocsType : Resolver -> Elm.Type.Type -> Result ErrorDetails MonoType
 fromDocsType resolver type_ =
     case type_ of
@@ -151,7 +131,7 @@ fromDocsType resolver type_ =
         Elm.Type.Type qualifiedName args ->
             let
                 ( moduleNameStr, typeName ) =
-                    splitLastDot qualifiedName
+                    ModuleNameExtra.splitLastDot qualifiedName
             in
             Result.andThen
                 (\( package, moduleId ) ->
@@ -233,7 +213,7 @@ registerModule moduleMapping pkgName resolver mod =
 
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = String.split "." mod.name
+            { moduleName = ModuleNameExtra.fromDotted mod.name
             , declarationNames = []
             , details = details
             }
@@ -256,7 +236,7 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
     let
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = String.split "." dottedModuleName
+            { moduleName = ModuleNameExtra.fromDotted dottedModuleName
             , declarationNames = []
             , details = details
             }
@@ -307,7 +287,7 @@ registerAlias pkgName moduleId dottedModuleName resolver alias_ =
     let
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = String.split "." dottedModuleName
+            { moduleName = ModuleNameExtra.fromDotted dottedModuleName
             , declarationNames = []
             , details = details
             }

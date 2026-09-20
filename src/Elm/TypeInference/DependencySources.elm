@@ -8,10 +8,12 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.Declaration as Declaration
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Module as Module
+import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.Type
-import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
+import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (Error)
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
@@ -114,7 +116,6 @@ neededSources deps sources =
                             |> List.map Tuple.first
                             |> Set.fromList
                             |> Set.toList
-                            |> List.sort
 
                     supplied : Set String
                     supplied =
@@ -124,7 +125,7 @@ neededSources deps sources =
                     remaining =
                         unknownModules
                             |> List.filter (\m -> not (Set.member m supplied))
-                            |> List.map moduleToFilePath
+                            |> List.map ModuleNameExtra.dottedToFilePath
                 in
                 case remaining of
                     [] ->
@@ -133,16 +134,6 @@ neededSources deps sources =
                     _ :: _ ->
                         Just ( package, remaining )
             )
-
-
-{-| Dotted module name to its source path inside the package.
-
-    "Css.Internal" --> "src/Css/Internal.elm"
-
--}
-moduleToFilePath : String -> String
-moduleToFilePath dotted =
-    "src/" ++ String.join "/" (String.split "." dotted) ++ ".elm"
 
 
 suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
@@ -158,7 +149,7 @@ fileDottedName file =
     file.moduleDefinition
         |> Node.value
         |> Module.moduleName
-        |> String.join "."
+        |> ModuleNameExtra.toString
 
 
 documentedTypeNames : Elm.Docs.Module -> Set String
@@ -204,7 +195,7 @@ docsTypeRefs tipe =
         Elm.Type.Type qualifiedName args ->
             let
                 ( moduleName, typeName ) =
-                    Dependencies.splitLastDot qualifiedName
+                    ModuleNameExtra.splitLastDot qualifiedName
             in
             -- Skip elm/core stuff
             (if isPrimitiveRef moduleName typeName then
@@ -256,7 +247,7 @@ isPrimitiveRef moduleName typeName =
 -}
 modulePart : String -> List String
 modulePart qualifiedName =
-    case Dependencies.splitLastDot qualifiedName of
+    case ModuleNameExtra.splitLastDot qualifiedName of
         ( "", _ ) ->
             []
 
@@ -326,7 +317,7 @@ packageAliases moduleMapping deps package files =
                                         (TypeI.fromTypeAnnotation resolver (Node.value alias_.typeAnnotation)
                                             |> Result.mapError
                                                 (\err ->
-                                                    { moduleName = String.split "." thisModule.dottedModuleName
+                                                    { moduleName = FullModuleName.toModuleName thisModule.moduleName
                                                     , declarationNames = [ Node.value alias_.name ]
                                                     , details = TypeI.fromTypeAnnotationError err
                                                     }

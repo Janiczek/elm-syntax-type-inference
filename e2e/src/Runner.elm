@@ -9,7 +9,6 @@ and reports back via ports.
 -}
 
 import Bitwise
-import Char
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Parser
@@ -17,6 +16,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.TypeInference exposing (Dependency, DependencyEnv)
 import Elm.TypeInference.Error as Error
@@ -511,7 +511,7 @@ failureIfExposed maybeExposed { path, error } =
                 rootsSet : Set ModuleName
                 rootsSet =
                     exposedDotted
-                        |> List.map (String.split ".")
+                        |> List.map ModuleNameExtra.fromDotted
                         |> Set.fromList
             in
             if List.any (\candidate -> Set.member candidate rootsSet) (pathToCandidateModules path) then
@@ -567,17 +567,7 @@ pathToCandidateModules path =
         suffixes =
             List.indexedMap (\i _ -> List.drop i withoutExt) withoutExt
     in
-    List.filter (List.all isModuleSegment) suffixes
-
-
-isModuleSegment : String -> Bool
-isModuleSegment segment =
-    case String.toList segment of
-        first :: _ ->
-            Char.isUpper first
-
-        [] ->
-            False
+    List.filter (List.all ModuleNameExtra.isSegment) suffixes
 
 
 keepReachable :
@@ -593,13 +583,13 @@ keepReachable maybeExposed modules =
             let
                 roots : List ModuleName
                 roots =
-                    List.map (String.split ".") exposedDotted
+                    List.map ModuleNameExtra.fromDotted exposedDotted
 
                 missing : List String
                 missing =
                     roots
                         |> List.filter (\root -> not (Dict.member root modules))
-                        |> List.map (String.join ".")
+                        |> List.map ModuleNameExtra.toString
             in
             case missing of
                 first :: rest ->
@@ -668,7 +658,7 @@ tablesToString paths tables =
         pathFor : ModuleName -> String
         pathFor moduleName =
             Dict.get moduleName paths
-                |> Maybe.withDefault (String.join "." moduleName)
+                |> Maybe.withDefault (ModuleNameExtra.toString moduleName)
 
         lines : List String
         lines =

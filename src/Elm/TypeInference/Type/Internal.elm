@@ -20,7 +20,6 @@ module Elm.TypeInference.Type.Internal exposing
     )
 
 import Dict exposing (Dict)
-import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))

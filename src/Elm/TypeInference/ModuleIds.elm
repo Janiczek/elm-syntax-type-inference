@@ -8,7 +8,6 @@ module Elm.TypeInference.ModuleIds exposing
     , getId
     , getIdByDotted
     , getName
-    , getNameForDisplay
     , intern
     , listId
     , mathMatrix4Id
@@ -131,8 +130,9 @@ mathMatrix4Id =
 
 empty : Mapping
 empty =
-    { byDotted =
-        Dict.fromList
+    let
+        predefined : List ( String, ModuleId )
+        predefined =
             [ ( "Basics", basicsId )
             , ( "List", listId )
             , ( "Maybe", maybeId )
@@ -149,24 +149,12 @@ empty =
             , ( "Math.Vector4", mathVector4Id )
             , ( "Math.Matrix4", mathMatrix4Id )
             ]
+    in
+    { byDotted = Dict.fromList predefined
     , byId =
-        Dict.fromList
-            [ ( basicsId, ( "Basics", [] ) )
-            , ( listId, ( "List", [] ) )
-            , ( maybeId, ( "Maybe", [] ) )
-            , ( resultId, ( "Result", [] ) )
-            , ( stringId, ( "String", [] ) )
-            , ( charId, ( "Char", [] ) )
-            , ( platformId, ( "Platform", [] ) )
-            , ( platformCmdId, ( "Platform", [ "Cmd" ] ) )
-            , ( platformSubId, ( "Platform", [ "Sub" ] ) )
-            , ( webGLId, ( "WebGL", [] ) )
-            , ( webGLTextureId, ( "WebGL", [ "Texture" ] ) )
-            , ( mathVector2Id, ( "Math", [ "Vector2" ] ) )
-            , ( mathVector3Id, ( "Math", [ "Vector3" ] ) )
-            , ( mathVector4Id, ( "Math", [ "Vector4" ] ) )
-            , ( mathMatrix4Id, ( "Math", [ "Matrix4" ] ) )
-            ]
+        predefined
+            |> List.map (\( dotted, id ) -> ( id, FullModuleName.fromDotted dotted ))
+            |> Dict.fromList
     , next = 15
     }
 
