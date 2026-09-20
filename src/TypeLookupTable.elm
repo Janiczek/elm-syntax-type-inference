@@ -23,10 +23,10 @@ type alias TypeLookupTable =
     Internal.TypeLookupTable
 
 
-{-| Look up the inferred type for a source range.
+{-| Look up the inferred `Type` for a source `Range`.
 
 Only exact ranges given by `Node.range` of AST nodes inside the input
-`Elm.Syntax.File`s are recorded and there is no fuzzy/overlap matching.
+`Elm.Syntax.File`s are recorded. There is no overlap matching.
 
 -}
 get : Range -> TypeLookupTable -> ( Maybe Type, TypeLookupTable )
