@@ -111,23 +111,13 @@ runInferenceWithPackage currentPackage directDependencies allDependencies files 
 
                 Ok proj0 ->
                     let
-                        ( tables, errors ) =
-                            files
-                                |> Dict.foldl
-                                    (\moduleName _ ( tablesAcc, errorsAcc, proj ) ->
-                                        case Elm.TypeInference.inferModule moduleName proj of
-                                            ( Ok table, newProj ) ->
-                                                ( Dict.insert moduleName table tablesAcc, errorsAcc, newProj )
-
-                                            ( Err err, newProj ) ->
-                                                ( tablesAcc, Dict.insert moduleName err errorsAcc, newProj )
-                                    )
-                                    ( Dict.empty, Dict.empty, proj0 )
-                                |> (\( t, e, _ ) -> ( t, e ))
+                        tablesAndErrors =
+                            Elm.TypeInference.inferModules files proj0
+                                |> Tuple.first
                     in
-                    case Dict.values errors of
+                    case Dict.values tablesAndErrors.errors of
                         [] ->
-                            Ok tables
+                            Ok tablesAndErrors.tables
 
                         err :: _ ->
                             Err (CouldntInfer err)

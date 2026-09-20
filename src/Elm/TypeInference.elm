@@ -1,7 +1,7 @@
 module Elm.TypeInference exposing
     ( dependencyEnv, DependencyEnv, Dependency, DependencyEnvOutcome(..)
     , project, Project
-    , inferModule
+    , inferModule, inferModules
     )
 
 {-| Type inference for
@@ -31,7 +31,7 @@ source code.
 Run `inferModule` for each module you want to infer types in. You'll get a
 `TypeLookupTable` back, from which you can `get` the `Type` for a given `Range`.
 
-@docs inferModule
+@docs inferModule, inferModules
 
 
 # 4. Get inferred types for a given Range
@@ -258,6 +258,44 @@ inferModule moduleName ((Project p) as proj) =
                                 , details = ModuleNotFound
                                 }
             , Project newP
+            )
+
+
+{-| Helper. Run `inferModule` for each of the given modules, collecting
+successes and errors into separate Dicts.
+-}
+inferModules :
+    Dict ModuleName File
+    -> Project
+    ->
+        ( { tables : Dict ModuleName TypeLookupTable
+          , errors : Dict ModuleName Error
+          }
+        , Project
+        )
+inferModules files proj0 =
+    files
+        |> Dict.foldl
+            (\moduleName _ ( acc, proj ) ->
+                case inferModule moduleName proj of
+                    ( Ok table, newProj ) ->
+                        ( { errors = acc.errors
+                          , tables = Dict.insert moduleName table acc.tables
+                          }
+                        , newProj
+                        )
+
+                    ( Err err, newProj ) ->
+                        ( { tables = acc.tables
+                          , errors = Dict.insert moduleName err acc.errors
+                          }
+                        , newProj
+                        )
+            )
+            ( { tables = Dict.empty
+              , errors = Dict.empty
+              }
+            , proj0
             )
 
 

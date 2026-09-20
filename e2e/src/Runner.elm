@@ -418,22 +418,8 @@ runInference pending =
                     }
 
                 Ok proj0 ->
-                    pending.files
-                        |> Dict.foldl
-                            (\moduleName _ ( tablesAcc, errorsAcc, proj ) ->
-                                case Elm.TypeInference.inferModule moduleName proj of
-                                    ( Ok table, newProj ) ->
-                                        ( Dict.insert moduleName table tablesAcc, errorsAcc, newProj )
-
-                                    ( Err err, newProj ) ->
-                                        ( tablesAcc, Dict.insert moduleName err errorsAcc, newProj )
-                            )
-                            ( Dict.empty, Dict.empty, proj0 )
-                        |> (\( tables, errors, _ ) ->
-                                { tables = tables
-                                , errors = errors
-                                }
-                           )
+                    Elm.TypeInference.inferModules pending.files proj0
+                        |> Tuple.first
 
         summary : Encode.Value
         summary =
