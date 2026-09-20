@@ -28,12 +28,14 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type exposing (VarName)
 import Set exposing (Set)
 
 
 type alias ModuleIndex =
     { moduleName : FullModuleName
+    , moduleId : ModuleId
     , dottedModuleName : String
     , declaredValues : Set VarName
     , declaredTypes : Set VarName
@@ -43,7 +45,7 @@ type alias ModuleIndex =
     , recordAliases : Set VarName
     , infixes : Dict VarName VarName
     , imports : List ImportIndex
-    , importsByAlias : Dict String (List FullModuleName)
+    , importsByAlias : Dict String (List ModuleId)
     , unaliasedImports : Set String
     , effectCommand : Maybe VarName
     , effectSubscription : Maybe VarName
@@ -52,6 +54,7 @@ type alias ModuleIndex =
 
 type alias ImportIndex =
     { moduleName : FullModuleName
+    , moduleId : ModuleId
     , dottedModuleName : String
     , alias_ : Maybe String
     , exposing_ : ExposingIndex
@@ -70,8 +73,8 @@ type ExposingIndex
         }
 
 
-fromFile : File -> ModuleIndex
-fromFile file =
+fromFile : ModuleIds.Mapping -> File -> ( ModuleIndex, ModuleIds.Mapping )
+fromFile moduleMapping file =
     let
         moduleName : FullModuleName
         moduleName =
@@ -79,6 +82,9 @@ fromFile file =
                 |> Node.value
                 |> Module.moduleName
                 |> FullModuleName.fromModuleName_
+
+        ( moduleId, moduleMapping1 ) =
+            ModuleIds.intern moduleName moduleMapping
 
         exposing_ : Exposing
         exposing_ =
@@ -96,38 +102,50 @@ fromFile file =
         ( effectCommand, effectSubscription ) =
             effectTypes file
 
-        imports : List ImportIndex
-        imports =
-            List.map (Node.value >> importIndex) file.imports
+        ( imports, moduleMapping2 ) =
+            List.foldl
+                (\importNode ( acc, accModuleMapping ) ->
+                    let
+                        ( importIndex_, newModuleMapping ) =
+                            importIndex accModuleMapping (Node.value importNode)
+                    in
+                    ( importIndex_ :: acc, newModuleMapping )
+                )
+                ( [], moduleMapping1 )
+                file.imports
+                |> (\( reversed, finalModuleMapping ) -> ( List.reverse reversed, finalModuleMapping ))
     in
-    { moduleName = moduleName
-    , dottedModuleName = FullModuleName.toString moduleName
-    , declaredValues =
-        decls.values
-            |> (if effectCommand /= Nothing then
-                    Set.insert effectCommandVar
+    ( { moduleName = moduleName
+      , moduleId = moduleId
+      , dottedModuleName = FullModuleName.toString moduleName
+      , declaredValues =
+            decls.values
+                |> (if effectCommand /= Nothing then
+                        Set.insert effectCommandVar
 
-                else
-                    identity
-               )
-            |> (if effectSubscription /= Nothing then
-                    Set.insert effectSubscriptionVar
+                    else
+                        identity
+                   )
+                |> (if effectSubscription /= Nothing then
+                        Set.insert effectSubscriptionVar
 
-                else
-                    identity
-               )
-    , declaredTypes = decls.types
-    , exposedValues = exposedValues exposing_ decls
-    , exposedTypes = exposedTypes exposing_ decls
-    , unionConstructors = decls.unionConstructors
-    , recordAliases = decls.recordAliases
-    , infixes = decls.infixes
-    , imports = imports
-    , importsByAlias = importsByAlias imports
-    , unaliasedImports = unaliasedImports imports
-    , effectCommand = effectCommand
-    , effectSubscription = effectSubscription
-    }
+                    else
+                        identity
+                   )
+      , declaredTypes = decls.types
+      , exposedValues = exposedValues exposing_ decls
+      , exposedTypes = exposedTypes exposing_ decls
+      , unionConstructors = decls.unionConstructors
+      , recordAliases = decls.recordAliases
+      , infixes = decls.infixes
+      , imports = imports
+      , importsByAlias = importsByAlias imports
+      , unaliasedImports = unaliasedImports imports
+      , effectCommand = effectCommand
+      , effectSubscription = effectSubscription
+      }
+    , moduleMapping2
+    )
 
 
 {-| Magic value names introduced by `effect module` headers.
@@ -358,80 +376,86 @@ exposedTypes exposing_ decls =
 -- IMPORTS
 
 
-importIndex : Elm.Syntax.Import.Import -> ImportIndex
-importIndex import_ =
+importIndex : ModuleIds.Mapping -> Elm.Syntax.Import.Import -> ( ImportIndex, ModuleIds.Mapping )
+importIndex moduleMapping import_ =
     let
         moduleName : FullModuleName
         moduleName =
             FullModuleName.fromModuleName_ (Node.value import_.moduleName)
+
+        ( moduleId, moduleMapping1 ) =
+            ModuleIds.intern moduleName moduleMapping
     in
-    { moduleName = moduleName
-    , dottedModuleName = FullModuleName.toString moduleName
-    , alias_ =
-        case Maybe.map Node.value import_.moduleAlias of
-            Just [ single ] ->
-                Just single
+    ( { moduleName = moduleName
+      , moduleId = moduleId
+      , dottedModuleName = FullModuleName.toString moduleName
+      , alias_ =
+            case Maybe.map Node.value import_.moduleAlias of
+                Just [ single ] ->
+                    Just single
 
-            _ ->
-                Nothing
-    , exposing_ =
-        case Maybe.map Node.value import_.exposingList of
-            Nothing ->
-                ExposesNothing
+                _ ->
+                    Nothing
+      , exposing_ =
+            case Maybe.map Node.value import_.exposingList of
+                Nothing ->
+                    ExposesNothing
 
-            Just (All _) ->
-                ExposesAll
+                Just (All _) ->
+                    ExposesAll
 
-            Just (Explicit exposedNodes) ->
-                ExposesExplicit <|
-                    List.foldl
-                        (\exposedNode acc ->
-                            case Node.value exposedNode of
-                                Exposing.FunctionExpose fn ->
-                                    { values = Set.insert fn acc.values
-                                    , types = acc.types
-                                    , hasOpenedUnion = acc.hasOpenedUnion
-                                    , openTypes = acc.openTypes
-                                    , opaqueTypes = acc.opaqueTypes
-                                    }
+                Just (Explicit exposedNodes) ->
+                    ExposesExplicit <|
+                        List.foldl
+                            (\exposedNode acc ->
+                                case Node.value exposedNode of
+                                    Exposing.FunctionExpose fn ->
+                                        { values = Set.insert fn acc.values
+                                        , types = acc.types
+                                        , hasOpenedUnion = acc.hasOpenedUnion
+                                        , openTypes = acc.openTypes
+                                        , opaqueTypes = acc.opaqueTypes
+                                        }
 
-                                Exposing.InfixExpose op ->
-                                    { values = Set.insert op acc.values
-                                    , types = acc.types
-                                    , hasOpenedUnion = acc.hasOpenedUnion
-                                    , openTypes = acc.openTypes
-                                    , opaqueTypes = acc.opaqueTypes
-                                    }
+                                    Exposing.InfixExpose op ->
+                                        { values = Set.insert op acc.values
+                                        , types = acc.types
+                                        , hasOpenedUnion = acc.hasOpenedUnion
+                                        , openTypes = acc.openTypes
+                                        , opaqueTypes = acc.opaqueTypes
+                                        }
 
-                                Exposing.TypeOrAliasExpose name ->
-                                    { values = acc.values
-                                    , types = Set.insert name acc.types
-                                    , hasOpenedUnion = acc.hasOpenedUnion
-                                    , openTypes = acc.openTypes
-                                    , opaqueTypes = Set.insert name acc.opaqueTypes
-                                    }
+                                    Exposing.TypeOrAliasExpose name ->
+                                        { values = acc.values
+                                        , types = Set.insert name acc.types
+                                        , hasOpenedUnion = acc.hasOpenedUnion
+                                        , openTypes = acc.openTypes
+                                        , opaqueTypes = Set.insert name acc.opaqueTypes
+                                        }
 
-                                Exposing.TypeExpose exposedType ->
-                                    { values = acc.values
-                                    , types = Set.insert exposedType.name acc.types
-                                    , hasOpenedUnion = acc.hasOpenedUnion || exposedType.open /= Nothing
-                                    , openTypes =
-                                        if exposedType.open /= Nothing then
-                                            Set.insert exposedType.name acc.openTypes
+                                    Exposing.TypeExpose exposedType ->
+                                        { values = acc.values
+                                        , types = Set.insert exposedType.name acc.types
+                                        , hasOpenedUnion = acc.hasOpenedUnion || exposedType.open /= Nothing
+                                        , openTypes =
+                                            if exposedType.open /= Nothing then
+                                                Set.insert exposedType.name acc.openTypes
 
-                                        else
-                                            acc.openTypes
-                                    , opaqueTypes = acc.opaqueTypes
-                                    }
-                        )
-                        { values = Set.empty
-                        , types = Set.empty
-                        , hasOpenedUnion = False
-                        , openTypes = Set.empty
-                        , opaqueTypes = Set.empty
-                        }
-                        exposedNodes
-    }
+                                            else
+                                                acc.openTypes
+                                        , opaqueTypes = acc.opaqueTypes
+                                        }
+                            )
+                            { values = Set.empty
+                            , types = Set.empty
+                            , hasOpenedUnion = False
+                            , openTypes = Set.empty
+                            , opaqueTypes = Set.empty
+                            }
+                            exposedNodes
+      }
+    , moduleMapping1
+    )
 
 
 {-| Could this import bring this value/operator into unqualified scope?
@@ -527,7 +551,7 @@ couldBeConstructorName varName =
 
 {-| Alias -> modules imported under it, in import order.
 -}
-importsByAlias : List ImportIndex -> Dict String (List FullModuleName)
+importsByAlias : List ImportIndex -> Dict String (List ModuleId)
 importsByAlias imports =
     List.foldl
         (\import_ acc ->
@@ -535,7 +559,7 @@ importsByAlias imports =
                 Just alias ->
                     Dict.update alias
                         (\maybeModules ->
-                            Just (Maybe.withDefault [] maybeModules ++ [ import_.moduleName ])
+                            Just (Maybe.withDefault [] maybeModules ++ [ import_.moduleId ])
                         )
                         acc
 
@@ -565,7 +589,7 @@ unaliasedImports imports =
 
 {-| Every module aliased to the given name, in import order.
 -}
-modulesWithAlias : ModuleIndex -> String -> List FullModuleName
+modulesWithAlias : ModuleIndex -> String -> List ModuleId
 modulesWithAlias index wantedAlias =
     Dict.get wantedAlias index.importsByAlias
         |> Maybe.withDefault []

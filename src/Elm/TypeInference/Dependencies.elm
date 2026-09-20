@@ -12,9 +12,9 @@ module Elm.TypeInference.Dependencies exposing
 
 import Dict exposing (Dict)
 import Elm.Docs
-import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Type
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
@@ -44,11 +44,11 @@ fromList packages =
 {-| Resolves a module name from docs.json to its package.
 -}
 type alias Resolver =
-    String -> Result ErrorDetails ( PackageName, FullModuleName )
+    String -> Result ErrorDetails ( PackageName, ModuleId )
 
 
-resolverFor : Dependencies -> PackageName -> Resolver
-resolverFor deps selfPackage =
+resolverFor : ModuleIds.Mapping -> Dependencies -> PackageName -> Resolver
+resolverFor moduleMapping deps selfPackage =
     let
         searchOrder : List PackageName
         searchOrder =
@@ -74,14 +74,23 @@ resolverFor deps selfPackage =
                             |> Maybe.withDefault acc
                     )
                     Dict.empty
+
+        moduleIdOf : String -> ModuleId
+        moduleIdOf dotted =
+            if String.isEmpty dotted then
+                -1
+
+            else
+                ModuleIds.getIdByDotted dotted moduleMapping
+                    |> Maybe.withDefault -1
     in
     \moduleNameStr ->
         case Dict.get moduleNameStr ownersByModule |> Maybe.withDefault [] of
             [] ->
-                Ok ( selfPackage, FullModuleName.fromDotted moduleNameStr )
+                Ok ( selfPackage, moduleIdOf moduleNameStr )
 
             [ owner ] ->
-                Ok ( owner, FullModuleName.fromDotted moduleNameStr )
+                Ok ( owner, moduleIdOf moduleNameStr )
 
             matches ->
                 Err <|
@@ -145,15 +154,15 @@ fromDocsType resolver type_ =
                     splitLastDot qualifiedName
             in
             Result.andThen
-                (\( package, fullModuleName ) ->
+                (\( package, moduleId ) ->
                     Result.Extra.combineMap (fromDocsType resolver) args
                         |> Result.map
                             (\argTypes ->
-                                TypeI.collapsePrimitive package fullModuleName typeName argTypes
+                                TypeI.collapsePrimitive package moduleId typeName argTypes
                                     |> Maybe.withDefault
                                         (UserDefinedType
                                             { package = package
-                                            , moduleName = fullModuleName
+                                            , moduleId = moduleId
                                             , name = typeName
                                             , args = argTypes
                                             }
@@ -184,44 +193,47 @@ fromDocsFields resolver fields =
         fields
 
 
-register : Dependencies -> StateM (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
-register deps =
+register : ModuleIds.Mapping -> Dependencies -> StateM (Dict ( PackageName, ModuleId, VarName ) TypeAlias)
+register moduleMapping deps =
     deps
         |> Dict.toList
-        |> State.traverse (\( pkgName, pkg ) -> registerPackage deps pkgName pkg)
+        |> State.traverse (\( pkgName, pkg ) -> registerPackage moduleMapping deps pkgName pkg)
         |> State.map (List.foldl Dict.union Dict.empty)
 
 
 registerPackage :
-    Dependencies
+    ModuleIds.Mapping
+    -> Dependencies
     -> PackageName
     -> DependencyPackage
-    -> StateM (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
-registerPackage deps pkgName pkg =
+    -> StateM (Dict ( PackageName, ModuleId, VarName ) TypeAlias)
+registerPackage moduleMapping deps pkgName pkg =
     let
         resolver : Resolver
         resolver =
-            resolverFor deps pkgName
+            resolverFor moduleMapping deps pkgName
     in
     pkg.modules
-        |> State.traverse (registerModule pkgName resolver)
+        |> State.traverse (registerModule moduleMapping pkgName resolver)
         |> State.map (List.foldl Dict.union Dict.empty)
 
 
 registerModule :
-    PackageName
+    ModuleIds.Mapping
+    -> PackageName
     -> Resolver
     -> Elm.Docs.Module
-    -> StateM (Dict ( PackageName, FullModuleName, VarName ) TypeAlias)
-registerModule pkgName resolver mod =
+    -> StateM (Dict ( PackageName, ModuleId, VarName ) TypeAlias)
+registerModule moduleMapping pkgName resolver mod =
     let
-        fullModuleName : FullModuleName
-        fullModuleName =
-            FullModuleName.fromDotted mod.name
+        moduleId : ModuleId
+        moduleId =
+            ModuleIds.getIdByDotted mod.name moduleMapping
+                |> Maybe.withDefault -1
 
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = FullModuleName.toModuleName fullModuleName
+            { moduleName = String.split "." mod.name
             , declarationNames = []
             , details = details
             }
@@ -229,22 +241,22 @@ registerModule pkgName resolver mod =
         addBinding : VarName -> Elm.Type.Type -> StateM ()
         addBinding name tipe =
             State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <| \monoType ->
-            State.addGlobalBinding ( pkgName, fullModuleName, name ) (TypeI.closeOver monoType)
+            State.addGlobalBinding ( pkgName, moduleId, name ) (TypeI.closeOver monoType)
     in
     State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
     State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
-    State.do (State.traverse (registerUnion pkgName fullModuleName resolver) mod.unions) <| \_ ->
+    State.do (State.traverse (registerUnion pkgName moduleId mod.name resolver) mod.unions) <| \_ ->
     mod.aliases
-        |> State.traverse (registerAlias pkgName fullModuleName resolver)
+        |> State.traverse (registerAlias pkgName moduleId mod.name resolver)
         |> State.map (List.filterMap identity >> Dict.fromList)
 
 
-registerUnion : PackageName -> FullModuleName -> Resolver -> Elm.Docs.Union -> StateM ()
-registerUnion pkgName fullModuleName resolver union =
+registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> StateM ()
+registerUnion pkgName moduleId dottedModuleName resolver union =
     let
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = FullModuleName.toModuleName fullModuleName
+            { moduleName = String.split "." dottedModuleName
             , declarationNames = []
             , details = details
             }
@@ -257,11 +269,11 @@ registerUnion pkgName fullModuleName resolver union =
         resultType =
             -- We later expect eg. Bools in IfBlock conditions instead of
             -- UserDefinedType "Bool"s, so let's collapse here
-            TypeI.collapsePrimitive pkgName fullModuleName union.name args
+            TypeI.collapsePrimitive pkgName moduleId union.name args
                 |> Maybe.withDefault
                     (UserDefinedType
                         { package = pkgName
-                        , moduleName = fullModuleName
+                        , moduleId = moduleId
                         , name = union.name
                         , args = args
                         }
@@ -277,7 +289,7 @@ registerUnion pkgName fullModuleName resolver union =
                         argTypes
                             |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
                 in
-                State.addGlobalBinding ( pkgName, fullModuleName, ctorName ) (TypeI.closeOver ctorType)
+                State.addGlobalBinding ( pkgName, moduleId, ctorName ) (TypeI.closeOver ctorType)
             )
         |> State.map (always ())
 
@@ -286,15 +298,16 @@ registerUnion pkgName fullModuleName resolver union =
 -}
 registerAlias :
     PackageName
-    -> FullModuleName
+    -> ModuleId
+    -> String
     -> Resolver
     -> Elm.Docs.Alias
-    -> StateM (Maybe ( ( PackageName, FullModuleName, VarName ), TypeAlias ))
-registerAlias pkgName fullModuleName resolver alias_ =
+    -> StateM (Maybe ( ( PackageName, ModuleId, VarName ), TypeAlias ))
+registerAlias pkgName moduleId dottedModuleName resolver alias_ =
     let
         toError : ErrorDetails -> Error
         toError details =
-            { moduleName = FullModuleName.toModuleName fullModuleName
+            { moduleName = String.split "." dottedModuleName
             , declarationNames = []
             , details = details
             }
@@ -314,7 +327,7 @@ registerAlias pkgName fullModuleName resolver alias_ =
                                 aliasMono
                                 resolvedFields
                     in
-                    State.addGlobalBinding ( pkgName, fullModuleName, alias_.name ) (TypeI.closeOver ctorType)
+                    State.addGlobalBinding ( pkgName, moduleId, alias_.name ) (TypeI.closeOver ctorType)
 
                 _ ->
                     State.pure ()
@@ -322,6 +335,6 @@ registerAlias pkgName fullModuleName resolver alias_ =
     State.do registerConstructor <| \() ->
     State.pure <|
         Just
-            ( ( pkgName, fullModuleName, alias_.name )
+            ( ( pkgName, moduleId, alias_.name )
             , { args = List.map TypeVar.parse alias_.args, type_ = aliasMono }
             )

@@ -1,8 +1,8 @@
 module Elm.TypeInference.ImplicitImports exposing
     ( elmCorePackage
-    , unaliasModule
-    , implicitValueHome
-    , moduleExposingType
+    , unaliasModuleId
+    , implicitValueHomeId
+    , moduleExposingTypeId
     , isImplicitlyImportedModule
     )
 
@@ -27,15 +27,15 @@ We don't list all of `Basics`' functions; `docs.json` supplies that, so any
 otherwise-unknown unqualified value can only come from `Basics`.
 
 @docs elmCorePackage
-@docs unaliasModule
-@docs implicitValueHome
-@docs moduleExposingType
+@docs unaliasModuleId
+@docs implicitValueHomeId
+@docs moduleExposingTypeId
 @docs isImplicitlyImportedModule
 
 -}
 
-import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type exposing (VarName)
 
 
@@ -44,19 +44,20 @@ elmCorePackage =
     "elm/core"
 
 
-{-| `Cmd` -> `Platform.Cmd`, `Sub` -> `Platform.Sub`
+{-| `Cmd` -> `Platform.Cmd`, `Sub` -> `Platform.Sub`.
 
 Only these two implicit imports use an alias.
+Module names are interned `Int`s: stable ids, no string building on the hot path.
 
 -}
-unaliasModule : String -> Maybe FullModuleName
-unaliasModule singleSegmentAlias =
+unaliasModuleId : String -> Maybe ModuleId
+unaliasModuleId singleSegmentAlias =
     case singleSegmentAlias of
         "Cmd" ->
-            Just (FullModuleName.fromDotted "Platform.Cmd")
+            Just ModuleIds.platformCmdId
 
         "Sub" ->
-            Just (FullModuleName.fromDotted "Platform.Sub")
+            Just ModuleIds.platformSubId
 
         _ ->
             Nothing
@@ -77,73 +78,78 @@ so they skip the `Basics` probe.
      "::"     --> List
      "Just"   --> Maybe
 
+Module names are interned `Int`s: stable ids, no string building on the hot path.
+
 -}
-implicitValueHome : VarName -> FullModuleName
-implicitValueHome varName =
+implicitValueHomeId : VarName -> ModuleId
+implicitValueHomeId varName =
     case varName of
         "::" ->
-            FullModuleName.fromDotted "List"
+            ModuleIds.listId
 
         "Just" ->
-            FullModuleName.fromDotted "Maybe"
+            ModuleIds.maybeId
 
         "Nothing" ->
-            FullModuleName.fromDotted "Maybe"
+            ModuleIds.maybeId
 
         "Ok" ->
-            FullModuleName.fromDotted "Result"
+            ModuleIds.resultId
 
         "Err" ->
-            FullModuleName.fromDotted "Result"
+            ModuleIds.resultId
 
         _ ->
-            FullModuleName.fromDotted "Basics"
+            ModuleIds.basicsId
 
 
 {-| Which implicit module exposes this type unqualified?
 (`Tuple` and `Debug` don't expose anything.)
+
+Module names are interned `Int`s: stable ids, no string building on the hot path.
+
 -}
-moduleExposingType : String -> Maybe FullModuleName
-moduleExposingType typeName =
+moduleExposingTypeId : String -> Maybe ModuleId
+moduleExposingTypeId typeName =
     case typeName of
         "Int" ->
-            Just (FullModuleName.fromDotted "Basics")
+            Just ModuleIds.basicsId
 
         "Float" ->
-            Just (FullModuleName.fromDotted "Basics")
+            Just ModuleIds.basicsId
 
         "Bool" ->
-            Just (FullModuleName.fromDotted "Basics")
+            Just ModuleIds.basicsId
 
         "Never" ->
-            Just (FullModuleName.fromDotted "Basics")
+            Just ModuleIds.basicsId
 
         "Order" ->
-            Just (FullModuleName.fromDotted "Basics")
+            Just ModuleIds.basicsId
 
         "List" ->
-            Just (FullModuleName.fromDotted "List")
+            Just ModuleIds.listId
 
         "Maybe" ->
-            Just (FullModuleName.fromDotted "Maybe")
+            Just ModuleIds.maybeId
 
         "Result" ->
-            Just (FullModuleName.fromDotted "Result")
+            Just ModuleIds.resultId
 
         "String" ->
-            Just (FullModuleName.fromDotted "String")
+            Just ModuleIds.stringId
 
         "Char" ->
-            Just (FullModuleName.fromDotted "Char")
+            Just ModuleIds.charId
 
         "Program" ->
-            Just (FullModuleName.fromDotted "Platform")
+            Just ModuleIds.platformId
 
         "Cmd" ->
-            Just (FullModuleName.fromDotted "Platform.Cmd")
+            Just ModuleIds.platformCmdId
 
         "Sub" ->
-            Just (FullModuleName.fromDotted "Platform.Sub")
+            Just ModuleIds.platformSubId
 
         _ ->
             Nothing

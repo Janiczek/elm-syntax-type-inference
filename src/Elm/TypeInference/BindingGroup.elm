@@ -115,7 +115,7 @@ checkOne cfg member =
                 if shaderSlotsTooGeneral annoMono finalMono then
                     let
                         ( pubAnno, pubFinal ) =
-                            TypeI.toPublicPair annoMono finalMono
+                            TypeI.toPublicPair cfg.moduleMapping annoMono finalMono
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -126,7 +126,7 @@ checkOne cfg member =
                 else if List.isEmpty (VarSet.toList (TypeI.monoTypeVars finalMono)) then
                     let
                         ( pubAnno, pubFinal ) =
-                            TypeI.toPublicPair annoMono finalMono
+                            TypeI.toPublicPair cfg.moduleMapping annoMono finalMono
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName

@@ -632,7 +632,7 @@ substituteMono store monoType =
             if isChanged flags then
                 ( UserDefinedType
                     { package = r.package
-                    , moduleName = r.moduleName
+                    , moduleId = r.moduleId
                     , name = r.name
                     , args = args_
                     }

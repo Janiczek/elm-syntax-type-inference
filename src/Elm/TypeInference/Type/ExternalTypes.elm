@@ -6,6 +6,7 @@ module Elm.TypeInference.Type.ExternalTypes exposing
     , vec4
     )
 
+import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType)
 
 
@@ -13,7 +14,7 @@ vec2 : MonoType
 vec2 =
     TypeI.external
         "elm-explorations/linear-algebra"
-        ( "Math", [ "Vector2" ] )
+        ModuleIds.mathVector2Id
         "Vec2"
 
 
@@ -21,7 +22,7 @@ vec3 : MonoType
 vec3 =
     TypeI.external
         "elm-explorations/linear-algebra"
-        ( "Math", [ "Vector3" ] )
+        ModuleIds.mathVector3Id
         "Vec3"
 
 
@@ -29,7 +30,7 @@ vec4 : MonoType
 vec4 =
     TypeI.external
         "elm-explorations/linear-algebra"
-        ( "Math", [ "Vector4" ] )
+        ModuleIds.mathVector4Id
         "Vec4"
 
 
@@ -37,7 +38,7 @@ mat4 : MonoType
 mat4 =
     TypeI.external
         "elm-explorations/linear-algebra"
-        ( "Math", [ "Matrix4" ] )
+        ModuleIds.mathMatrix4Id
         "Mat4"
 
 
@@ -45,5 +46,5 @@ texture : MonoType
 texture =
     TypeI.external
         "elm-explorations/webgl"
-        ( "WebGL", [ "Texture" ] )
+        ModuleIds.webGLTextureId
         "Texture"

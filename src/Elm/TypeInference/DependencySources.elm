@@ -1,4 +1,4 @@
-module Elm.TypeInference.DependencySources exposing (aliases, neededPackages)
+module Elm.TypeInference.DependencySources exposing (aliases, neededPackages, referencedModules)
 
 {-| Get type alias bodies from dependency source files.
 We need the alias bodies to know if they're records or unions, for type inference later.
@@ -8,12 +8,12 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.Declaration as Declaration
 import Elm.Syntax.File exposing (File)
-import Elm.Syntax.FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error exposing (Error)
-import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
+import Elm.TypeInference.ModuleIds as ModuleIds
+import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.State exposing (GlobalKey)
 import Elm.TypeInference.Type exposing (PackageName)
@@ -25,12 +25,60 @@ import Result.Extra
 import Set exposing (Set)
 
 
-aliases : Dependencies -> Dict PackageName (List File) -> Result Error (Dict GlobalKey TypeAlias)
-aliases deps sources =
-    sources
-        |> Dict.toList
-        |> Result.Extra.combineMap (\( package, files ) -> packageAliases deps package files)
-        |> Result.map (List.foldl Dict.union Dict.empty)
+aliases : ModuleIds.Mapping -> Dependencies -> Dict PackageName (List File) -> Result Error ( Dict GlobalKey TypeAlias, ModuleIds.Mapping )
+aliases moduleMapping deps sources =
+    Dict.foldl
+        (\package files accResult ->
+            accResult
+                |> Result.andThen
+                    (\( accDict, accModuleMapping ) ->
+                        packageAliases accModuleMapping deps package files
+                            |> Result.map
+                                (\( pkgDict, newModuleMapping ) ->
+                                    ( Dict.union pkgDict accDict, newModuleMapping )
+                                )
+                    )
+        )
+        (Ok ( Dict.empty, moduleMapping ))
+        sources
+
+
+{-| Every dotted module name referenced anywhere in docs.json types.
+
+docs.json values can mention unexposed modules (e.g. `Css.pct` returns
+`Css.Internal.ExplicitLength`). We need to intern those too.
+
+-}
+referencedModules : Dependencies -> List String
+referencedModules deps =
+    let
+        allModules : List Elm.Docs.Module
+        allModules =
+            deps
+                |> Dict.values
+                |> List.ExtraExtra.fastConcatMap .modules
+
+        documented : List String
+        documented =
+            List.map .name allModules
+
+        referenced : List String
+        referenced =
+            docsModuleRefs allModules
+                |> List.map Tuple.first
+    in
+    (documented ++ referenced)
+        |> List.filter (not << String.isEmpty)
+        |> List.foldl
+            (\name ( seen, acc ) ->
+                if List.member name seen then
+                    ( seen, acc )
+
+                else
+                    ( name :: seen, name :: acc )
+            )
+            ( [], [] )
+        |> Tuple.second
 
 
 {-| Which packages' `docs.json` types use unknown modules, or types that
@@ -171,22 +219,26 @@ modulePart qualifiedName =
             [ moduleName ]
 
 
-packageAliases : Dependencies -> PackageName -> List File -> Result Error (Dict GlobalKey TypeAlias)
-packageAliases deps package files =
+packageAliases :
+    ModuleIds.Mapping
+    -> Dependencies
+    -> PackageName
+    -> List File
+    -> Result Error ( Dict GlobalKey TypeAlias, ModuleIds.Mapping )
+packageAliases moduleMapping deps package files =
     let
-        modules : Dict FullModuleName ModuleIndex
-        modules =
+        ( modules, moduleMapping1 ) =
             files
-                |> List.map
-                    (\file ->
+                |> List.foldl
+                    (\file ( acc, accModuleMapping ) ->
                         let
-                            moduleIndex : ModuleIndex
-                            moduleIndex =
-                                ModuleIndex.fromFile file
+                            ( moduleIndex, newModuleMapping ) =
+                                ModuleIndex.fromFile accModuleMapping file
                         in
-                        ( moduleIndex.moduleName, moduleIndex )
+                        ( ( moduleIndex.moduleId, moduleIndex ) :: acc, newModuleMapping )
                     )
-                |> Dict.fromList
+                    ( [], moduleMapping )
+                |> (\( reversed, finalModuleMapping ) -> ( Dict.fromList reversed, finalModuleMapping ))
 
         visiblePackages : List PackageName
         visiblePackages =
@@ -196,27 +248,27 @@ packageAliases deps package files =
         index =
             deps
                 |> Dict.filter (\name _ -> List.member name visiblePackages)
-                |> ModuleLookup.buildIndex
+                |> ModuleLookup.buildIndex moduleMapping1
+                |> Tuple.first
     in
     files
         |> Result.Extra.combineMap
             (\file ->
                 let
-                    thisModule : ModuleIndex
-                    thisModule =
-                        ModuleIndex.fromFile file
+                    ( thisModule, _ ) =
+                        ModuleIndex.fromFile moduleMapping1 file
 
                     resolver : TypeI.TypeResolver
                     resolver qualifier name =
-                        ModuleLookup.typeResolverFor index modules thisModule qualifier name
+                        ModuleLookup.typeResolverFor moduleMapping1 index modules thisModule qualifier name
                             |> Result.map
-                                (\( owner, moduleName ) ->
+                                (\( owner, moduleId ) ->
                                     ( if owner == "" then
                                         package
 
                                       else
                                         owner
-                                    , moduleName
+                                    , moduleId
                                     )
                                 )
                 in
@@ -236,7 +288,7 @@ packageAliases deps package files =
                                                 )
                                             |> Result.map
                                                 (\body ->
-                                                    ( ( package, thisModule.moduleName, Node.value alias_.name )
+                                                    ( ( package, thisModule.moduleId, Node.value alias_.name )
                                                     , { args = List.map (Node.value >> TypeVar.parse) alias_.generics
                                                       , type_ = body
                                                       }
@@ -250,4 +302,4 @@ packageAliases deps package files =
                     |> Result.Extra.combine
                     |> Result.map Dict.fromList
             )
-        |> Result.map (List.foldl Dict.union Dict.empty)
+        |> Result.map (\dicts -> ( List.foldl Dict.union Dict.empty dicts, moduleMapping1 ))

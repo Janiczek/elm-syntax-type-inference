@@ -42,6 +42,7 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, SubstitutionMap)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType, Type(..))
@@ -62,7 +63,7 @@ while a project using it might use `Char.Extra` from `elmcraft/core-extra`).
 
 -}
 type alias GlobalKey =
-    ( PackageName, FullModuleName, VarName )
+    ( PackageName, ModuleId, VarName )
 
 
 type alias State =
@@ -505,23 +506,35 @@ addGlobalBinding key type_ =
 
 {-| Look up a global name (top-level/constructor/port/dependency).
 -}
-lookupGlobalEnv : PackageName -> FullModuleName -> VarName -> StateM MonoType
-lookupGlobalEnv package moduleName var =
+lookupGlobalEnv : ModuleIds.Mapping -> PackageName -> ModuleId -> VarName -> StateM MonoType
+lookupGlobalEnv moduleMapping package moduleId var =
     do getGlobalEnv <| \env ->
-    case Dict.get ( package, moduleName, var ) env of
+    case Dict.get ( package, moduleId, var ) env of
         Nothing ->
+            let
+                moduleName : List String
+                moduleName =
+                    moduleIdToModuleName moduleMapping moduleId
+            in
             error
-                { moduleName = FullModuleName.toModuleName moduleName
+                { moduleName = moduleName
                 , declarationNames = []
                 , details =
                     VarNotFound
-                        { usedIn = FullModuleName.toModuleName moduleName
+                        { usedIn = moduleName
                         , varName = var
                         }
                 }
 
         Just type_ ->
             instantiate type_
+
+
+moduleIdToModuleName : ModuleIds.Mapping -> ModuleId -> List String
+moduleIdToModuleName moduleMapping moduleId =
+    ModuleIds.getName moduleId moduleMapping
+        |> Maybe.map FullModuleName.toModuleName
+        |> Maybe.withDefault [ "<unknown>" ]
 
 
 {-| Give a scheme's quantified variables fresh IDs.

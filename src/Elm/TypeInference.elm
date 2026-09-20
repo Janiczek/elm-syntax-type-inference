@@ -38,12 +38,13 @@ import Elm.TypeInference.DependencySources as DependencySources
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError)
 import Elm.TypeInference.Infer as Infer
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (GlobalKey, StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type as Type exposing (PackageName, Type, VarName)
+import Elm.TypeInference.Type exposing (PackageName, Type, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeResolver)
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
@@ -68,40 +69,39 @@ inferProject :
     -> { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
 inferProject currentPackage depEnv files =
     let
-        modules : List ProjectModule
-        modules =
-            files
-                |> Dict.toList
-                |> List.filterMap
-                    (\( key, file ) ->
-                        -- The caller's key is what the result is keyed by; the
-                        -- file's own `module Foo exposing (..)` line is what
-                        -- imports elsewhere refer to. They agree in practice.
-                        if FullModuleName.fromModuleName key == Nothing then
-                            Nothing
+        (DependencyEnv dep) =
+            depEnv
 
-                        else
-                            let
-                                index : ModuleIndex
-                                index =
-                                    ModuleIndex.fromFile file
-                            in
-                            Just { key = key, index = index, file = file }
-                    )
+        ( modules, moduleMapping ) =
+            Dict.foldl
+                (\key file ( acc, accModuleMapping ) ->
+                    if FullModuleName.fromModuleName key == Nothing then
+                        ( acc, accModuleMapping )
+
+                    else
+                        let
+                            ( index, newModuleMapping ) =
+                                ModuleIndex.fromFile accModuleMapping file
+                        in
+                        ( { key = key, index = index, file = file } :: acc, newModuleMapping )
+                )
+                ( [], dep.moduleMapping )
+                files
+                |> (\( reversed, finalModuleMapping ) -> ( List.reverse reversed, finalModuleMapping ))
 
         missingModuleName : Bool
         missingModuleName =
             List.length modules /= Dict.size files
 
-        byName : Dict FullModuleName ProjectModule
+        byName : Dict ModuleId ProjectModule
         byName =
             modules
-                |> List.map (\m -> ( m.index.moduleName, m ))
+                |> List.map (\m -> ( m.index.moduleId, m ))
                 |> Dict.fromList
 
-        firstPartyImports : FullModuleName -> List FullModuleName
-        firstPartyImports moduleName =
-            case Dict.get moduleName byName of
+        firstPartyImports : ModuleId -> List ModuleId
+        firstPartyImports moduleId =
+            case Dict.get moduleId byName of
                 Nothing ->
                     []
 
@@ -109,8 +109,8 @@ inferProject currentPackage depEnv files =
                     m.index.imports
                         |> List.filterMap
                             (\import_ ->
-                                if Dict.member import_.moduleName byName then
-                                    Just import_.moduleName
+                                if Dict.member import_.moduleId byName then
+                                    Just import_.moduleId
 
                                 else
                                     Nothing
@@ -140,7 +140,7 @@ inferProject currentPackage depEnv files =
                     |> List.ExtraExtra.fastConcatMap (List.filterMap (\name -> Dict.get name byName))
         in
         order
-            |> List.foldl (inferOne currentPackage depEnv)
+            |> List.foldl (inferOne currentPackage depEnv moduleMapping)
                 { tables = Dict.empty
                 , errors = Dict.empty
                 , interfaces = Dict.empty
@@ -177,6 +177,7 @@ type DependencyEnv
         { globalEnv : Dict GlobalKey TypeI.Type
         , typeAliases : Dict GlobalKey TypeAlias
         , index : ModuleLookup.Index
+        , moduleMapping : ModuleIds.Mapping
         }
 
 
@@ -217,15 +218,32 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
                 |> List.filter (\pkg -> List.member pkg.name directDependencies)
                 |> Dependencies.fromList
 
+        depModuleNames : List FullModuleName
+        depModuleNames =
+            (allDependencies
+                |> List.ExtraExtra.fastConcatMap (\pkg -> List.map (\m -> FullModuleName.fromDotted m.name) pkg.modules)
+            )
+                ++ (DependencySources.referencedModules deps
+                        |> List.map FullModuleName.fromDotted
+                   )
+
+        moduleMapping0 : ModuleIds.Mapping
+        moduleMapping0 =
+            List.foldl (\name acc -> ModuleIds.intern name acc |> Tuple.second) ModuleIds.empty depModuleNames
+
+        ( depIndex, moduleMapping1 ) =
+            ModuleLookup.buildIndex moduleMapping0 directVisibleDeps
+
         baseEnv : Result Error DependencyEnv
         baseEnv =
-            (State.do (Dependencies.register deps) <| \depAliases ->
+            (State.do (Dependencies.register moduleMapping1 deps) <| \depAliases ->
             State.do State.getGlobalEnv <| \globalEnv ->
             State.pure <|
                 DependencyEnv
                     { globalEnv = globalEnv
                     , typeAliases = depAliases
-                    , index = ModuleLookup.buildIndex directVisibleDeps
+                    , index = depIndex
+                    , moduleMapping = moduleMapping1
                     }
             )
                 |> State.run State.empty
@@ -252,13 +270,18 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
                     NeedSources { neededPackages = needed }
 
                 [] ->
-                    case DependencySources.aliases deps sourcesToResolveAmbiguity of
+                    case DependencySources.aliases env.moduleMapping deps sourcesToResolveAmbiguity of
                         Err err ->
                             Failed err
 
-                        Ok sourceAliases ->
+                        Ok ( sourceAliases, moduleMapping2 ) ->
                             Ready
-                                (DependencyEnv { env | typeAliases = Dict.union sourceAliases env.typeAliases })
+                                (DependencyEnv
+                                    { env
+                                        | typeAliases = Dict.union sourceAliases env.typeAliases
+                                        , moduleMapping = moduleMapping2
+                                    }
+                                )
 
 
 reachablePackages : Dependencies -> List PackageName -> Set PackageName
@@ -308,39 +331,39 @@ type alias ProjectModule =
 type alias ProjectAcc =
     { tables : Dict ModuleName TypeLookupTable
     , errors : Dict ModuleName Error
-    , interfaces : Dict FullModuleName ModuleInterface
+    , interfaces : Dict ModuleId ModuleInterface
     }
 
 
-inferOne : Maybe PackageName -> DependencyEnv -> ProjectModule -> ProjectAcc -> ProjectAcc
-inferOne currentPackage depEnv m acc =
+inferOne : Maybe PackageName -> DependencyEnv -> ModuleIds.Mapping -> ProjectModule -> ProjectAcc -> ProjectAcc
+inferOne currentPackage depEnv moduleMapping m acc =
     let
-        imported : Dict FullModuleName ModuleInterface
+        imported : Dict ModuleId ModuleInterface
         imported =
             m.index.imports
                 |> List.foldl
                     (\import_ inner ->
-                        case Dict.get import_.moduleName acc.interfaces of
+                        case Dict.get import_.moduleId acc.interfaces of
                             Just interface ->
-                                Dict.insert import_.moduleName interface inner
+                                Dict.insert import_.moduleId interface inner
 
                             Nothing ->
                                 inner
                     )
                     Dict.empty
     in
-    case inferModule_ currentPackage depEnv imported m.file of
+    case inferModule_ currentPackage depEnv moduleMapping imported m.file of
         Ok { table, interface } ->
             { acc
                 | tables = Dict.insert m.key table acc.tables
-                , interfaces = Dict.insert m.index.moduleName interface acc.interfaces
+                , interfaces = Dict.insert m.index.moduleId interface acc.interfaces
             }
 
         Err err ->
             { acc
                 | errors = Dict.insert m.key err acc.errors
                 , interfaces =
-                    Dict.insert m.index.moduleName
+                    Dict.insert m.index.moduleId
                         { moduleIndex = m.index
                         , values = Dict.empty
                         , typeAliases = Dict.empty
@@ -358,9 +381,10 @@ inferOne currentPackage depEnv m acc =
 -}
 type alias ModuleCtx =
     { thisIndex : ModuleIndex
-    , modules : Dict FullModuleName ModuleIndex
+    , modules : Dict ModuleId ModuleIndex
     , resolver : TypeResolver
     , index : ModuleLookup.Index
+    , moduleMapping : ModuleIds.Mapping
     , -- what this module passes on to its own importers
       inheritedAliases : Dict GlobalKey TypeAlias
     , depTypeAliases : Dict GlobalKey TypeAlias
@@ -380,18 +404,17 @@ allowsKernel currentPackage =
                 || String.startsWith "elm-explorations/" name
 
 
-moduleCtx : Maybe PackageName -> DependencyEnv -> Dict FullModuleName ModuleInterface -> File -> ModuleCtx
-moduleCtx currentPackage (DependencyEnv depEnv) importedInterfaces file =
+moduleCtx : Maybe PackageName -> DependencyEnv -> ModuleIds.Mapping -> Dict ModuleId ModuleInterface -> File -> ModuleCtx
+moduleCtx currentPackage (DependencyEnv depEnv) moduleMapping importedInterfaces file =
     let
-        thisIndex : ModuleIndex
-        thisIndex =
-            ModuleIndex.fromFile file
+        ( thisIndex, _ ) =
+            ModuleIndex.fromFile moduleMapping file
 
-        modules : Dict FullModuleName ModuleIndex
+        modules : Dict ModuleId ModuleIndex
         modules =
             importedInterfaces
                 |> Dict.map (\_ interface -> interface.moduleIndex)
-                |> Dict.insert thisIndex.moduleName thisIndex
+                |> Dict.insert thisIndex.moduleId thisIndex
 
         imported :
             { inheritedAliases : Dict GlobalKey TypeAlias
@@ -399,11 +422,11 @@ moduleCtx currentPackage (DependencyEnv depEnv) importedInterfaces file =
             }
         imported =
             Dict.foldl
-                (\moduleName interface acc ->
+                (\moduleId interface acc ->
                     { inheritedAliases = Dict.union interface.typeAliases acc.inheritedAliases
                     , globalEnv =
                         Dict.foldl
-                            (\name scheme inner -> Dict.insert ( "", moduleName, name ) scheme inner)
+                            (\name scheme inner -> Dict.insert ( "", moduleId, name ) scheme inner)
                             acc.globalEnv
                             interface.values
                     }
@@ -415,8 +438,9 @@ moduleCtx currentPackage (DependencyEnv depEnv) importedInterfaces file =
     in
     { thisIndex = thisIndex
     , modules = modules
-    , resolver = ModuleLookup.typeResolverFor depEnv.index modules thisIndex
+    , resolver = ModuleLookup.typeResolverFor moduleMapping depEnv.index modules thisIndex
     , index = depEnv.index
+    , moduleMapping = moduleMapping
     , inheritedAliases = imported.inheritedAliases
     , depTypeAliases = depEnv.typeAliases
     , globalEnv = imported.globalEnv
@@ -427,14 +451,15 @@ moduleCtx currentPackage (DependencyEnv depEnv) importedInterfaces file =
 inferModule_ :
     Maybe PackageName
     -> DependencyEnv
-    -> Dict FullModuleName ModuleInterface
+    -> ModuleIds.Mapping
+    -> Dict ModuleId ModuleInterface
     -> File
     -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
-inferModule_ currentPackage depEnv importedInterfaces file =
+inferModule_ currentPackage depEnv moduleMapping importedInterfaces file =
     let
         ctx : ModuleCtx
         ctx =
-            moduleCtx currentPackage depEnv importedInterfaces file
+            moduleCtx currentPackage depEnv moduleMapping importedInterfaces file
     in
     (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
     let
@@ -494,7 +519,7 @@ moduleResult ctx outgoingAliases =
                                 let
                                     pubType : Type
                                     pubType =
-                                        TypeI.toPublicType { alreadyNormalized = False } monoType
+                                        TypeI.toPublicType ctx.moduleMapping { alreadyNormalized = False } monoType
                                 in
                                 ( Dict.insert rangeLike pubType accDict
                                 , Dict.insert key pubType accPool
@@ -508,7 +533,7 @@ moduleResult ctx outgoingAliases =
             ctx.thisIndex.exposedValues
                 |> Set.foldl
                     (\name acc ->
-                        case Dict.get ( "", ctx.thisIndex.moduleName, name ) globalEnv of
+                        case Dict.get ( "", ctx.thisIndex.moduleId, name ) globalEnv of
                             Just scheme ->
                                 Dict.insert name scheme acc
 
@@ -575,18 +600,18 @@ solveModule ctx typeAliases file =
                         -- Resolve operator aliases to the underlying functions
                         |> List.filterMap
                             (\( maybeModuleName, varName ) ->
-                                case ModuleLookup.moduleOfVar ctx.index ctx.modules ctx.thisIndex (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
-                                    Ok (Just ( "", fullModuleName )) ->
+                                case ModuleLookup.moduleOfVar ctx.moduleMapping ctx.index ctx.modules ctx.thisIndex (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
+                                    Ok (Just ( "", moduleId )) ->
                                         let
                                             ( resolvedModule, resolvedName ) =
-                                                ModuleLookup.resolveOperatorFunction ctx.modules fullModuleName varName
+                                                ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId varName
                                                     |> Result.withDefault Nothing
-                                                    |> Maybe.withDefault ( fullModuleName, varName )
+                                                    |> Maybe.withDefault ( moduleId, varName )
                                         in
                                         -- Only this module's own declarations
                                         -- are being ordered here; everything
                                         -- else is already in `globalEnv`.
-                                        if resolvedModule == ctx.thisIndex.moduleName && Set.member resolvedName nodeSet then
+                                        if resolvedModule == ctx.thisIndex.moduleId && Set.member resolvedName nodeSet then
                                             Just resolvedName
 
                                         else
@@ -607,6 +632,7 @@ solveModule ctx typeAliases file =
             , typeAliases = typeAliases
             , index = ctx.index
             , allowKernel = ctx.allowKernel
+            , moduleMapping = ctx.moduleMapping
             }
     in
     sccs
@@ -637,6 +663,10 @@ gatherTypeAliases ctx file =
         moduleName : FullModuleName
         moduleName =
             ctx.thisIndex.moduleName
+
+        moduleId : ModuleId
+        moduleId =
+            ctx.thisIndex.moduleId
     in
     file.declarations
         |> State.traverse
@@ -684,7 +714,7 @@ gatherTypeAliases ctx file =
                                             |> State.andThen
                                                 (\ctorType ->
                                                     State.addGlobalBinding
-                                                        ( "", moduleName, Node.value typeAlias.name )
+                                                        ( "", moduleId, Node.value typeAlias.name )
                                                         (TypeI.closeOver ctorType)
                                                 )
 
@@ -695,7 +725,7 @@ gatherTypeAliases ctx file =
                         State.do (registerConstructor type__) <| \() ->
                         State.pure <|
                             Just
-                                ( ( "", moduleName, Node.value typeAlias.name )
+                                ( ( "", moduleId, Node.value typeAlias.name )
                                 , { args = List.map (Node.value >> TypeVar.parse) typeAlias.generics
                                   , type_ = type__
                                   }
@@ -714,10 +744,10 @@ registerConstructorsAndPorts ctx file =
             (\declNode ->
                 case Node.value declNode of
                     Declaration.CustomTypeDeclaration customType ->
-                        registerCustomType ctx.resolver ctx.thisIndex.moduleName customType
+                        registerCustomType ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName customType
 
                     Declaration.PortDeclaration sig ->
-                        registerPort ctx.resolver ctx.thisIndex.moduleName sig
+                        registerPort ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName sig
 
                     _ ->
                         State.pure ()
@@ -727,10 +757,11 @@ registerConstructorsAndPorts ctx file =
 
 registerCustomType :
     TypeResolver
+    -> ModuleId
     -> FullModuleName
     -> SyntaxType.Type
     -> StateM ()
-registerCustomType resolver moduleName customType =
+registerCustomType resolver moduleId moduleName customType =
     let
         typeName : String
         typeName =
@@ -747,7 +778,7 @@ registerCustomType resolver moduleName customType =
         resultType =
             UserDefinedType
                 { package = ""
-                , moduleName = moduleName
+                , moduleId = moduleId
                 , name = typeName
                 , args =
                     customType.generics
@@ -785,15 +816,15 @@ registerCustomType resolver moduleName customType =
                                 ctorType =
                                     List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
                             in
-                            State.addGlobalBinding ( "", moduleName, ctorName ) (TypeI.closeOver ctorType)
+                            State.addGlobalBinding ( "", moduleId, ctorName ) (TypeI.closeOver ctorType)
                         )
                     |> Result.Extra.merge
             )
         |> State.map (always ())
 
 
-registerPort : TypeResolver -> FullModuleName -> Signature -> StateM ()
-registerPort resolver moduleName sig =
+registerPort : TypeResolver -> ModuleId -> FullModuleName -> Signature -> StateM ()
+registerPort resolver moduleId moduleName sig =
     let
         toError : ErrorDetails -> Error
         toError details =
@@ -809,7 +840,7 @@ registerPort resolver moduleName sig =
         |> Result.map
             (\t ->
                 State.addGlobalBinding
-                    ( "", moduleName, Node.value sig.name )
+                    ( "", moduleId, Node.value sig.name )
                     (TypeI.closeOver t)
             )
         |> Result.Extra.merge
@@ -849,7 +880,7 @@ registerEffectCommand ctx =
                 Err _ ->
                     State.pure ()
 
-                Ok ( cmdPackage, cmdModule ) ->
+                Ok ( cmdPackage, cmdModuleId ) ->
                     let
                         msgVar : MonoType
                         msgVar =
@@ -861,21 +892,21 @@ registerEffectCommand ctx =
                                 { from =
                                     UserDefinedType
                                         { package = ""
-                                        , moduleName = ctx.thisIndex.moduleName
+                                        , moduleId = ctx.thisIndex.moduleId
                                         , name = myCmdName
                                         , args = [ msgVar ]
                                         }
                                 , to =
                                     UserDefinedType
                                         { package = cmdPackage
-                                        , moduleName = cmdModule
+                                        , moduleId = cmdModuleId
                                         , name = "Cmd"
                                         , args = [ msgVar ]
                                         }
                                 }
                     in
                     State.addGlobalBinding
-                        ( "", ctx.thisIndex.moduleName, ModuleIndex.effectCommandVar )
+                        ( "", ctx.thisIndex.moduleId, ModuleIndex.effectCommandVar )
                         (TypeI.closeOver magicType)
 
 
@@ -890,7 +921,7 @@ registerEffectSubscription ctx =
                 Err _ ->
                     State.pure ()
 
-                Ok ( subPackage, subModule ) ->
+                Ok ( subPackage, subModuleId ) ->
                     let
                         msgVar : MonoType
                         msgVar =
@@ -902,19 +933,19 @@ registerEffectSubscription ctx =
                                 { from =
                                     UserDefinedType
                                         { package = ""
-                                        , moduleName = ctx.thisIndex.moduleName
+                                        , moduleId = ctx.thisIndex.moduleId
                                         , name = mySubName
                                         , args = [ msgVar ]
                                         }
                                 , to =
                                     UserDefinedType
                                         { package = subPackage
-                                        , moduleName = subModule
+                                        , moduleId = subModuleId
                                         , name = "Sub"
                                         , args = [ msgVar ]
                                         }
                                 }
                     in
                     State.addGlobalBinding
-                        ( "", ctx.thisIndex.moduleName, ModuleIndex.effectSubscriptionVar )
+                        ( "", ctx.thisIndex.moduleId, ModuleIndex.effectSubscriptionVar )
                         (TypeI.closeOver magicType)

@@ -3,6 +3,7 @@ module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type exposing (PackageName, VarName)
@@ -22,13 +23,14 @@ type alias TypeAlias =
 
 
 type alias TypeAliases =
-    Dict ( PackageName, FullModuleName, VarName ) TypeAlias
+    Dict ( PackageName, ModuleId, VarName ) TypeAlias
 
 
 type alias UnifyConfig =
     { typeAliases : TypeAliases
     , moduleName : FullModuleName
     , declarationNames : List VarName
+    , moduleMapping : ModuleIds.Mapping
     }
 
 
@@ -109,7 +111,7 @@ expandAliasHelp fuel typeAliases type_ =
                 type_
 
             else
-                case Dict.get ( ut.package, ut.moduleName, ut.name ) typeAliases of
+                case Dict.get ( ut.package, ut.moduleId, ut.name ) typeAliases of
                     Nothing ->
                         type_
 
@@ -166,7 +168,7 @@ expandAliasDeepHelp fuel typeAliases type_ =
                 expandDeepChildren fuel typeAliases type_
 
             else
-                case Dict.get ( ut.package, ut.moduleName, ut.name ) typeAliases of
+                case Dict.get ( ut.package, ut.moduleId, ut.name ) typeAliases of
                     Nothing ->
                         expandDeepChildren fuel typeAliases type_
 
@@ -241,7 +243,7 @@ expandDeepChildren fuel typeAliases type_ =
         TypeI.UserDefinedType r ->
             TypeI.UserDefinedType
                 { package = r.package
-                , moduleName = r.moduleName
+                , moduleId = r.moduleId
                 , name = r.name
                 , args = List.map (expandAliasDeepHelp fuel typeAliases) r.args
                 }
@@ -314,7 +316,7 @@ substituteAliasArgs mappings type_ =
         UserDefinedType r ->
             UserDefinedType
                 { package = r.package
-                , moduleName = r.moduleName
+                , moduleId = r.moduleId
                 , name = r.name
                 , args = List.map go r.args
                 }
@@ -411,7 +413,7 @@ collapseNamedShader : TypeAliases -> MonoType -> MonoType
 collapseNamedShader typeAliases type_ =
     case type_ of
         UserDefinedType ut ->
-            case TypeI.collapsePrimitive ut.package ut.moduleName ut.name (List.map (expandAlias typeAliases) ut.args) of
+            case TypeI.collapsePrimitive ut.package ut.moduleId ut.name (List.map (expandAlias typeAliases) ut.args) of
                 Just collapsed ->
                     collapsed
 
@@ -491,7 +493,7 @@ unifyMono cfg rawT1 rawT2 =
             typeMismatch () =
                 let
                     ( pubT1, pubT2 ) =
-                        TypeI.toPublicPair
+                        TypeI.toPublicPair cfg.moduleMapping
                             (expandAliasDeep cfg.typeAliases t1)
                             (expandAliasDeep cfg.typeAliases t2)
                 in
@@ -836,7 +838,7 @@ unifyMono cfg rawT1 rawT2 =
             ( UserDefinedType ut1, UserDefinedType ut2 ) ->
                 if
                     (ut1.package /= ut2.package)
-                        || (ut1.moduleName /= ut2.moduleName)
+                        || (ut1.moduleId /= ut2.moduleId)
                         || (ut1.name /= ut2.name)
                 then
                     typeMismatch ()
@@ -896,7 +898,7 @@ bind cfg typeVar type_ =
     else if occursCheck typeVar type_ then
         let
             ( pubVar, pubType ) =
-                TypeI.toPublicPair (TypeVar typeVar) type_
+                TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
         in
         State.error
             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -915,7 +917,7 @@ bind cfg typeVar type_ =
                     Nothing ->
                         let
                             ( pubVar, pubOther ) =
-                                TypeI.toPublicPair (TypeVar typeVar) type_
+                                TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
                         in
                         State.error
                             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -967,7 +969,7 @@ bind cfg typeVar type_ =
                 else
                     let
                         ( pubVar, pubType ) =
-                            TypeI.toPublicPair (TypeVar typeVar) type_
+                            TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName

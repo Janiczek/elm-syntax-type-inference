@@ -20,6 +20,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.TypeInference exposing (Dependency, DependencyEnv)
 import Elm.TypeInference.Error as Error
+import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.Type as Type
 import Json.Decode as Decode
@@ -484,7 +485,7 @@ relevantParseFailures maybeExposed kept failed =
                         |> Dict.values
                         |> List.concatMap
                             (\{ file } ->
-                                (ModuleIndex.fromFile file).imports
+                                (ModuleIndex.fromFile ModuleIds.empty file |> Tuple.first).imports
                                     |> List.map (\import_ -> FullModuleName.toModuleName import_.moduleName)
                             )
                         |> Set.fromList
@@ -614,7 +615,7 @@ reachableFrom roots modules =
                     []
 
                 Just { file } ->
-                    (ModuleIndex.fromFile file).imports
+                    (ModuleIndex.fromFile ModuleIds.empty file |> Tuple.first).imports
                         |> List.map (\import_ -> FullModuleName.toModuleName import_.moduleName)
                         |> List.filter (\target -> Dict.member target modules)
 

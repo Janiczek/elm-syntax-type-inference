@@ -20,12 +20,13 @@ module Elm.TypeInference.Type.Internal exposing
     )
 
 import Dict exposing (Dict)
-import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type as Public exposing (PackageName, VarName)
 import Elm.TypeInference.TypeVar as TypeVar
     exposing
@@ -48,7 +49,7 @@ type alias Id =
 
 
 type alias TypeResolver =
-    List String -> String -> Result ResolverAmbiguity ( PackageName, FullModuleName )
+    List String -> String -> Result ResolverAmbiguity ( PackageName, ModuleId )
 
 
 id_ : Id -> MonoType
@@ -98,7 +99,7 @@ type MonoType
         }
     | UserDefinedType
         { package : PackageName
-        , moduleName : FullModuleName
+        , moduleId : ModuleId
         , name : VarName
         , args : List MonoType
         }
@@ -112,11 +113,11 @@ type MonoType
         }
 
 
-external : PackageName -> FullModuleName -> VarName -> MonoType
-external package moduleName typeName =
+external : PackageName -> ModuleId -> VarName -> MonoType
+external package moduleId typeName =
     UserDefinedType
         { package = package
-        , moduleName = moduleName
+        , moduleId = moduleId
         , name = typeName
         , args = []
         }
@@ -168,18 +169,13 @@ collapseExtensible type_ =
   - `elm-explorations/webgl` Shader
 
 -}
-collapsePrimitive : PackageName -> FullModuleName -> VarName -> List MonoType -> Maybe MonoType
-collapsePrimitive package moduleName name args =
-    let
-        moduleNameStr : String
-        moduleNameStr =
-            FullModuleName.toString moduleName
-    in
+collapsePrimitive : PackageName -> ModuleId -> VarName -> List MonoType -> Maybe MonoType
+collapsePrimitive package moduleId name args =
     if package == ImplicitImports.elmCorePackage then
-        collapseElmCoreType moduleNameStr name args
+        collapseElmCoreType moduleId name args
 
     else if package == webGLPackage then
-        collapseWebGLShader moduleNameStr name args
+        collapseWebGLShader moduleId name args
 
     else
         Nothing
@@ -190,11 +186,11 @@ webGLPackage =
     "elm-explorations/webgl"
 
 
-collapseElmCoreType : String -> VarName -> List MonoType -> Maybe MonoType
-collapseElmCoreType moduleNameStr name args =
+collapseElmCoreType : ModuleId -> VarName -> List MonoType -> Maybe MonoType
+collapseElmCoreType moduleId name args =
     case args of
         [] ->
-            if moduleNameStr == "Basics" then
+            if moduleId == ModuleIds.basicsId then
                 case name of
                     "Int" ->
                         Just Int
@@ -208,17 +204,17 @@ collapseElmCoreType moduleNameStr name args =
                     _ ->
                         Nothing
 
-            else if moduleNameStr == "Char" && name == "Char" then
+            else if moduleId == ModuleIds.charId && name == "Char" then
                 Just Char
 
-            else if moduleNameStr == "String" && name == "String" then
+            else if moduleId == ModuleIds.stringId && name == "String" then
                 Just String
 
             else
                 Nothing
 
         [ inner ] ->
-            if moduleNameStr == "List" && name == "List" then
+            if moduleId == ModuleIds.listId && name == "List" then
                 Just (List inner)
 
             else
@@ -228,9 +224,9 @@ collapseElmCoreType moduleNameStr name args =
             Nothing
 
 
-collapseWebGLShader : String -> VarName -> List MonoType -> Maybe MonoType
-collapseWebGLShader moduleNameStr name args =
-    if moduleNameStr == "WebGL" && name == "Shader" then
+collapseWebGLShader : ModuleId -> VarName -> List MonoType -> Maybe MonoType
+collapseWebGLShader moduleId name args =
+    if moduleId == ModuleIds.webGLId && name == "Shader" then
         case args of
             [ attributes, uniforms, varyings ] ->
                 Maybe.map3 makeWebGLShader
@@ -343,7 +339,7 @@ recurse f type_ =
         UserDefinedType r ->
             UserDefinedType
                 { package = r.package
-                , moduleName = r.moduleName
+                , moduleId = r.moduleId
                 , name = r.name
                 , args = List.map f r.args
                 }
@@ -715,12 +711,12 @@ fromTypeAnnotation resolver typeAnnotation =
                         resolver moduleName typeName
                             |> Result.mapError AmbiguousModuleName
                             |> Result.map
-                                (\( package, fullModuleName ) ->
-                                    collapsePrimitive package fullModuleName typeName args_
+                                (\( package, moduleId ) ->
+                                    collapsePrimitive package moduleId typeName args_
                                         |> Maybe.withDefault
                                             (UserDefinedType
                                                 { package = package
-                                                , moduleName = fullModuleName
+                                                , moduleId = moduleId
                                                 , name = typeName
                                                 , args = args_
                                                 }
@@ -783,8 +779,8 @@ fromTypeAnnotationError err =
             AmbiguousModuleOwner ambiguity
 
 
-toPublicType : { alreadyNormalized : Bool } -> MonoType -> Public.Type
-toPublicType { alreadyNormalized } origMono =
+toPublicType : ModuleIds.Mapping -> { alreadyNormalized : Bool } -> MonoType -> Public.Type
+toPublicType moduleMapping { alreadyNormalized } origMono =
     let
         mono_ : MonoType
         mono_ =
@@ -798,7 +794,14 @@ toPublicType { alreadyNormalized } origMono =
                 in
                 normalizedMono
     in
-    toPublicTypeNormalized mono_
+    toPublicTypeNormalized moduleMapping mono_
+
+
+moduleIdToModuleName : ModuleIds.Mapping -> ModuleId -> List String
+moduleIdToModuleName moduleMapping moduleId =
+    ModuleIds.getName moduleId moduleMapping
+        |> Maybe.map FullModuleName.toModuleName
+        |> Maybe.withDefault [ "<unknown module>" ]
 
 
 {-| Convert two `MonoType`s to public `Type`s with a shared normalization.
@@ -810,27 +813,27 @@ shared variable differently on each side.
 Used for type errors, where types come in pairs.
 
 -}
-toPublicPair : MonoType -> MonoType -> ( Public.Type, Public.Type )
-toPublicPair t1 t2 =
+toPublicPair : ModuleIds.Mapping -> MonoType -> MonoType -> ( Public.Type, Public.Type )
+toPublicPair moduleMapping t1 t2 =
     let
         (Forall _ normalizedCombined) =
             normalize (Forall [] (Tuple2 t1 t2))
     in
     case normalizedCombined of
         Tuple2 nt1 nt2 ->
-            ( toPublicType { alreadyNormalized = True } nt1
-            , toPublicType { alreadyNormalized = True } nt2
+            ( toPublicType moduleMapping { alreadyNormalized = True } nt1
+            , toPublicType moduleMapping { alreadyNormalized = True } nt2
             )
 
         _ ->
             -- Shouldn't happen
-            ( toPublicType { alreadyNormalized = False } t1
-            , toPublicType { alreadyNormalized = False } t2
+            ( toPublicType moduleMapping { alreadyNormalized = False } t1
+            , toPublicType moduleMapping { alreadyNormalized = False } t2
             )
 
 
-toPublicTypeNormalized : MonoType -> Public.Type
-toPublicTypeNormalized mono_ =
+toPublicTypeNormalized : ModuleIds.Mapping -> MonoType -> Public.Type
+toPublicTypeNormalized moduleMapping mono_ =
     let
         collapsed : MonoType
         collapsed =
@@ -838,7 +841,7 @@ toPublicTypeNormalized mono_ =
 
         f : MonoType -> Public.Type
         f =
-            toPublicType { alreadyNormalized = True }
+            toPublicType moduleMapping { alreadyNormalized = True }
     in
     case collapsed of
         TypeVar typeVar ->
@@ -905,7 +908,7 @@ toPublicTypeNormalized mono_ =
         UserDefinedType r ->
             Public.Named
                 { package = r.package
-                , moduleName = FullModuleName.toModuleName r.moduleName
+                , moduleName = moduleIdToModuleName moduleMapping r.moduleId
                 , name = r.name
                 , arguments = List.map f r.args
                 }
@@ -1048,7 +1051,7 @@ monoPublicKeyNormalized mono_ =
         UserDefinedType r ->
             "13;"
                 ++ strKey r.package
-                ++ strKey (moduleNameKey (FullModuleName.toModuleName r.moduleName))
+                ++ strKey (String.fromInt r.moduleId)
                 ++ strKey r.name
                 ++ strKey (argsKeyOf r.args)
 
@@ -1119,13 +1122,6 @@ strKey s =
     String.fromInt (String.length s)
         ++ ":"
         ++ s
-
-
-moduleNameKey : List String -> String
-moduleNameKey parts =
-    String.fromInt (List.length parts)
-        ++ ";"
-        ++ String.concat (List.map strKey parts)
 
 
 maybeStrKey : Maybe String -> String

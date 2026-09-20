@@ -7,6 +7,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.State as State
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type exposing (PackageName, Type(..))
@@ -668,7 +669,7 @@ publicBoundarySuite : Test
 publicBoundarySuite =
     Test.describe "Elm.TypeInference.Type.Internal.toPublicType"
         [ Test.test "an extensible record with a concrete closed tail collapses to a closed Record" <| \() ->
-        TypeI.toPublicType
+        TypeI.toPublicType ModuleIds.empty
             { alreadyNormalized = False }
             (TypeI.ExtensibleRecord
                 { extensionTypevar = TypeI.Record { fields = Dict.singleton "b" TypeI.Char }
@@ -678,7 +679,7 @@ publicBoundarySuite =
             |> Expect.equal
                 (Type.Record { fields = Dict.fromList [ ( "a", Type.Int ), ( "b", Type.Char ) ] })
         , Test.test "a nested extensible chain flattens without losing fields" <| \() ->
-        TypeI.toPublicType
+        TypeI.toPublicType ModuleIds.empty
             { alreadyNormalized = False }
             (TypeI.ExtensibleRecord
                 { extensionTypevar =
@@ -700,7 +701,7 @@ publicBoundarySuite =
                     }
                 )
         , Test.test "an open record with a type-variable tail stays open" <| \() ->
-        TypeI.toPublicType
+        TypeI.toPublicType ModuleIds.empty
             { alreadyNormalized = False }
             (TypeI.ExtensibleRecord
                 { extensionTypevar = TypeI.TypeVar ( TypeVar.Generated 0, TypeVar.Normal )
@@ -2280,18 +2281,31 @@ mainModule =
     FullModuleName.fromModuleName_ [ "Main" ]
 
 
+testModuleMapping : ModuleIds.Mapping
+testModuleMapping =
+    ModuleIds.intern mainModule ModuleIds.empty
+        |> Tuple.second
+
+
+mainModuleId : ModuleId
+mainModuleId =
+    ModuleIds.getId mainModule testModuleMapping
+        |> Maybe.withDefault -1
+
+
 generatedVar : Int -> MonoType
 generatedVar n =
     TypeI.TypeVar ( TypeVar.Generated n, TypeVar.Normal )
 
 
-runUnify : Dict ( PackageName, FullModuleName, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+runUnify : Dict ( PackageName, ModuleId, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
     (State.do
         (Unify.unifyMany
             { typeAliases = typeAliases
             , moduleName = mainModule
             , declarationNames = []
+            , moduleMapping = testModuleMapping
             }
             eqs
         )
@@ -2322,15 +2336,15 @@ unifyAliasSuite =
                     (TypeI.TypeVar ( TypeVar.Named "a", TypeVar.Normal ))
             }
 
-        typeAliases : Dict ( PackageName, FullModuleName, String ) TypeAlias
+        typeAliases : Dict ( PackageName, ModuleId, String ) TypeAlias
         typeAliases =
-            Dict.singleton ( "", mainModule, "Pair" ) pairAlias
+            Dict.singleton ( "", mainModuleId, "Pair" ) pairAlias
 
         pairOf : MonoType -> MonoType
         pairOf t =
             TypeI.UserDefinedType
                 { package = ""
-                , moduleName = mainModule
+                , moduleId = mainModuleId
                 , name = "Pair"
                 , args = [ t ]
                 }
@@ -2466,15 +2480,15 @@ comparableAliasedTupleRegression =
             , type_ = TypeI.List TypeI.String
             }
 
-        typeAliases : Dict ( PackageName, FullModuleName, String ) TypeAlias
+        typeAliases : Dict ( PackageName, ModuleId, String ) TypeAlias
         typeAliases =
-            Dict.singleton ( "", mainModule, "ModuleName" ) moduleNameAlias
+            Dict.singleton ( "", mainModuleId, "ModuleName" ) moduleNameAlias
 
         moduleNameType : MonoType
         moduleNameType =
             TypeI.UserDefinedType
                 { package = ""
-                , moduleName = mainModule
+                , moduleId = mainModuleId
                 , name = "ModuleName"
                 , args = []
                 }
@@ -3809,48 +3823,48 @@ effectSuite =
     in
     Test.describe "effect module command/subscription magic"
         [ Test.test "command works in elm/* packages" <| \() ->
-            inferAs (Just "elm/random") commandModule "x"
-                |> Result.map Type.toString
-                |> Expect.ok
+        inferAs (Just "elm/random") commandModule "x"
+            |> Result.map Type.toString
+            |> Expect.ok
         , Test.test "command works in elm-explorations/* packages" <| \() ->
-            inferAs (Just "elm-explorations/test") commandModule "x"
-                |> Result.map Type.toString
-                |> Expect.ok
+        inferAs (Just "elm-explorations/test") commandModule "x"
+            |> Result.map Type.toString
+            |> Expect.ok
         , Test.test "command works in author program (Nothing)" <| \() ->
-            inferAs Nothing commandModule "x"
-                |> Result.map Type.toString
-                |> Expect.ok
+        inferAs Nothing commandModule "x"
+            |> Result.map Type.toString
+            |> Expect.ok
         , Test.test "command rejected in other packages" <| \() ->
-            inferAs (Just "someone/else") commandModule "x"
-                |> Expect.err
+        inferAs (Just "someone/else") commandModule "x"
+            |> Expect.err
         , Test.test "subscription works in elm/* packages" <| \() ->
-            inferAs (Just "elm/time") subscriptionModule "x"
-                |> Result.map Type.toString
-                |> Expect.ok
+        inferAs (Just "elm/time") subscriptionModule "x"
+            |> Result.map Type.toString
+            |> Expect.ok
         , Test.test "subscription rejected in other packages" <| \() ->
-            inferAs (Just "someone/else") subscriptionModule "x"
-                |> Expect.err
+        inferAs (Just "someone/else") subscriptionModule "x"
+            |> Expect.err
         , Test.test "command and subscription can coexist (elm/http style)" <| \() ->
-            inferAs (Just "elm/http") bothModule "x"
-                |> Result.map Type.toString
-                |> Expect.ok
+        inferAs (Just "elm/http") bothModule "x"
+            |> Result.map Type.toString
+            |> Expect.ok
         , Test.test "non-effect module cannot use command even when allowed" <| \() ->
-            inferAs (Just "elm/random")
-                (String.ExtraExtra.multilineInput """
-                module Main exposing (x)
+        inferAs (Just "elm/random")
+            (String.ExtraExtra.multilineInput """
+        module Main exposing (x)
 
-                x : Int
-                x =
-                    command
-                """)
-                "x"
-                |> Expect.err
+        x : Int
+        x =
+            command
+        """)
+            "x"
+            |> Expect.err
         , Test.test "command has the right type (MyCmd msg -> Cmd msg)" <| \() ->
-            inferAs (Just "elm/random") commandModule "x"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "Main.MyCmd a -> Platform.Cmd.Cmd a")
+        inferAs (Just "elm/random") commandModule "x"
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Main.MyCmd a -> Platform.Cmd.Cmd a")
         , Test.test "subscription has the right type (MySub msg -> Sub msg)" <| \() ->
-            inferAs (Just "elm/time") subscriptionModule "x"
-                |> Result.map Type.toString
-                |> Expect.equal (Ok "Main.MySub a -> Platform.Sub.Sub a")
+        inferAs (Just "elm/time") subscriptionModule "x"
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "Main.MySub a -> Platform.Sub.Sub a")
         ]
