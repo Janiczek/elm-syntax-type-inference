@@ -6,7 +6,6 @@ module Elm.Syntax.ModuleName.Extra exposing
     , toString
     )
 
-import Char
 import Elm.Syntax.ModuleName exposing (ModuleName)
 
 

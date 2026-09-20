@@ -749,28 +749,6 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                             { moduleName = moduleIdToString moduleMapping unaliasedId
                             , possiblePackages = matchingPackages
                             }
-
-        defaultId : Result ResolverAmbiguity ModuleId
-        defaultId =
-            case candidates |> List.head of
-                Just head ->
-                    Ok head
-
-                Nothing ->
-                    if List.isEmpty qualifier then
-                        Ok thisModule.moduleId
-
-                    else
-                        case ModuleIds.getId (FullModuleName.fromModuleName_ qualifier) moduleMapping of
-                            Just lid ->
-                                Ok lid
-
-                            Nothing ->
-                                -- Unknown qualifier (not imported/implicit/interned).
-                                Err
-                                    { moduleName = String.join "." qualifier
-                                    , possiblePackages = []
-                                    }
     in
     candidates
         |> List.ExtraExtra.fastConcatMap
@@ -796,5 +774,28 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                         Ok found
 
                     Nothing ->
+                        let
+                            defaultId : Result ResolverAmbiguity ModuleId
+                            defaultId =
+                                case candidates |> List.head of
+                                    Just head ->
+                                        Ok head
+
+                                    Nothing ->
+                                        if List.isEmpty qualifier then
+                                            Ok thisModule.moduleId
+
+                                        else
+                                            case ModuleIds.getId (FullModuleName.fromModuleName_ qualifier) moduleMapping of
+                                                Just lid ->
+                                                    Ok lid
+
+                                                Nothing ->
+                                                    -- Unknown qualifier (not imported/implicit/interned).
+                                                    Err
+                                                        { moduleName = String.join "." qualifier
+                                                        , possiblePackages = []
+                                                        }
+                        in
                         Result.map (\id -> ( "", id )) defaultId
             )
