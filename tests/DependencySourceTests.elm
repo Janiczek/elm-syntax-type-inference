@@ -2,6 +2,7 @@ module DependencySourceTests exposing (suite)
 
 import Dict
 import Elm.Parser
+import Elm.Syntax.File exposing (File)
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)
 import Expect
@@ -9,96 +10,106 @@ import Test exposing (Test)
 import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
 
 
+{-| `Main` prepares without an error.
+-}
+mainHasNoErrors : Elm.TypeInference.DependencyEnv -> File -> Expect.Expectation
+mainHasNoErrors env main =
+    case Elm.TypeInference.project Nothing env (Dict.singleton [ "Main" ] main) of
+        Err err ->
+            Expect.fail ("project indexing failed: " ++ Debug.toString err)
+
+        Ok proj ->
+            Elm.TypeInference.inferModule [ "Main" ] proj
+                |> Tuple.first
+                |> Expect.ok
+
+
 suite : Test
 suite =
     Test.describe "DependencySources"
-        [ Test.test "`dependencyEnv` asks for source of hidden record aliases" <|
-            \() ->
-                case ( Elm.Parser.parseToFile hiddenSource, Elm.Parser.parseToFile mainSource ) of
-                    ( Ok hidden, Ok main ) ->
-                        case
-                            Elm.TypeInference.dependencyEnv
-                                { directDependencies = [ "example/css", "elm/core" ]
-                                , allDependencies = [ cssDependency, CoreFixture.core ]
-                                , sourcesToResolveAmbiguity = Dict.empty
-                                }
-                        of
-                            Elm.TypeInference.Failed err ->
-                                Expect.fail ("First pass should request sources, not fail: " ++ Debug.toString err)
+        [ Test.test "`dependencyEnv` asks for source of hidden record aliases" <| \() ->
+        case ( Elm.Parser.parseToFile hiddenSource, Elm.Parser.parseToFile mainSource ) of
+            ( Ok hidden, Ok main ) ->
+                case
+                    Elm.TypeInference.dependencyEnv
+                        { directDependencies = [ "example/css", "elm/core" ]
+                        , allDependencies = [ cssDependency, CoreFixture.core ]
+                        , sourcesToResolveAmbiguity = Dict.empty
+                        }
+                of
+                    Elm.TypeInference.Failed err ->
+                        Expect.fail ("First pass should request sources, not fail: " ++ Debug.toString err)
 
-                            Elm.TypeInference.Ready _ ->
-                                Expect.fail "First pass should request sources for example/css"
+                    Elm.TypeInference.Ready _ ->
+                        Expect.fail "First pass should request sources for example/css"
 
-                            Elm.TypeInference.NeedPackageSources needed ->
-                                if needed /= Dict.singleton "example/css" [ "src/Css/Internal.elm" ] then
-                                    Expect.fail ("Should request example/css, requested: " ++ Debug.toString needed)
+                    Elm.TypeInference.NeedPackageSources needed ->
+                        if needed /= Dict.singleton "example/css" [ "src/Css/Internal.elm" ] then
+                            Expect.fail ("Should request example/css, requested: " ++ Debug.toString needed)
 
-                                else
-                                    case
-                                        Elm.TypeInference.dependencyEnv
-                                            { directDependencies = [ "example/css", "elm/core" ]
-                                            , allDependencies = [ cssDependency, CoreFixture.core ]
-                                            , sourcesToResolveAmbiguity = Dict.singleton "example/css" [ hidden ]
-                                            }
-                                    of
-                                        Elm.TypeInference.Failed err ->
-                                            Expect.fail ("Second pass should succeed: " ++ Debug.toString err)
+                        else
+                            case
+                                Elm.TypeInference.dependencyEnv
+                                    { directDependencies = [ "example/css", "elm/core" ]
+                                    , allDependencies = [ cssDependency, CoreFixture.core ]
+                                    , sourcesToResolveAmbiguity = Dict.singleton "example/css" [ hidden ]
+                                    }
+                            of
+                                Elm.TypeInference.Failed err ->
+                                    Expect.fail ("Second pass should succeed: " ++ Debug.toString err)
 
-                                        Elm.TypeInference.NeedPackageSources still ->
-                                            Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
+                                Elm.TypeInference.NeedPackageSources still ->
+                                    Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
 
-                                        Elm.TypeInference.Ready env ->
-                                            (Elm.TypeInference.inferProject Nothing env (Dict.singleton [ "Main" ] main)).errors
-                                                |> Expect.equal Dict.empty
+                                Elm.TypeInference.Ready env ->
+                                    mainHasNoErrors env main
 
-                    _ ->
-                        Expect.fail "Regression source did not parse"
-        , Test.test "`dependencyEnv` asks for source of a hidden record alias even when its own module is otherwise documented" <|
-            \() ->
-                -- Motivated by anmolitor/elm-protoc-utils
-                -- `Protobuf.Utils.Duration` module is documented (its exposed
-                -- functions are in docs.json) but the `Duration` alias itself
-                -- isn't in the `exposing` list. We need the source to know it's
-                -- a record and not an opaque type.
-                case ( Elm.Parser.parseToFile hiddenTypeSource, Elm.Parser.parseToFile hiddenTypeMainSource ) of
-                    ( Ok hidden, Ok main ) ->
-                        case
-                            Elm.TypeInference.dependencyEnv
-                                { directDependencies = [ "example/duration", "elm/core" ]
-                                , allDependencies = [ durationDependency, CoreFixture.core ]
-                                , sourcesToResolveAmbiguity = Dict.empty
-                                }
-                        of
-                            Elm.TypeInference.Failed err ->
-                                Expect.fail ("First pass should request sources, not fail: " ++ Debug.toString err)
+            _ ->
+                Expect.fail "Regression source did not parse"
+        , Test.test "`dependencyEnv` asks for source of a hidden record alias even when its own module is otherwise documented" <| \() ->
+        -- Motivated by anmolitor/elm-protoc-utils
+        -- `Protobuf.Utils.Duration` module is documented (its exposed
+        -- functions are in docs.json) but the `Duration` alias itself
+        -- isn't in the `exposing` list. We need the source to know it's
+        -- a record and not an opaque type.
+        case ( Elm.Parser.parseToFile hiddenTypeSource, Elm.Parser.parseToFile hiddenTypeMainSource ) of
+            ( Ok hidden, Ok main ) ->
+                case
+                    Elm.TypeInference.dependencyEnv
+                        { directDependencies = [ "example/duration", "elm/core" ]
+                        , allDependencies = [ durationDependency, CoreFixture.core ]
+                        , sourcesToResolveAmbiguity = Dict.empty
+                        }
+                of
+                    Elm.TypeInference.Failed err ->
+                        Expect.fail ("First pass should request sources, not fail: " ++ Debug.toString err)
 
-                            Elm.TypeInference.Ready _ ->
-                                Expect.fail "First pass should request sources for example/duration"
+                    Elm.TypeInference.Ready _ ->
+                        Expect.fail "First pass should request sources for example/duration"
 
-                            Elm.TypeInference.NeedPackageSources needed ->
-                                if needed /= Dict.singleton "example/duration" [ "src/Duration.elm" ] then
-                                    Expect.fail ("Should request example/duration, requested: " ++ Debug.toString needed)
+                    Elm.TypeInference.NeedPackageSources needed ->
+                        if needed /= Dict.singleton "example/duration" [ "src/Duration.elm" ] then
+                            Expect.fail ("Should request example/duration, requested: " ++ Debug.toString needed)
 
-                                else
-                                    case
-                                        Elm.TypeInference.dependencyEnv
-                                            { directDependencies = [ "example/duration", "elm/core" ]
-                                            , allDependencies = [ durationDependency, CoreFixture.core ]
-                                            , sourcesToResolveAmbiguity = Dict.singleton "example/duration" [ hidden ]
-                                            }
-                                    of
-                                        Elm.TypeInference.Failed err ->
-                                            Expect.fail ("Second pass should succeed: " ++ Debug.toString err)
+                        else
+                            case
+                                Elm.TypeInference.dependencyEnv
+                                    { directDependencies = [ "example/duration", "elm/core" ]
+                                    , allDependencies = [ durationDependency, CoreFixture.core ]
+                                    , sourcesToResolveAmbiguity = Dict.singleton "example/duration" [ hidden ]
+                                    }
+                            of
+                                Elm.TypeInference.Failed err ->
+                                    Expect.fail ("Second pass should succeed: " ++ Debug.toString err)
 
-                                        Elm.TypeInference.NeedPackageSources still ->
-                                            Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
+                                Elm.TypeInference.NeedPackageSources still ->
+                                    Expect.fail ("Second pass should not request more sources: " ++ Debug.toString still)
 
-                                        Elm.TypeInference.Ready env ->
-                                            (Elm.TypeInference.inferProject Nothing env (Dict.singleton [ "Main" ] main)).errors
-                                                |> Expect.equal Dict.empty
+                                Elm.TypeInference.Ready env ->
+                                    mainHasNoErrors env main
 
-                    _ ->
-                        Expect.fail "Regression source did not parse"
+            _ ->
+                Expect.fail "Regression source did not parse"
         ]
 
 

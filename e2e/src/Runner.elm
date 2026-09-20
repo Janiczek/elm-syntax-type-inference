@@ -2,10 +2,15 @@ port module Runner exposing (main)
 
 {-| Used by e2e/run.mjs.
 
-Reads Elm project's source files and dependency docs.json files, parses
-everything, builds a `DependencyEnv`, runs `Elm.TypeInference.inferProject`,
-resolves every type out of the resulting (lazy) `TypeLookupTable`s, and reports
-back via ports.
+Kind of a worst-case scenario (as the library is tailored towards lazy sparse usages instead of "give me type of everything you can"):
+
+1.  Reads Elm project's source files and dependency docs.json files
+2.  Parses source code to `Elm.Syntax.File`s, `Elm.Docs.Module`s and `Elm.Project.Project`s
+3.  Builds an `Elm.TypeInference.DependencyEnv` for the project
+4.  Builds an `Elm.TypeInference.Project` for the project
+5.  Runs `Elm.TypeInference.inferModule` on every module
+6.  Resolves every type out of the resulting `TypeLookupTable`
+7.  Reports back via ports.
 
 -}
 
@@ -401,34 +406,57 @@ reportDepEnvError files depEnvError =
 runInference : PendingInference -> ( Model, Cmd Msg )
 runInference pending =
     let
-        project =
-            Elm.TypeInference.inferProject
-                pending.currentPackage
-                pending.depEnv
-                pending.files
+        tablesAndErrors :
+            { tables : Dict ModuleName TypeLookupTable
+            , errors : Dict ModuleName Error.Error
+            }
+        tablesAndErrors =
+            case Elm.TypeInference.project pending.currentPackage pending.depEnv pending.files of
+                Err err ->
+                    { tables = Dict.empty
+                    , errors = Dict.singleton [] err
+                    }
+
+                Ok proj0 ->
+                    pending.files
+                        |> Dict.foldl
+                            (\moduleName _ ( tablesAcc, errorsAcc, proj ) ->
+                                case Elm.TypeInference.inferModule moduleName proj of
+                                    ( Ok table, newProj ) ->
+                                        ( Dict.insert moduleName table tablesAcc, errorsAcc, newProj )
+
+                                    ( Err err, newProj ) ->
+                                        ( tablesAcc, Dict.insert moduleName err errorsAcc, newProj )
+                            )
+                            ( Dict.empty, Dict.empty, proj0 )
+                        |> (\( tables, errors, _ ) ->
+                                { tables = tables
+                                , errors = errors
+                                }
+                           )
 
         summary : Encode.Value
         summary =
-            case Dict.values project.errors of
+            case Dict.values tablesAndErrors.errors of
                 [] ->
                     Encode.object
                         [ ( "ok", Encode.bool True )
                         , ( "moduleCount", Encode.int (Dict.size pending.files) )
-                        , ( "tableCount", Encode.int (Dict.size project.tables) )
+                        , ( "tableCount", Encode.int (Dict.size tablesAndErrors.tables) )
                         ]
 
                 _ ->
                     Encode.object
                         [ ( "ok", Encode.bool False )
                         , ( "moduleCount", Encode.int (Dict.size pending.files) )
-                        , ( "tableCount", Encode.int (Dict.size project.tables) )
-                        , ( "error", Encode.string (String.join "\n" (List.map Error.toString (Dict.values project.errors))) )
+                        , ( "tableCount", Encode.int (Dict.size tablesAndErrors.tables) )
+                        , ( "error", Encode.string (String.join "\n" (List.map Error.toString (Dict.values tablesAndErrors.errors))) )
                         ]
     in
     ( finished
         (Just
             { sourcePaths = pending.sourcePaths
-            , tables = project.tables
+            , tables = tablesAndErrors.tables
             , summary = summary
             }
         )

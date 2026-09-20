@@ -40,6 +40,7 @@ type ErrorDetails
     | ImpossibleType TypeAnnotation
     | ImpossibleDocsType Elm.Type.Type
     | MissingModuleName
+    | ModuleNotFound
       -- Var qualification errors
     | VarNotFound { usedIn : ModuleName, varName : VarName }
     | AmbiguousName { usedIn : ModuleName, varName : VarName, possibleModules : List ModuleName }
@@ -72,40 +73,43 @@ detailsToString details =
     case details of
         ImpossibleExpr exprNode ->
             String.join " "
-                [ "ImpossibleExpr"
+                [ "Impossible expression"
                 , rangeToString (Node.range exprNode)
                 , Elm.Writer.write (Elm.Writer.writeExpression exprNode)
                 ]
 
         ImpossiblePattern patternNode ->
             String.join " "
-                [ "ImpossiblePattern"
+                [ "Impossible pattern"
                 , rangeToString (Node.range patternNode)
                 , Elm.Writer.write (Elm.Writer.writePattern patternNode)
                 ]
 
         ImpossibleType typeAnnotation ->
-            "ImpossibleType "
+            "Impossible type "
                 ++ Elm.Writer.write
                     (Elm.Writer.writeTypeAnnotation
                         (Node.Node Range.emptyRange typeAnnotation)
                     )
 
         ImpossibleDocsType type_ ->
-            "ImpossibleDocsType " ++ docsTypeToString type_
+            "Impossible docs type " ++ docsTypeToString type_
 
         MissingModuleName ->
-            "MissingModuleName"
+            "Missing module name"
+
+        ModuleNotFound ->
+            "Module not found"
 
         VarNotFound r ->
-            "VarNotFound "
+            "Var not found "
                 ++ record
                     [ ( "usedIn", Elm.Syntax.ModuleName.Extra.toString r.usedIn )
                     , ( "varName", r.varName )
                     ]
 
         AmbiguousName r ->
-            "AmbiguousName "
+            "Ambiguous name "
                 ++ record
                     [ ( "usedIn", Elm.Syntax.ModuleName.Extra.toString r.usedIn )
                     , ( "varName", r.varName )
@@ -113,7 +117,7 @@ detailsToString details =
                     ]
 
         AmbiguousModuleOwner r ->
-            "AmbiguousModuleOwner "
+            "Ambiguous module owner "
                 ++ record
                     [ ( "moduleName", r.moduleName )
                     , ( "possiblePackages", list r.possiblePackages )
@@ -121,28 +125,28 @@ detailsToString details =
 
         TypeMismatch t1 t2 ->
             String.join " "
-                [ "TypeMismatch"
+                [ "Type mismatch"
                 , parenIfHasSpace (Type.toString t1)
                 , parenIfHasSpace (Type.toString t2)
                 ]
 
         InfiniteType varType type_ ->
             String.join " "
-                [ "InfiniteType"
+                [ "Infinite type"
                 , parenIfHasSpace (Type.toString varType)
                 , parenIfHasSpace (Type.toString type_)
                 ]
 
         ConstraintMismatch varType type_ ->
             String.join " "
-                [ "ConstraintMismatch"
+                [ "Constraint mismatch"
                 , parenIfHasSpace (Type.toString varType)
                 , parenIfHasSpace (Type.toString type_)
                 ]
 
         InternalInconsistency t1 t2 ->
             String.join " "
-                [ "InternalInconsistency"
+                [ "Internal inconsistency"
                 , parenIfHasSpace (Type.toString t1)
                 , parenIfHasSpace (Type.toString t2)
                 ]

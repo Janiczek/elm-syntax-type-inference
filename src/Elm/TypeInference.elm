@@ -1,22 +1,48 @@
 module Elm.TypeInference exposing
-    ( inferProject
-    , DependencyEnv, DependencyEnvOutcome(..), dependencyEnv
-    , Dependency
+    ( dependencyEnv, DependencyEnv, Dependency, DependencyEnvOutcome(..)
+    , project, Project
+    , inferModule
     )
 
-{-| Type inference for [`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
-ASTs.
+{-| Type inference for
+[`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
+ASTs, optimized for lazy queries `Range -> Maybe Type`.
 
 
-# Whole project at once
+# 1. `elm.json` - 3rd party dependencies
 
-@docs inferProject
+First the inference library needs to learn about the project's dependencies.
+These don't change as often as the project source code itself, so they're cached
+on their own.
+
+@docs dependencyEnv, DependencyEnv, Dependency, DependencyEnvOutcome
 
 
-# Dependencies
+# 2. Project - resolving the module import graph
 
-@docs DependencyEnv, DependencyEnvOutcome, dependencyEnv
-@docs Dependency
+Then the inference library needs to analyze the import graph of the project
+source code.
+
+@docs project, Project
+
+
+# 3. Infer specific modules
+
+Run `inferModule` for each module you want to infer types in. You'll get a
+`TypeLookupTable` back, from which you can `get` the `Type` for a given `Range`.
+
+@docs inferModule
+
+
+# 4. Get inferred types for a given Range
+
+    mainDeclarationRange : Range -- from walking the `Elm.Syntax.File` AST
+    mainModuleTLT : TypeLookupTable -- from `Elm.TypeLookup.inferModule`
+
+    TypeLookupTable.get mainDeclarationRange mainModuleTLT
+    --> ( Just Elm.TypeInference.Type.Int
+    --  , newMainModuleTLT
+    --  )
 
 -}
 
@@ -57,17 +83,27 @@ import TypeLookupTable.Internal
 
 
 
--- WHOLE-PROJECT ENTRY POINTS
+-- PROJECT INDEXING
 
 
-{-| Infer every module of a project.
+{-| An indexed project: every file has been assigned a `ModuleId` and its
+imports resolved, but nothing has been solved yet. Cheap to build.
 -}
-inferProject :
-    Maybe PackageName
-    -> DependencyEnv
-    -> Dict ModuleName File
-    -> { tables : Dict ModuleName TypeLookupTable, errors : Dict ModuleName Error }
-inferProject currentPackage depEnv files =
+type Project
+    = Project
+        { currentPackage : Maybe PackageName
+        , depEnv : DependencyEnv
+        , moduleMapping : ModuleIds.Mapping
+        , byName : Dict ModuleId ProjectModule
+        , acc : ProjectAcc
+        }
+
+
+{-| Analyze the import graph of the project source code.
+-}
+project : Maybe PackageName -> DependencyEnv -> Dict ModuleName File -> Result Error Project
+project currentPackage depEnv files =
+    -- Index files, assign ModuleIds, build the import graph.
     let
         (DependencyEnv dep) =
             depEnv
@@ -92,60 +128,137 @@ inferProject currentPackage depEnv files =
         missingModuleName : Bool
         missingModuleName =
             List.length modules /= Dict.size files
-
-        byName : Dict ModuleId ProjectModule
-        byName =
-            modules
-                |> List.map (\m -> ( m.index.moduleId, m ))
-                |> Dict.fromList
-
-        firstPartyImports : ModuleId -> List ModuleId
-        firstPartyImports moduleId =
-            case Dict.get moduleId byName of
-                Nothing ->
-                    []
-
-                Just m ->
-                    m.index.imports
-                        |> List.filterMap
-                            (\import_ ->
-                                if Dict.member import_.moduleId byName then
-                                    Just import_.moduleId
-
-                                else
-                                    Nothing
-                            )
     in
     if missingModuleName then
-        { tables = Dict.empty
-        , errors =
-            Dict.singleton []
-                { moduleName = [ "<Missing>" ]
-                , declarationNames = []
-                , details = MissingModuleName
-                }
-        }
+        Err
+            { moduleName = [ "<Missing>" ]
+            , declarationNames = []
+            , details = MissingModuleName
+            }
 
     else
         let
-            {- Tarjan emits a component only after everything it can reach, so this
-               is already in dependency-first order. Elm forbids import cycles, so
-               each component is a single module -- but if the caller hands us one
-               anyway we still infer every module in it, just without the benefit
-               of its cyclic partners' interfaces.
-            -}
-            order : List ProjectModule
-            order =
-                SCC.stronglyConnectedComponents (Dict.keys byName) firstPartyImports
-                    |> List.ExtraExtra.fastConcatMap (List.filterMap (\name -> Dict.get name byName))
+            byName : Dict ModuleId ProjectModule
+            byName =
+                modules
+                    |> List.map (\m -> ( m.index.moduleId, m ))
+                    |> Dict.fromList
         in
-        order
-            |> List.foldl (inferOne currentPackage depEnv moduleMapping)
-                { tables = Dict.empty
-                , errors = Dict.empty
-                , interfaces = Dict.empty
+        Ok
+            (Project
+                { currentPackage = currentPackage
+                , depEnv = depEnv
+                , moduleMapping = moduleMapping
+                , byName = byName
+                , acc =
+                    { tables = Dict.empty
+                    , errors = Dict.empty
+                    , interfaces = Dict.empty
+                    }
                 }
-            |> (\acc -> { tables = acc.tables, errors = acc.errors })
+            )
+
+
+firstPartyImportsOf : Dict ModuleId ProjectModule -> ModuleId -> List ModuleId
+firstPartyImportsOf byName moduleId =
+    case Dict.get moduleId byName of
+        Nothing ->
+            []
+
+        Just m ->
+            m.index.imports
+                |> List.filterMap
+                    (\import_ ->
+                        if Dict.member import_.moduleId byName then
+                            Just import_.moduleId
+
+                        else
+                            Nothing
+                    )
+
+
+{-| Every module reachable from `start`, `start` included.
+-}
+importClosure : (ModuleId -> List ModuleId) -> ModuleId -> Set ModuleId
+importClosure edges start =
+    importClosureHelp edges [ start ] Set.empty
+
+
+importClosureHelp : (ModuleId -> List ModuleId) -> List ModuleId -> Set ModuleId -> Set ModuleId
+importClosureHelp edges queue visited =
+    case queue of
+        [] ->
+            visited
+
+        node :: rest ->
+            if Set.member node visited then
+                importClosureHelp edges rest visited
+
+            else
+                importClosureHelp edges (edges node ++ rest) (Set.insert node visited)
+
+
+inferNodes : List ModuleId -> Project -> Project
+inferNodes nodes (Project p) =
+    let
+        toPrepare : List ProjectModule
+        toPrepare =
+            SCC.stronglyConnectedComponents nodes (firstPartyImportsOf p.byName)
+                |> List.ExtraExtra.fastConcatMap (List.filterMap (\id -> Dict.get id p.byName))
+                |> List.filter (\m -> not (Dict.member m.index.moduleId p.acc.interfaces))
+
+        newAcc : ProjectAcc
+        newAcc =
+            List.foldl (inferOne p.currentPackage p.depEnv p.moduleMapping) p.acc toPrepare
+    in
+    Project { p | acc = newAcc }
+
+
+{-| Infer types in the given module.
+-}
+inferModule : ModuleName -> Project -> ( Result Error TypeLookupTable, Project )
+inferModule moduleName ((Project p) as proj) =
+    let
+        target : Maybe ProjectModule
+        target =
+            FullModuleName.fromModuleName moduleName
+                |> Maybe.andThen (\full -> ModuleIds.getId full p.moduleMapping)
+                |> Maybe.andThen (\id -> Dict.get id p.byName)
+    in
+    case target of
+        Nothing ->
+            ( Err
+                { moduleName = moduleName
+                , declarationNames = []
+                , details = ModuleNotFound
+                }
+            , proj
+            )
+
+        Just m ->
+            let
+                (Project newP) =
+                    inferNodes
+                        (Set.toList (importClosure (firstPartyImportsOf p.byName) m.index.moduleId))
+                        proj
+            in
+            ( case Dict.get m.key newP.acc.tables of
+                Just table ->
+                    Ok table
+
+                Nothing ->
+                    case Dict.get m.key newP.acc.errors of
+                        Just err ->
+                            Err err
+
+                        Nothing ->
+                            Err
+                                { moduleName = moduleName
+                                , declarationNames = []
+                                , details = ModuleNotFound
+                                }
+            , Project newP
+            )
 
 
 
@@ -351,7 +464,7 @@ inferOne currentPackage depEnv moduleMapping m acc =
                     )
                     Dict.empty
     in
-    case inferModule_ currentPackage depEnv moduleMapping imported m.file of
+    case inferModule_ currentPackage depEnv moduleMapping imported m.index m.file of
         Ok { table, interface } ->
             { acc
                 | tables = Dict.insert m.key table acc.tables
@@ -403,12 +516,9 @@ allowsKernel currentPackage =
                 || String.startsWith "elm-explorations/" name
 
 
-moduleCtx : Maybe PackageName -> DependencyEnv -> ModuleIds.Mapping -> Dict ModuleId ModuleInterface -> File -> ModuleCtx
-moduleCtx currentPackage (DependencyEnv depEnv) moduleMapping importedInterfaces file =
+moduleCtx : Maybe PackageName -> DependencyEnv -> ModuleIds.Mapping -> Dict ModuleId ModuleInterface -> ModuleIndex -> ModuleCtx
+moduleCtx currentPackage (DependencyEnv depEnv) moduleMapping importedInterfaces thisIndex =
     let
-        ( thisIndex, _ ) =
-            ModuleIndex.fromFile moduleMapping file
-
         modules : Dict ModuleId ModuleIndex
         modules =
             importedInterfaces
@@ -452,13 +562,14 @@ inferModule_ :
     -> DependencyEnv
     -> ModuleIds.Mapping
     -> Dict ModuleId ModuleInterface
+    -> ModuleIndex
     -> File
     -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
-inferModule_ currentPackage depEnv moduleMapping importedInterfaces file =
+inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex file =
     let
         ctx : ModuleCtx
         ctx =
-            moduleCtx currentPackage depEnv moduleMapping importedInterfaces file
+            moduleCtx currentPackage depEnv moduleMapping importedInterfaces thisIndex
     in
     (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
     let

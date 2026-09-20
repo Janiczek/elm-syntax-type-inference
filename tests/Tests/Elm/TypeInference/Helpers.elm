@@ -1,5 +1,6 @@
 module Tests.Elm.TypeInference.Helpers exposing
     ( TestError(..)
+    , buildDepEnv
     , getDeclType
     , getDeclTypeWithDeps
     , getDeclTypeWithDirectAndDeps
@@ -7,6 +8,7 @@ module Tests.Elm.TypeInference.Helpers exposing
     , getExprType
     , getExprTypeWithDeps
     , inferMainModule
+    , parseModules
     )
 
 import Dict exposing (Dict)
@@ -72,13 +74,8 @@ runInference directDependencies allDependencies files =
     runInferenceWithPackage Nothing directDependencies allDependencies files
 
 
-runInferenceWithPackage :
-    Maybe String
-    -> List String
-    -> List Dependency
-    -> Dict ModuleName File
-    -> Result TestError (Dict ModuleName TypeLookupTable)
-runInferenceWithPackage currentPackage directDependencies allDependencies files =
+buildDepEnv : List String -> List Dependency -> Result TestError Elm.TypeInference.DependencyEnv
+buildDepEnv directDependencies allDependencies =
     case
         Elm.TypeInference.dependencyEnv
             { directDependencies = directDependencies
@@ -90,26 +87,50 @@ runInferenceWithPackage currentPackage directDependencies allDependencies files 
             Err (CouldntInfer err)
 
         Elm.TypeInference.Ready depEnv ->
-            let
-                project :
-                    { tables : Dict ModuleName TypeLookupTable
-                    , errors : Dict ModuleName Error
-                    }
-                project =
-                    Elm.TypeInference.inferProject
-                        currentPackage
-                        depEnv
-                        files
-            in
-            case Dict.values project.errors of
-                [] ->
-                    Ok project.tables
-
-                err :: _ ->
-                    Err (CouldntInfer err)
+            Ok depEnv
 
         Elm.TypeInference.NeedPackageSources needed ->
             Err (MissingDependencySources needed)
+
+
+runInferenceWithPackage :
+    Maybe String
+    -> List String
+    -> List Dependency
+    -> Dict ModuleName File
+    -> Result TestError (Dict ModuleName TypeLookupTable)
+runInferenceWithPackage currentPackage directDependencies allDependencies files =
+    case buildDepEnv directDependencies allDependencies of
+        Err err ->
+            Err err
+
+        Ok depEnv ->
+            case Elm.TypeInference.project currentPackage depEnv files of
+                Err err ->
+                    Err (CouldntInfer err)
+
+                Ok proj0 ->
+                    let
+                        ( tables, errors ) =
+                            files
+                                |> Dict.foldl
+                                    (\moduleName _ ( tablesAcc, errorsAcc, proj ) ->
+                                        case Elm.TypeInference.inferModule moduleName proj of
+                                            ( Ok table, newProj ) ->
+                                                ( Dict.insert moduleName table tablesAcc, errorsAcc, newProj )
+
+                                            ( Err err, newProj ) ->
+                                                ( tablesAcc, Dict.insert moduleName err errorsAcc, newProj )
+                                    )
+                                    ( Dict.empty, Dict.empty, proj0 )
+                                |> (\( t, e, _ ) -> ( t, e ))
+                    in
+                    case Dict.values errors of
+                        [] ->
+                            Ok tables
+
+                        err :: _ ->
+                            Err (CouldntInfer err)
 
 
 getExprType : String -> Result TestError Type
@@ -147,13 +168,8 @@ main =
             )
 
 
-inferModulesWithPackage :
-    Maybe String
-    -> List String
-    -> List Dependency
-    -> Dict ModuleName String
-    -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
-inferModulesWithPackage currentPackage directDependencies allDependencies modules =
+parseModules : Dict ModuleName String -> Result TestError (Dict ModuleName File)
+parseModules modules =
     modules
         |> Dict.foldl
             (\moduleName code acc ->
@@ -168,6 +184,16 @@ inferModulesWithPackage currentPackage directDependencies allDependencies module
                         )
             )
             (Ok Dict.empty)
+
+
+inferModulesWithPackage :
+    Maybe String
+    -> List String
+    -> List Dependency
+    -> Dict ModuleName String
+    -> Result TestError (Dict ModuleName ( File, TypeLookupTable ))
+inferModulesWithPackage currentPackage directDependencies allDependencies modules =
+    parseModules modules
         |> Result.andThen
             (\files ->
                 runInferenceWithPackage currentPackage directDependencies allDependencies files

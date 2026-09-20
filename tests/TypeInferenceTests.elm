@@ -21,6 +21,7 @@ import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
 import Tests.Elm.TypeInference.Helpers
     exposing
         ( TestError(..)
+        , buildDepEnv
         , getDeclType
         , getDeclTypeWithDeps
         , getDeclTypeWithDirectAndDeps
@@ -28,6 +29,7 @@ import Tests.Elm.TypeInference.Helpers
         , getExprType
         , getExprTypeWithDeps
         , inferMainModule
+        , parseModules
         )
 import TypeLookupTable
 
@@ -71,6 +73,7 @@ suite =
         , publicSurfaceLeakSuite
         , kernelSuite
         , effectSuite
+        , lazyProjectSuite
         ]
 
 
@@ -3867,8 +3870,8 @@ effectSuite =
         x =
             command
         """)
-            "x"
-            |> Expect.err
+                    "x"
+                    |> Expect.err
         , Test.test "command has the right type (MyCmd msg -> Cmd msg)" <| \() ->
         inferAs (Just "elm/random") commandModule "x"
             |> Result.map Type.toString
@@ -3877,4 +3880,175 @@ effectSuite =
         inferAs (Just "elm/time") subscriptionModule "x"
             |> Result.map Type.toString
             |> Expect.equal (Ok "Main.MySub a -> Platform.Sub.Sub a")
+        ]
+
+
+
+-- LAZY PROJECT (Project / inferModule)
+
+
+lazyProjectFixture : Dict ModuleName String
+lazyProjectFixture =
+    Dict.fromList
+        [ ( [ "A" ]
+          , String.ExtraExtra.multilineInput """
+        module A exposing (value)
+
+        value : Int
+        value =
+            1
+        """
+          )
+        , ( [ "B" ]
+          , String.ExtraExtra.multilineInput """
+        module B exposing (fromA)
+
+        import A
+
+        fromA : Int
+        fromA =
+            A.value
+        """
+          )
+        , ( [ "Main" ]
+          , String.ExtraExtra.multilineInput """
+        module Main exposing (main)
+
+        import B
+
+        main : Int
+        main =
+            B.fromA
+        """
+          )
+        , ( [ "Broken" ]
+          , String.ExtraExtra.multilineInput """
+        module Broken exposing (bad)
+
+        bad : Int
+        bad =
+            "not an int"
+        """
+          )
+        ]
+
+
+{-| `Main` imports `B` which imports `A`; `Broken` isn't imported by anyone.
+-}
+lazyProject : Result TestError Elm.TypeInference.Project
+lazyProject =
+    parseModules lazyProjectFixture
+        |> Result.andThen
+            (\files ->
+                buildDepEnv [] []
+                    |> Result.andThen
+                        (\depEnv ->
+                            Elm.TypeInference.project Nothing depEnv files
+                                |> Result.mapError CouldntInfer
+                        )
+            )
+
+
+lazyProjectSuite : Test
+lazyProjectSuite =
+    Test.describe "Lazy per-module preparation (Project / inferModule)"
+        [ Test.test "inferModule succeeds for a module whose closure type-checks, even though an unrelated module in the project fails to" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj ->
+                Elm.TypeInference.inferModule [ "Main" ] proj
+                    |> Tuple.first
+                    |> Expect.ok
+        , Test.test "inferModule surfaces the target module's own error" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj ->
+                Elm.TypeInference.inferModule [ "Broken" ] proj
+                    |> Tuple.first
+                    |> Expect.err
+        , Test.test "inferModule on a module not in the project fails with ModuleNotFound" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj ->
+                case Elm.TypeInference.inferModule [ "DoesNotExist" ] proj |> Tuple.first of
+                    Err error ->
+                        Expect.equal error.details ModuleNotFound
+
+                    Ok _ ->
+                        Expect.fail "Expected an error"
+        , Test.test "inferModule threads the updated Project: preparing a leaf first doesn't prevent preparing its importer next" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj0 ->
+                let
+                    ( aResult, proj1 ) =
+                        Elm.TypeInference.inferModule [ "A" ] proj0
+
+                    ( mainResult, _ ) =
+                        Elm.TypeInference.inferModule [ "Main" ] proj1
+                in
+                Expect.all
+                    [ \() -> aResult |> Expect.ok
+                    , \() -> mainResult |> Expect.ok
+                    ]
+                    ()
+        , Test.test "preparing the same module twice is idempotent" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj0 ->
+                let
+                    ( firstResult, proj1 ) =
+                        Elm.TypeInference.inferModule [ "Main" ] proj0
+
+                    ( secondResult, _ ) =
+                        Elm.TypeInference.inferModule [ "Main" ] proj1
+                in
+                Expect.all
+                    [ \() -> firstResult |> Expect.ok
+                    , \() -> secondResult |> Expect.ok
+                    ]
+                    ()
+        , Test.test "preparing every module of a project, in any order, yields the same set of successes/failures" <| \() ->
+        case ( parseModules lazyProjectFixture, buildDepEnv [] [] ) of
+            ( Ok files, Ok depEnv ) ->
+                let
+                    prepareAllInOrder : List ModuleName -> ( List ModuleName, List ModuleName )
+                    prepareAllInOrder moduleNames =
+                        case Elm.TypeInference.project Nothing depEnv files of
+                            Err _ ->
+                                ( [], [] )
+
+                            Ok proj0 ->
+                                moduleNames
+                                    |> List.foldl
+                                        (\moduleName ( oks, errs, proj ) ->
+                                            case Elm.TypeInference.inferModule moduleName proj of
+                                                ( Ok _, newProj ) ->
+                                                    ( moduleName :: oks, errs, newProj )
+
+                                                ( Err _, newProj ) ->
+                                                    ( oks, moduleName :: errs, newProj )
+                                        )
+                                        ( [], [], proj0 )
+                                    |> (\( oks, errs, _ ) -> ( List.sort oks, List.sort errs ))
+
+                    forwardOrder : List ModuleName
+                    forwardOrder =
+                        [ [ "A" ], [ "B" ], [ "Main" ], [ "Broken" ] ]
+                in
+                prepareAllInOrder forwardOrder
+                    |> Expect.equal (prepareAllInOrder (List.reverse forwardOrder))
+
+            _ ->
+                Expect.fail "Couldn't parse fixture or build dependency env"
         ]

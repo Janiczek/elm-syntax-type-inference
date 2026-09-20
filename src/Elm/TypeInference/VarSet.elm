@@ -159,7 +159,7 @@ diff : VarSet -> VarSet -> VarSet
 diff l r =
     { order =
         List.filter
-            (\(( style, super ) as var) ->
+            (\( style, super ) ->
                 case style of
                     Generated theId ->
                         not (Set.member (genKeyFrom theId super) r.membersGen)

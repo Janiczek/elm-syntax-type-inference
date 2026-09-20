@@ -35,9 +35,7 @@ import Elm.TypeInference.TypeVar as TypeVar
         )
 import Elm.TypeInference.VarSet as VarSet
     exposing
-        ( GenKey
-        , NamedKey
-        , VarSet
+        ( VarSet
         , superTypeTag
         )
 import Result.Extra

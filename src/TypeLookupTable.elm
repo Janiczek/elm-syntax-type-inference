@@ -16,7 +16,7 @@ import TypeLookupTable.Internal as Internal
 
 
 {-| A lazy lookup table: after the initial collection of type equations is done
-in `Elm.TypeInference.inferProject`, we compute the type on demand when the user
+in `Elm.TypeInference.inferModule`, we compute the type on demand when the user
 calls `TypeLookupTable.get`.
 -}
 type alias TypeLookupTable =
