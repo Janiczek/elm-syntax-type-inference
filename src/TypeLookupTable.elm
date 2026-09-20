@@ -1,8 +1,8 @@
-module TypeLookupTable exposing (TypeLookupTable, get)
+module TypeLookupTable exposing (TypeLookupTable, get, empty)
 
 {-|
 
-@docs TypeLookupTable, get
+@docs TypeLookupTable, get, empty
 
 -}
 
@@ -21,6 +21,16 @@ calls `TypeLookupTable.get`.
 -}
 type alias TypeLookupTable =
     Internal.TypeLookupTable
+
+
+{-| An empty lookup table. Not for direct use.
+
+Useful for when a value of this type is needed to satisfy the compiler but will never be used.
+
+-}
+empty : TypeLookupTable
+empty =
+    Internal.empty
 
 
 {-| Look up the inferred `Type` for a source `Range`.
