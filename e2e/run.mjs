@@ -211,17 +211,19 @@ function cachedVersions(name) {
   return versions;
 }
 
-function packageDeps(name, version) {
+async function packageDeps(name, version) {
   if (!version) return [];
+  const elmJsonPath = path.join(PACKAGES_DIR, name, version, "elm.json");
   try {
-    return Object.keys(readCachedPackageJson(path.join(PACKAGES_DIR, name, version, "elm.json")).dependencies || {});
+    return Object.keys(readCachedPackageJson(elmJsonPath).dependencies || {});
   } catch (e) {
-    if (e?.code === "ENOENT") {
-      console.warn(`warning: missing elm.json for ${name}@${version}, assuming no transitive deps`);
-      return [];
-    }
-    throw e;
+    if (e?.code !== "ENOENT") throw e;
   }
+  const res = await fetch(`https://package.elm-lang.org/packages/${name}/${version}/elm.json`);
+  if (!res.ok) throw new Error(`missing elm.json for ${name}@${version} (HTTP ${res.status})`);
+  const elmJson = await res.json();
+  packageJsonCache.set(elmJsonPath, elmJson);
+  return Object.keys(elmJson.dependencies || {});
 }
 
 // docs.json is not always present in ~/.elm, download from package.elm-lang.org
@@ -238,23 +240,11 @@ async function loadDocsJson(name, version) {
     if (e?.code !== "ENOENT") throw e;
   }
 
-  console.warn(`warning: docs.json missing for ${name}@${version}, fetching from package.elm-lang.org...`);
-  try {
-    const res = await fetch(`https://package.elm-lang.org/packages/${name}/${version}/docs.json`);
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    const docs = await res.json();
-    try {
-      fs.mkdirSync(path.dirname(docsPath), { recursive: true });
-      fs.writeFileSync(docsPath, JSON.stringify(docs));
-    } catch {}
-    docsJsonCache.set(key, docs);
-    return docs;
-  } catch (fetchError) {
-    console.warn(
-      `warning: could not fetch docs.json for ${name}@${version}: ${fetchError?.message ?? fetchError}. Using empty docs.`
-    );
-    return [];
-  }
+  const res = await fetch(`https://package.elm-lang.org/packages/${name}/${version}/docs.json`);
+  if (!res.ok) throw new Error(`missing docs.json for ${name}@${version} (HTTP ${res.status} ${res.statusText})`);
+  const docs = await res.json();
+  docsJsonCache.set(key, docs);
+  return docs;
 }
 
 function directDependencyNames(elmJson) {
@@ -318,24 +308,32 @@ async function resolveDependencies(elmJson, preResolved = null) {
   const dependencies = await Promise.all(
     Object.entries(versions).map(async ([name, version]) => ({
       name,
-      dependsOn: packageDeps(name, version),
+      dependsOn: await packageDeps(name, version),
       docsJson: await loadDocsJson(name, version),
     }))
   );
   return { dependencies, versions };
 }
 
-function loadRequestedFile(name, version, file) {
+async function loadRequestedFile(name, version, file) {
   const abs = path.join(PACKAGES_DIR, name, version, file);
   try {
     return { path: abs, source: fs.readFileSync(abs, "utf8") };
   } catch (e) {
-    if (e?.code === "ENOENT") {
-      console.warn(`warning: no source for ${name}@${version} file ${file} at ${abs}, continuing without it`);
-      return null;
-    }
-    throw e;
+    if (e?.code !== "ENOENT") throw e;
   }
+  const res = await fetch(`https://raw.githubusercontent.com/${name}/${version}/${file}`);
+  if (!res.ok) {
+    throw new Error(
+      `package source not found: ${name}@${version} file ${file} (not in ${abs}, github raw HTTP ${res.status})`
+    );
+  }
+  const source = await res.text();
+  try {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, source);
+  } catch {}
+  return { path: abs, source };
 }
 
 function buildRunner() {
@@ -442,16 +440,25 @@ function runLazy(flags, versions) {
         });
         return;
       }
-      const payload = [...freshByPackage.entries()].map(([name, files]) => {
-        const version = versions[name];
-        if (!version) {
-          console.warn(`warning: no cached version for ${name}, continuing without its sources`);
-          return { name, sources: [] };
-        }
-        const sources = files.map((file) => loadRequestedFile(name, version, file)).filter((s) => s !== null);
-        return { name, sources };
+      (async () => {
+        const payload = await Promise.all(
+          [...freshByPackage.entries()].map(async ([name, files]) => {
+            const version = versions[name];
+            if (!version) {
+              throw new Error(`no version in solution for requested package ${name} (requested files: ${files.join(", ")})`);
+            }
+            const sources = await Promise.all(files.map((file) => loadRequestedFile(name, version, file)));
+            return { name, sources };
+          })
+        );
+        app.ports.providePackageSources.send(payload);
+      })().catch((e) => {
+        cleanup();
+        resolve({
+          result: { ok: false, error: formatError(e) },
+          inferenceMs: null,
+        });
       });
-      app.ports.providePackageSources.send(payload);
     };
     const onInferenceStarted = () => {
       inferenceStart = nowMs();
