@@ -21,17 +21,16 @@ const require = createRequire(import.meta.url);
 const TESTS_DIR = path.join(__dirname, "tests");
 const ELM_JS = path.join(__dirname, "elm.js");
 
-// `elm` from PATH unless --compiler points somewhere else.
-let elmCompiler = "elm";
-// Skip writing inferred-types.txt unless --write-types is passed.
-let writeTypes = false;
-// Machine-readable CSV on stdout instead of human-readable lines.
-let csvMode = false;
-let warmupDeps = true;
-let buildMode = "auto"; // vs "skip" and "rebuild"
-let jobs = 1;
-// When --jobs > 1, skips CSV header and the summary:
-let asShard = false;
+const config = {
+  compiler: "elm",
+  writeTypes: false,
+  csv: false,
+  warmupDeps: true,
+  build: "auto", // vs "skip" and "rebuild"
+  jobs: 1,
+  // When --jobs > 1, skips CSV header and the summary:
+  asShard: false,
+};
 
 function parseJobs(value) {
   const n = Number.parseInt(value, 10);
@@ -44,41 +43,33 @@ function parseJobs(value) {
 
 function parseArgs(argv) {
   const filters = [];
+  const valueFlags = {
+    "--compiler": (v) => { config.compiler = v; },
+    "--jobs": (v) => { config.jobs = parseJobs(v); },
+  };
+  const boolFlags = {
+    "--write-types": () => { config.writeTypes = true; },
+    "--csv": () => { config.csv = true; },
+    "--warmup-deps": () => { config.warmupDeps = true; },
+    "--no-warmup-deps": () => { config.warmupDeps = false; },
+    "--skip-build": () => { config.build = "skip"; },
+    "--rebuild": () => { config.build = "rebuild"; },
+    "--as-shard": () => { config.asShard = true; },
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-
-    // Don't you love parsing arguments
-    if (arg === "--compiler") {
-      elmCompiler = argv[++i];
-      if (!elmCompiler) {
-        console.error("--compiler needs a path");
+    const eq = arg.indexOf("=");
+    const key = eq === -1 ? arg : arg.slice(0, eq);
+    if (key in valueFlags) {
+      const value = eq === -1 ? argv[++i] : arg.slice(eq + 1);
+      if (value === undefined || value === "") {
+        console.error(`${key} needs a value`);
         process.exit(1);
       }
-    } else if (arg.startsWith("--compiler=")) {
-      elmCompiler = arg.slice("--compiler=".length);
-    } else if (arg === "--write-types") {
-      writeTypes = true;
-    } else if (arg === "--no-write-types") {
-      writeTypes = false;
-    } else if (arg === "--csv") {
-      csvMode = true;
-    } else if (arg === "--no-csv") {
-      csvMode = false;
-    } else if (arg === "--warmup-deps") {
-      warmupDeps = true;
-    } else if (arg === "--no-warmup-deps") {
-      warmupDeps = false;
-    } else if (arg === "--skip-build") {
-      buildMode = "skip";
-    } else if (arg === "--rebuild") {
-      buildMode = "rebuild";
-    } else if (arg === "--jobs") {
-      jobs = parseJobs(argv[++i]);
-    } else if (arg.startsWith("--jobs=")) {
-      jobs = parseJobs(arg.slice("--jobs=".length));
-    } else if (arg === "--as-shard") {
-      asShard = true;
+      valueFlags[key](value);
+    } else if (arg in boolFlags) {
+      boolFlags[arg]();
     } else {
       filters.push(arg);
     }
@@ -145,19 +136,6 @@ function exposedModulesFor(elmJson) {
   return null;
 }
 
-// Warm the ELM_HOME cache with an exposed file.
-function pickWarmupFile(projectDir, sourceFiles, elmJson) {
-  const exposed = exposedModulesFor(elmJson);
-  if (exposed && exposed.length > 0) {
-    for (const mod of exposed) {
-      const suffix = path.join(...mod.split(".")) + ".elm";
-      const hit = sourceFiles.find((f) => path.relative(projectDir, f).endsWith(suffix));
-      if (hit) return hit;
-    }
-  }
-  return sourceFiles[0];
-}
-
 // Runs `elm make` in the tested directory so the compiler downloads the deps.
 // Compile errors are ignored (tests can be expected to fail).
 // `elm-version` is relaxed to allow us to test with 0.19.2.
@@ -174,7 +152,7 @@ function ensureDependenciesCached(projectDir, sourceFiles) {
   }
 
   try {
-    execFileSync(elmCompiler, ["make", sourceFiles[0], "--output=/dev/null"], {
+    execFileSync(config.compiler, ["make", sourceFiles[0], "--output=/dev/null"], {
       cwd: projectDir,
       stdio: "ignore",
     });
@@ -194,8 +172,8 @@ function dependenciesReadyOnDisk(versions) {
   return Object.entries(versions).every(([name, version]) => versionReadyOnDisk(name, version));
 }
 
-function maybeWarmupDependencies(projectDir, warmupFiles, elmJson) {
-  if (warmupFiles.length === 0) return null;
+function maybeWarmupDependencies(projectDir, sourceFiles, elmJson) {
+  if (sourceFiles.length === 0) return null;
   let versions = null;
   try {
     versions = versionsFor(elmJson);
@@ -209,7 +187,7 @@ function maybeWarmupDependencies(projectDir, warmupFiles, elmJson) {
   ) {
     return versions;
   }
-  ensureDependenciesCached(projectDir, warmupFiles);
+  ensureDependenciesCached(projectDir, sourceFiles);
   clearResolverCaches();
   return null;
 }
@@ -361,11 +339,11 @@ function loadRequestedFile(name, version, file) {
 }
 
 function buildRunner() {
-  if (buildMode === "skip") {
+  if (config.build === "skip") {
     if (!fs.existsSync(ELM_JS)) doBuildRunner();
     return;
   }
-  if (buildMode !== "rebuild" && isRunnerFresh()) return;
+  if (config.build !== "rebuild" && isRunnerFresh()) return;
   doBuildRunner();
 }
 
@@ -396,7 +374,7 @@ function isRunnerFresh() {
 
 function doBuildRunner() {
   try {
-    execFileSync(elmCompiler, ["make", "src/Runner.elm", "--optimize", "--output=elm.js"], {
+    execFileSync(config.compiler, ["make", "src/Runner.elm", "--optimize", "--output=elm.js"], {
       cwd: __dirname,
       stdio: "pipe",
     });
@@ -470,9 +448,7 @@ function runLazy(flags, versions) {
           console.warn(`warning: no cached version for ${name}, continuing without its sources`);
           return { name, sources: [] };
         }
-        const sources = files
-          .map((file) => loadRequestedFile(name, version, file))
-          .filter((s) => s !== null);
+        const sources = files.map((file) => loadRequestedFile(name, version, file)).filter((s) => s !== null);
         return { name, sources };
       });
       app.ports.providePackageSources.send(payload);
@@ -517,7 +493,6 @@ function discoverTests(filters) {
 }
 
 async function runTest(name) {
-  if (!csvMode) process.stdout.write(name);
   const testDir = path.join(TESTS_DIR, name);
   const projectDir = path.join(testDir, "project");
   const expected = readJson(path.join(testDir, "expected.json"));
@@ -526,12 +501,8 @@ async function runTest(name) {
   try {
     const sourceFiles = findSourceFiles(projectDir, elmJson);
     let preResolved = null;
-    if (warmupDeps) {
-      preResolved = maybeWarmupDependencies(
-        projectDir,
-        [pickWarmupFile(projectDir, sourceFiles, elmJson)].filter(Boolean),
-        elmJson
-      );
+    if (config.warmupDeps) {
+      preResolved = maybeWarmupDependencies(projectDir, sourceFiles, elmJson);
     }
 
     const { dependencies, versions } = await resolveDependencies(elmJson, preResolved);
@@ -558,10 +529,10 @@ async function runTest(name) {
 
     // Outside benchmarked time: only on success ask Elm to serialize
     // the tables and save them to a file. Skipped unless --write-types.
-    if (writeTypes) {
+    if (config.writeTypes) {
       let inferredTypes = "";
       if (result.ok) {
-        const out = csvMode ? process.stderr : process.stdout;
+        const out = config.csv ? process.stderr : process.stdout;
         if (out.isTTY) {
           out.write("Writing types to inferred-types.txt...");
         }
@@ -594,20 +565,38 @@ function csvEscape(value) {
 
 function printReport({ name, expected, result, passed, elapsedSeconds }) {
   const actual = result.ok ? "pass" : "fail";
-  if (csvMode) {
+  if (config.csv) {
     const rawError = result.ok ? "" : (result.error ?? "");
     const error = expected.expect === "fail" && passed ? "" : rawError;
-    // `test,` prefix already written early in main loop, finish rest of line.
     console.log(
-      [expected.expect, actual, passed, elapsedSeconds.toFixed(4), error].map(csvEscape).join(",")
+      [name, expected.expect, actual, passed, elapsedSeconds.toFixed(4), error].map(csvEscape).join(",")
     );
     return;
   }
   const suffix = passed ? "" : `  (expected: ${expected.expect}, actual: ${actual})`;
-  console.log(` ${passed ? "✓ PASS" : "✗ FAIL"} (${elapsedSeconds.toFixed(3)}s)${suffix}`);
+  console.log(`${name} ${passed ? "✓ PASS" : "✗ FAIL"} (${elapsedSeconds.toFixed(3)}s)${suffix}`);
 
   if (!result.ok && result.error) {
     console.log(`    error: ${result.error}`);
+  }
+}
+
+function printCsvHeader() {
+  if (config.csv && !config.asShard) {
+    console.log("test,expected,actual,passed,seconds,error");
+  }
+}
+
+function printSummary(passedCount, total) {
+  const summary = `${passedCount}/${total} test${total > 1 ? "s" : ""} passed`;
+  if (config.asShard) {
+    console.error(`${SHARD_DONE_PREFIX}passed=${passedCount} total=${total}`);
+  } else if (config.csv) {
+    console.error("");
+    console.error(summary);
+  } else {
+    console.log("");
+    console.log(summary);
   }
 }
 
@@ -622,44 +611,31 @@ async function main() {
     process.exit(1);
   }
 
-  if (!asShard && jobs > 1 && names.length > 1) {
-    await runSharded(names, Math.min(jobs, names.length));
+  if (!config.asShard && config.jobs > 1 && names.length > 1) {
+    await runSharded(names, Math.min(config.jobs, names.length));
     return;
   }
 
   let passedCount = 0;
-  if (csvMode && !asShard) {
-    console.log("test,expected,actual,passed,seconds,error");
-  }
+  printCsvHeader();
   for (const name of names) {
-    if (csvMode) process.stdout.write(`${csvEscape(name)},`);
     try {
+      // runTest already handles errors after expected.json loads;
+      // this is a last resort (e.g. missing expected.json) so the suite continues.
       const report = await runTest(name);
       if (report.passed) passedCount++;
     } catch (e) {
-      // runTest already handles errors after expected.json loads;
-      // this is a last resort (e.g. missing expected.json) so the suite continues.
-      // CSV `test,` prefix already written above, finish rest of line.
-      const error = formatError(e);
-      if (csvMode) {
-        console.log(["?", "fail", false, (0).toFixed(3), error].map(csvEscape).join(","));
-      } else {
-        console.log(` ✗ FAIL (0.000s)`);
-        console.log(`    error: ${error}`);
-      }
+      printReport({
+        name,
+        expected: { expect: "?" },
+        result: { ok: false, error: formatError(e) },
+        passed: false,
+        elapsedSeconds: 0,
+      });
     }
   }
 
-  const summary = `${passedCount}/${names.length} test${names.length > 1 ? "s" : ""} passed`;
-  if (asShard) {
-    console.error(`${SHARD_DONE_PREFIX}passed=${passedCount} total=${names.length}`);
-  } else if (csvMode) {
-    console.error("");
-    console.error(summary);
-  } else {
-    console.log("");
-    console.log(summary);
-  }
+  printSummary(passedCount, names.length);
   process.exit(passedCount === names.length ? 0 : 1);
 }
 
@@ -667,18 +643,16 @@ async function main() {
 
 const SHARD_DONE_PREFIX = "run.mjs shard done: ";
 
-function parentArgsForShard() {
-  const raw = process.argv.slice(2);
-  const out = [];
-  for (let i = 0; i < raw.length; i++) {
-    const a = raw[i];
-    if (a === "--jobs") {
-      i++;
-      continue;
-    }
-    if (a.startsWith("--jobs=") || a === "--as-shard") continue;
-    out.push(a);
-  }
+// Shard children get their configuration from flags (test names come from
+// the chunk). Rebuilding from parsed config also drops the parent's filters,
+// which the chunk replaces.
+function shardBaseArgs() {
+  const out = [`--compiler=${config.compiler}`];
+  if (config.writeTypes) out.push("--write-types");
+  if (config.csv) out.push("--csv");
+  if (!config.warmupDeps) out.push("--no-warmup-deps");
+  if (config.build === "skip") out.push("--skip-build");
+  if (config.build === "rebuild") out.push("--rebuild");
   return out;
 }
 
@@ -686,26 +660,17 @@ async function runSharded(names, jobCount) {
   const buckets = Array.from({ length: jobCount }, () => []);
   names.forEach((n, i) => buckets[i % jobCount].push(n));
   const chunks = buckets.filter((b) => b.length > 0);
-  if (csvMode) {
-    console.log("test,expected,actual,passed,seconds,error");
-  }
+  printCsvHeader();
   let passedCount = 0;
   await Promise.all(chunks.map((chunk) => runShard(chunk).then((n) => (passedCount += n))));
 
-  const summary = `${passedCount}/${names.length} test${names.length > 1 ? "s" : ""} passed`;
-  if (csvMode) {
-    console.error("");
-    console.error(summary);
-  } else {
-    console.log("");
-    console.log(summary);
-  }
+  printSummary(passedCount, names.length);
   process.exit(passedCount === names.length ? 0 : 1);
 }
 
 function runShard(chunk) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [process.argv[1], ...parentArgsForShard(), "--as-shard", ...chunk], {
+    const child = spawn(process.execPath, [process.argv[1], ...shardBaseArgs(), "--as-shard", ...chunk], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let outBuf = "";
