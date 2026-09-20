@@ -13,8 +13,10 @@ The variants that `elm-syntax`'s own parser (or the Elm compiler's own
 
 -}
 
-import Dict
+import Dict exposing (Dict)
 import Elm.Docs
+import Elm.Syntax.File exposing (File)
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Type
 import Elm.TypeInference
 import Elm.TypeInference.Error as Error
@@ -243,6 +245,7 @@ missingModuleNameTest =
                                 -- Simulates a caller that failed to derive a module
                                 -- name for this file (eg. from its file path) and
                                 -- keyed it with `[]` instead.
+                                filesWithBadKey : Dict ModuleName File
                                 filesWithBadKey =
                                     files
                                         |> Dict.values

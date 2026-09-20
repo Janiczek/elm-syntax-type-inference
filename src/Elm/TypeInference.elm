@@ -18,7 +18,7 @@ The process:
     [`File`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-File#File)s
     into a [`Project`](#Project).
   - (When it's clear you need it) Infer a module with
-    [`inferModule`](#inferModule), producing [`TypeLookupTable`](#TypeLookupTable).
+    [`inferModule`](#inferModule), producing [`TypeLookupTable`](TypeLookupTable#TypeLookupTable).
   - (When it's clear you need it) Get a [`Type`](Elm-TypeInference-Type#Type)
     for a given AST
     [`Node`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-Node#Node)'s
