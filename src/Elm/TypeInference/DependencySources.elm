@@ -101,8 +101,19 @@ neededSources deps sources =
             deps
                 |> Dict.values
                 |> List.ExtraExtra.fastConcatMap .modules
-                |> List.map (\mod -> ( mod.name, documentedTypeNames mod ))
-                |> Dict.fromList
+                |> List.foldl
+                    (\mod acc ->
+                        Dict.update mod.name
+                            (\existing ->
+                                Just
+                                    (Set.union
+                                        (documentedTypeNames mod)
+                                        (Maybe.withDefault Set.empty existing)
+                                    )
+                            )
+                            acc
+                    )
+                    Dict.empty
     in
     deps
         |> Dict.toList
