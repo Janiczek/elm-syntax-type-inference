@@ -3,7 +3,6 @@ module Elm.TypeInference.TypeVar exposing
     , TypeVar
     , TypeVarStyle(..)
     , parse
-    , superTypeToString
     , toString
     )
 

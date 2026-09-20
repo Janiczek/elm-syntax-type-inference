@@ -37,6 +37,7 @@ import Elm.TypeInference.VarSet as VarSet
     exposing
         ( VarKey
         , VarSet
+        , superTypeTag
         , varKey
         )
 import Result.Extra
@@ -505,7 +506,7 @@ normalize ((Forall boundVars monoType) as type_) =
                 |> VarSet.toList
 
         -- eg. `number` and `comparable` get their own slot sequence independent of the `Normal` one
-        usedNamesBySuper : Dict String (Set String)
+        usedNamesBySuper : Dict Int (Set String)
         usedNamesBySuper =
             allVars
                 |> List.foldl
@@ -513,7 +514,7 @@ normalize ((Forall boundVars monoType) as type_) =
                         case style of
                             Named name ->
                                 Dict.update
-                                    (TypeVar.superTypeToString super)
+                                    (superTypeTag super)
                                     (\existing -> Just (Set.insert name (Maybe.withDefault Set.empty existing)))
                                     acc
 
@@ -542,7 +543,7 @@ normalize ((Forall boundVars monoType) as type_) =
             let
                 used : Set String
                 used =
-                    Dict.get (TypeVar.superTypeToString super) usedNamesBySuper
+                    Dict.get (superTypeTag super) usedNamesBySuper
                         |> Maybe.withDefault Set.empty
             in
             if Set.member (nameForSlot super slot) used then
@@ -563,9 +564,9 @@ normalize ((Forall boundVars monoType) as type_) =
 
                             Generated _ ->
                                 let
-                                    key : String
+                                    key : Int
                                     key =
-                                        TypeVar.superTypeToString super
+                                        superTypeTag super
 
                                     startSlot : Int
                                     startSlot =
@@ -978,20 +979,288 @@ shaderSlotToPublic f extensionTypevar fields =
 -}
 monoPublicKey : { alreadyNormalized : Bool } -> MonoType -> String
 monoPublicKey { alreadyNormalized } origMono =
-    let
-        mono_ : MonoType
-        mono_ =
-            if alreadyNormalized then
-                origMono
+    if alreadyNormalized then
+        monoPublicKeyNormalized origMono
 
-            else
-                let
-                    (Forall _ normalizedMono) =
-                        normalize (Forall [] origMono)
-                in
-                normalizedMono
+    else
+        monoPublicKeyAlpha origMono
+
+
+{-| Alpha-equivalence deduplication key.
+-}
+monoPublicKeyAlpha : MonoType -> String
+monoPublicKeyAlpha mono_ =
+    Tuple.first
+        (monoPublicKeyAlphaHelp
+            (collapseExtensible mono_)
+            { next = 0, mapping = Dict.empty }
+        )
+
+
+type alias AlphaState =
+    { next : Int
+    , mapping : Dict Int Int
+    }
+
+
+superTagString : SuperType -> String
+superTagString super =
+    case super of
+        Normal ->
+            "0"
+
+        Number ->
+            "1"
+
+        Comparable ->
+            "2"
+
+        Appendable ->
+            "3"
+
+        CompAppend ->
+            "4"
+
+
+alphaVarCode : TypeVar -> AlphaState -> ( String, AlphaState )
+alphaVarCode ( style, super ) state =
+    case style of
+        Named name ->
+            ( "n" ++ superTagString super ++ ";" ++ strKey name
+            , state
+            )
+
+        Generated theId ->
+            let
+                k : Int
+                k =
+                    theId * 5 + superTypeTag super
+            in
+            case Dict.get k state.mapping of
+                Just i ->
+                    ( "g" ++ superTagString super ++ ";" ++ String.fromInt i ++ ";"
+                    , state
+                    )
+
+                Nothing ->
+                    let
+                        i : Int
+                        i =
+                            state.next
+                    in
+                    ( "g" ++ superTagString super ++ ";" ++ String.fromInt i ++ ";"
+                    , { next = i + 1, mapping = Dict.insert k i state.mapping }
+                    )
+
+
+monoPublicKeyAlphaHelp : MonoType -> AlphaState -> ( String, AlphaState )
+monoPublicKeyAlphaHelp mono_ state =
+    case collapseExtensible mono_ of
+        TypeVar var ->
+            let
+                ( code, state1 ) =
+                    alphaVarCode var state
+            in
+            ( "0;" ++ strKey code, state1 )
+
+        Function { from, to } ->
+            let
+                ( k1, s1 ) =
+                    monoPublicKeyAlphaHelp from state
+
+                ( k2, s2 ) =
+                    monoPublicKeyAlphaHelp to s1
+            in
+            ( "1;" ++ strKey k1 ++ strKey k2, s2 )
+
+        Int ->
+            ( "2;", state )
+
+        Float ->
+            ( "3;", state )
+
+        Char ->
+            ( "4;", state )
+
+        String ->
+            ( "5;", state )
+
+        Bool ->
+            ( "6;", state )
+
+        List inner ->
+            let
+                ( k, s1 ) =
+                    monoPublicKeyAlphaHelp inner state
+            in
+            ( "7;" ++ strKey k, s1 )
+
+        Unit ->
+            ( "8;", state )
+
+        Tuple2 t1 t2 ->
+            let
+                ( k1, s1 ) =
+                    monoPublicKeyAlphaHelp t1 state
+
+                ( k2, s2 ) =
+                    monoPublicKeyAlphaHelp t2 s1
+            in
+            ( "9;" ++ strKey k1 ++ strKey k2, s2 )
+
+        Tuple3 t1 t2 t3 ->
+            let
+                ( k1, s1 ) =
+                    monoPublicKeyAlphaHelp t1 state
+
+                ( k2, s2 ) =
+                    monoPublicKeyAlphaHelp t2 s1
+
+                ( k3, s3 ) =
+                    monoPublicKeyAlphaHelp t3 s2
+            in
+            ( "10;" ++ strKey k1 ++ strKey k2 ++ strKey k3, s3 )
+
+        Record { fields } ->
+            let
+                ( rk, s1 ) =
+                    recordKeyAlpha fields state
+            in
+            ( "11;" ++ strKey rk, s1 )
+
+        ExtensibleRecord { extensionTypevar, fields } ->
+            let
+                ( ek, s1 ) =
+                    extNameAlpha extensionTypevar state
+
+                ( rk, s2 ) =
+                    recordKeyAlpha fields s1
+            in
+            ( "12;" ++ strKey ek ++ strKey rk, s2 )
+
+        UserDefinedType r ->
+            let
+                ( ak, s1 ) =
+                    argsKeyAlpha r.args state
+            in
+            ( "13;"
+                ++ strKey r.package
+                ++ strKey (String.fromInt r.moduleId)
+                ++ strKey r.name
+                ++ strKey ak
+            , s1
+            )
+
+        WebGLShader r ->
+            let
+                ( a, s1 ) =
+                    shaderSlotKeyAlpha r.attributesExtension r.attributes state
+
+                ( b, s2 ) =
+                    shaderSlotKeyAlpha r.uniformsExtension r.uniforms s1
+
+                ( c, s3 ) =
+                    shaderSlotKeyAlpha r.varyingsExtension r.varyings s2
+            in
+            ( "14;" ++ a ++ b ++ c, s3 )
+
+
+recordKeyAlpha : Dict VarName MonoType -> AlphaState -> ( String, AlphaState )
+recordKeyAlpha fields state =
+    let
+        go : List ( VarName, MonoType ) -> AlphaState -> List String -> ( List String, AlphaState )
+        go remaining st acc =
+            case remaining of
+                [] ->
+                    ( List.reverse acc, st )
+
+                ( k, v ) :: rest ->
+                    let
+                        ( vk, st2 ) =
+                            monoPublicKeyAlphaHelp v st
+                    in
+                    go rest st2 ((strKey k ++ strKey vk) :: acc)
+
+        ( parts, finalState ) =
+            go (Dict.toList fields) state []
     in
-    monoPublicKeyNormalized mono_
+    ( String.fromInt (Dict.size fields) ++ ";" ++ String.concat parts
+    , finalState
+    )
+
+
+argsKeyAlpha : List MonoType -> AlphaState -> ( String, AlphaState )
+argsKeyAlpha args state =
+    let
+        go : List MonoType -> AlphaState -> List String -> ( List String, AlphaState )
+        go remaining st acc =
+            case remaining of
+                [] ->
+                    ( List.reverse acc, st )
+
+                a :: rest ->
+                    let
+                        ( ak, st2 ) =
+                            monoPublicKeyAlphaHelp a st
+                    in
+                    go rest st2 (strKey ak :: acc)
+
+        ( parts, finalState ) =
+            go args state []
+    in
+    ( String.fromInt (List.length args) ++ ";" ++ String.concat parts
+    , finalState
+    )
+
+
+extNameAlpha : MonoType -> AlphaState -> ( String, AlphaState )
+extNameAlpha extensionTypevar state =
+    case extensionTypevar of
+        TypeVar var ->
+            alphaVarCode var state
+
+        _ ->
+            ( "<elm-syntax-type-inference bug: non-var as extensible record base>"
+            , state
+            )
+
+
+shaderSlotKeyAlpha : MonoType -> Dict VarName MonoType -> AlphaState -> ( String, AlphaState )
+shaderSlotKeyAlpha extensionTypevar fields state =
+    case
+        collapseExtensible
+            (ExtensibleRecord
+                { extensionTypevar = extensionTypevar
+                , fields = fields
+                }
+            )
+    of
+        Record r ->
+            let
+                ( rk, s1 ) =
+                    recordKeyAlpha r.fields state
+            in
+            ( strKey rk ++ maybeStrKey Nothing, s1 )
+
+        TypeVar var ->
+            let
+                ( vc, s1 ) =
+                    alphaVarCode var state
+            in
+            ( strKey "0;" ++ maybeStrKey (Just vc), s1 )
+
+        ExtensibleRecord r ->
+            let
+                ( rk, s1 ) =
+                    recordKeyAlpha r.fields state
+
+                ( ek, s2 ) =
+                    extNameAlpha r.extensionTypevar s1
+            in
+            ( strKey rk ++ maybeStrKey (Just ek), s2 )
+
+        _ ->
+            ( strKey "0;" ++ maybeStrKey Nothing, state )
 
 
 monoPublicKeyNormalized : MonoType -> String

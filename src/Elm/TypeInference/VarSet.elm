@@ -5,6 +5,7 @@ module Elm.TypeInference.VarSet exposing
     , empty
     , fromList
     , insert
+    , superTypeTag
     , toList
     , union
     , varKey
