@@ -1,48 +1,34 @@
 module Elm.TypeInference exposing
-    ( dependencyEnv, DependencyEnv, Dependency, DependencyEnvOutcome(..)
+    ( dependencyEnv, DependencyEnvOutcome(..), DependencyEnv, Dependency
     , project, Project
     , inferModule, inferModules
     )
 
 {-| Type inference for
 [`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
-ASTs, optimized for lazy queries `Range -> Maybe Type`.
+ASTs.
 
+Optimized for lazy queries `Range -> Maybe Type`.
 
-# 1. `elm.json` - 3rd party dependencies
+The process:
 
-First the inference library needs to learn about the project's dependencies.
-These don't change as often as the project source code itself, so they're cached
-on their own.
+  - Convert `elm.json` and dependencies' `elm.json` + `docs.json` into
+    [`DependencyEnv`](#DependencyEnv).
+  - Load the
+    [`File`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-File#File)s
+    into a [`Project`](#Project).
+  - (When it's clear you need it) Infer a module with
+    [`inferModule`](#inferModule), producing [`TypeLookupTable`](#TypeLookupTable).
+  - (When it's clear you need it) Get a [`Type`](Elm-TypeInference-Type#Type)
+    for a given AST
+    [`Node`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-Node#Node)'s
+    [`Range`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-Range#Range) with [`get`](TypeLookupTable#get).
 
-@docs dependencyEnv, DependencyEnv, Dependency, DependencyEnvOutcome
-
-
-# 2. Project - resolving the module import graph
-
-Then the inference library needs to analyze the import graph of the project
-source code.
+@docs dependencyEnv, DependencyEnvOutcome, DependencyEnv, Dependency
 
 @docs project, Project
 
-
-# 3. Infer specific modules
-
-Run `inferModule` for each module you want to infer types in. You'll get a
-`TypeLookupTable` back, from which you can `get` the `Type` for a given `Range`.
-
 @docs inferModule, inferModules
-
-
-# 4. Get inferred types for a given Range
-
-    mainDeclarationRange : Range -- from walking the `Elm.Syntax.File` AST
-    mainModuleTLT : TypeLookupTable -- from `Elm.TypeLookup.inferModule`
-
-    TypeLookupTable.get mainDeclarationRange mainModuleTLT
-    --> ( Just Elm.TypeInference.Type.Int
-    --  , newMainModuleTLT
-    --  )
 
 -}
 
@@ -99,7 +85,7 @@ type Project
         }
 
 
-{-| Analyze the import graph of the project source code.
+{-| Analyze the import graph of the project source code, producing a [`Project`](#Project).
 -}
 project : Maybe PackageName -> DependencyEnv -> Dict ModuleName File -> Result Error Project
 project currentPackage depEnv files =
@@ -261,8 +247,8 @@ inferModule moduleName ((Project p) as proj) =
             )
 
 
-{-| Helper. Run `inferModule` for each of the given modules, collecting
-successes and errors into separate Dicts.
+{-| Helper. Run [`inferModule`](#inferModules) for each of the given modules,
+collecting successes and errors into separate `Dict`s.
 -}
 inferModules :
     Dict ModuleName File
@@ -303,11 +289,17 @@ inferModules files proj0 =
 -- DEPENDENCIES
 
 
-{-| A dependency package with its type information.
+{-| Input to [`dependencyEnv`](#dependencyEnv).
 
-  - `name` -- the package identifier (e.g. `"elm/core"`).
-  - `dependencies` -- names of the package's _immediate_ `elm.json` dependencies (eg. "elm/json").
-  - `modules` -- the decoded `docs.json` modules
+A dependency package with its type information, parsed from the dependency's
+`elm.json` (via
+[`Elm.Project.decoder`](https://package.elm-lang.org/packages/elm/project-metadata-utils/latest/Elm-Project#decoder))
+and `docs.json` (via `elm/project-metadata-utils`
+[`Elm.Docs.decoder`](https://package.elm-lang.org/packages/elm/project-metadata-utils/latest/Elm-Docs#decoder)):
+
+  - **name:** the package identifier (e.g. `"elm/html"`).
+  - **dependencies:** names of the package's _immediate_ `elm.json` dependencies (eg. `"elm/virtual-dom"`).
+  - **modules:** the decoded `docs.json` modules.
 
 -}
 type alias Dependency =
@@ -317,10 +309,10 @@ type alias Dependency =
     }
 
 
-{-| Dependency types and other info computed from dependencies' docs.json files.
+{-| Data parsed from dependencies' `docs.json` files.
 
 This cache doesn't change as user's project code changes - only invalidate it
-when elm.json changes.
+and [`Project`](#Project) when `elm.json` changes.
 
 -}
 type DependencyEnv
@@ -332,7 +324,13 @@ type DependencyEnv
         }
 
 
-{-| Did dependencies process correctly?
+{-| Possible outcomes of running [`dependencyEnv`](#dependencyEnv).
+
+An example `NeedPackageSources`:
+
+    Dict.fromList
+        [ ( "example/css", [ "src/Css/Internal.elm" ] ) ]
+
 -}
 type DependencyEnvOutcome
     = Ready DependencyEnv
@@ -340,15 +338,12 @@ type DependencyEnvOutcome
     | Failed Error
 
 
-{-| Build a `DependencyEnv`.
+{-| Build a [`DependencyEnv`](#DependencyEnv).
 
-Start by running `dependencyEnv` with empty `sourcesToResolveAmbiguity`.
-
-If you get `NeedPackageSources` back, read those Elm files from the dependencies in
-your ELM\_HOME and supply them in `sourcesToResolveAmbiguity` in the next call.
-
-If you get `Failed` back, the dependencies' `docs.json` types could not be
-resolved.
+Initially you can run with `sourcesToResolveAmbiguity = Dict.empty`. If you get
+`NeedPackageSources` back, read and parse those Elm files from the dependencies
+in your `ELM_HOME` (usually `~/.elm`) and supply them in
+`sourcesToResolveAmbiguity` in the next call.
 
 -}
 dependencyEnv :
@@ -387,15 +382,17 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
 
         baseEnv : Result Error DependencyEnv
         baseEnv =
-            (State.do (Dependencies.register moduleMapping1 deps) <| \( depAliases, moduleMapping2 ) ->
-            State.do State.getGlobalEnv <| \globalEnv ->
-            State.pure <|
-                DependencyEnv
-                    { globalEnv = globalEnv
-                    , typeAliases = depAliases
-                    , index = depIndex
-                    , moduleMapping = moduleMapping2
-                    }
+            (State.do (Dependencies.register moduleMapping1 deps) <|
+                \( depAliases, moduleMapping2 ) ->
+                    State.do State.getGlobalEnv <|
+                        \globalEnv ->
+                            State.pure <|
+                                DependencyEnv
+                                    { globalEnv = globalEnv
+                                    , typeAliases = depAliases
+                                    , index = depIndex
+                                    , moduleMapping = moduleMapping2
+                                    }
             )
                 |> State.run State.empty
                 |> Tuple.first
@@ -609,21 +606,26 @@ inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex fi
         ctx =
             moduleCtx currentPackage depEnv moduleMapping importedInterfaces thisIndex
     in
-    (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
-    let
-        outgoingAliases : Dict GlobalKey TypeAlias
-        outgoingAliases =
-            Dict.union ownAliases ctx.inheritedAliases
+    (State.do (gatherTypeAliases ctx file) <|
+        \ownAliases ->
+            let
+                outgoingAliases : Dict GlobalKey TypeAlias
+                outgoingAliases =
+                    Dict.union ownAliases ctx.inheritedAliases
 
-        typeAliases : Dict GlobalKey TypeAlias
-        typeAliases =
-            Dict.union outgoingAliases ctx.depTypeAliases
-    in
-    State.do (registerConstructorsAndPorts ctx file) <| \() ->
-    State.do (registerEffectMagic ctx) <| \() ->
-    State.do (solveModule ctx typeAliases file) <| \() ->
-    State.do (moduleResult ctx outgoingAliases) <| \result ->
-    State.pure result
+                typeAliases : Dict GlobalKey TypeAlias
+                typeAliases =
+                    Dict.union outgoingAliases ctx.depTypeAliases
+            in
+            State.do (registerConstructorsAndPorts ctx file) <|
+                \() ->
+                    State.do (registerEffectMagic ctx) <|
+                        \() ->
+                            State.do (solveModule ctx typeAliases file) <|
+                                \() ->
+                                    State.do (moduleResult ctx outgoingAliases) <|
+                                        \result ->
+                                            State.pure result
     )
         |> State.run (State.init ctx.globalEnv)
         |> Tuple.first
@@ -638,39 +640,42 @@ moduleResult :
             , interface : ModuleInterface
             }
 moduleResult ctx outgoingAliases =
-    State.do State.getNodeIds <| \nodeIds ->
-    State.do State.getSubst <| \substitutionMap ->
-    State.do State.getGlobalEnv <| \globalEnv ->
-    let
-        exposedValues : Dict VarName TypeI.Type
-        exposedValues =
-            ctx.thisIndex.exposedValues
-                |> Set.foldl
-                    (\name acc ->
-                        case Dict.get ( "", ctx.thisIndex.moduleId, name ) globalEnv of
-                            Just scheme ->
-                                Dict.insert name scheme acc
+    State.do State.getNodeIds <|
+        \nodeIds ->
+            State.do State.getSubst <|
+                \substitutionMap ->
+                    State.do State.getGlobalEnv <|
+                        \globalEnv ->
+                            let
+                                exposedValues : Dict VarName TypeI.Type
+                                exposedValues =
+                                    ctx.thisIndex.exposedValues
+                                        |> Set.foldl
+                                            (\name acc ->
+                                                case Dict.get ( "", ctx.thisIndex.moduleId, name ) globalEnv of
+                                                    Just scheme ->
+                                                        Dict.insert name scheme acc
 
-                            Nothing ->
-                                acc
-                    )
-                    Dict.empty
-    in
-    State.pure
-        { table =
-            TypeLookupTable.Internal.TLT
-                { nodeIds = nodeIds
-                , subst = SubstitutionMap.forLookup substitutionMap
-                , moduleMapping = ctx.moduleMapping
-                , cache = Dict.empty
-                , pool = Dict.empty
-                }
-        , interface =
-            { moduleIndex = ctx.thisIndex
-            , values = exposedValues
-            , typeAliases = outgoingAliases
-            }
-        }
+                                                    Nothing ->
+                                                        acc
+                                            )
+                                            Dict.empty
+                            in
+                            State.pure
+                                { table =
+                                    TypeLookupTable.Internal.TLT
+                                        { nodeIds = nodeIds
+                                        , subst = SubstitutionMap.forLookup substitutionMap
+                                        , moduleMapping = ctx.moduleMapping
+                                        , cache = Dict.empty
+                                        , pool = Dict.empty
+                                        }
+                                , interface =
+                                    { moduleIndex = ctx.thisIndex
+                                    , values = exposedValues
+                                    , typeAliases = outgoingAliases
+                                    }
+                                }
 
 
 
@@ -842,15 +847,17 @@ gatherTypeAliases ctx file =
                                     _ ->
                                         State.pure ()
                         in
-                        State.do type_ <| \type__ ->
-                        State.do (registerConstructor type__) <| \() ->
-                        State.pure <|
-                            Just
-                                ( ( "", moduleId, Node.value typeAlias.name )
-                                , { args = List.map (Node.value >> TypeVar.parse) typeAlias.generics
-                                  , type_ = type__
-                                  }
-                                )
+                        State.do type_ <|
+                            \type__ ->
+                                State.do (registerConstructor type__) <|
+                                    \() ->
+                                        State.pure <|
+                                            Just
+                                                ( ( "", moduleId, Node.value typeAlias.name )
+                                                , { args = List.map (Node.value >> TypeVar.parse) typeAlias.generics
+                                                  , type_ = type__
+                                                  }
+                                                )
 
                     _ ->
                         State.pure Nothing
@@ -983,8 +990,9 @@ The Elm compiler magically provides:
 registerEffectMagic : ModuleCtx -> StateM ()
 registerEffectMagic ctx =
     if ctx.allowKernel then
-        State.do (registerEffectCommand ctx) <| \() ->
-        registerEffectSubscription ctx
+        State.do (registerEffectCommand ctx) <|
+            \() ->
+                registerEffectSubscription ctx
 
     else
         State.pure ()
