@@ -665,7 +665,7 @@ moduleResult :
             { table : TypeLookupTable
             , interface : ModuleInterface
             }
-moduleResult ctx outgoingAliases =
+moduleResult ctx file outgoingAliases =
     State.do State.getNodeIds <| \nodeIds ->
     State.do State.getSubst <| \substitutionMap ->
     State.do State.getGlobalEnv <| \globalEnv ->
@@ -675,11 +675,40 @@ moduleResult ctx outgoingAliases =
             ctx.thisIndex.exposedValues
                 |> Set.foldl
                     (\name acc ->
-                        case Dict.get ( "", ctx.thisIndex.moduleId, name ) globalEnv of
+                        case Dict.get ( ctx.thisIndex.moduleId, "", name ) globalEnv of
                             Just scheme ->
                                 Dict.insert name scheme acc
 
                             Nothing ->
+                                acc
+                    )
+                    Dict.empty
+
+        annotationFor : Dict TypeI.Id TypeI.MonoType
+        annotationFor =
+            file.declarations
+                |> List.foldl
+                    (\declNode acc ->
+                        case Node.value declNode of
+                            Declaration.FunctionDeclaration fn ->
+                                case fn.signature of
+                                    Nothing ->
+                                        acc
+
+                                    Just sigNode ->
+                                        case Dict.get (RangeLike.fromRange (Node.range declNode)) nodeIds of
+                                            Nothing ->
+                                                acc
+
+                                            Just declId ->
+                                                case TypeI.fromTypeAnnotation ctx.resolver (Node.value (Node.value sigNode).typeAnnotation) of
+                                                    Err _ ->
+                                                        acc
+
+                                                    Ok annoMono ->
+                                                        Dict.insert declId annoMono acc
+
+                            _ ->
                                 acc
                     )
                     Dict.empty
@@ -692,6 +721,7 @@ moduleResult ctx outgoingAliases =
                 , moduleMapping = ctx.moduleMapping
                 , cache = Array.empty
                 , pool = Dict.empty
+                , annotationFor = annotationFor
                 }
         , interface =
             { moduleIndex = ctx.thisIndex
@@ -879,8 +909,8 @@ gatherTypeAliases ctx file =
                         State.do (registerConstructor type__) <| \() ->
                         State.pure <|
                             Just
-                                ( ( "", moduleId, Node.value typeAlias.name )
-                                , { args = List.map (Node.value >> TypeVar.parse) typeAlias.generics
+                                ( ( moduleId, "", Node.value typeAlias.name )
+                                , { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
                                   , type_ = type__
                                   }
                                 )

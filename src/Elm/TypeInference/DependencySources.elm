@@ -341,24 +341,23 @@ packageAliases moduleMapping deps package files =
                         (\node dict ->
                             case Node.value node of
                                 Declaration.AliasDeclaration alias_ ->
-                                    Just
-                                        (TypeI.fromTypeAnnotation resolver (Node.value alias_.typeAnnotation)
-                                            |> Result.mapError
-                                                (\err ->
-                                                    { moduleName = FullModuleName.toModuleName thisModule.moduleName
-                                                    , declarationNames = [ Node.value alias_.name ]
-                                                    , details = TypeI.fromTypeAnnotationError err
+                                    TypeI.fromTypeAnnotation resolver (Node.value alias_.typeAnnotation)
+                                        |> Result.mapError
+                                            (\err ->
+                                                { moduleName = FullModuleName.toModuleName thisModule.moduleName
+                                                , declarationNames = [ Node.value alias_.name ]
+                                                , details = TypeI.fromTypeAnnotationError err
+                                                }
+                                            )
+                                        |> Result.map
+                                            (\body ->
+                                                Dict.insert
+                                                    ( thisModule.moduleId, package, Node.value alias_.name )
+                                                    { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) alias_.generics
+                                                    , type_ = body
                                                     }
-                                                )
-                                            |> Result.map
-                                                (\body ->
-                                                    ( ( thisModule.moduleId, package, Node.value alias_.name )
-                                                    , { args = List.map (Node.value >> TypeVar.parse) alias_.generics
-                                                      , type_ = body
-                                                      }
-                                                    )
-                                                )
-                                        )
+                                                    dict
+                                            )
 
                                 _ ->
                                     Ok dict
