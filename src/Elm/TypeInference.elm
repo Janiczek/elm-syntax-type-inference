@@ -98,15 +98,16 @@ project currentPackage depEnv files =
         ( modules, moduleMapping ) =
             Dict.foldl
                 (\key file ( acc, accModuleMapping ) ->
-                    if FullModuleName.fromModuleName key == Nothing then
-                        ( acc, accModuleMapping )
+                    case FullModuleName.fromModuleName key of
+                        Nothing ->
+                            ( acc, accModuleMapping )
 
-                    else
-                        let
-                            ( index, newModuleMapping ) =
-                                ModuleIndex.fromFile accModuleMapping file
-                        in
-                        ( { key = key, index = index, file = file } :: acc, newModuleMapping )
+                        Just _ ->
+                            let
+                                ( index, newModuleMapping ) =
+                                    ModuleIndex.fromFile accModuleMapping file
+                            in
+                            ( { key = key, index = index, file = file } :: acc, newModuleMapping )
                 )
                 ( [], dep.moduleMapping )
                 files

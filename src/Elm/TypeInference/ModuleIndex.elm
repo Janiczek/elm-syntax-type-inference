@@ -341,13 +341,14 @@ exposedValues exposing_ decls =
                                     acc
 
                             Exposing.TypeExpose exposedType ->
-                                if exposedType.open /= Nothing then
-                                    Dict.get exposedType.name decls.unionConstructors
-                                        |> Maybe.withDefault []
-                                        |> List.foldl Set.insert acc
+                                case exposedType.open of
+                                    Nothing ->
+                                        acc
 
-                                else
-                                    acc
+                                    Just _ ->
+                                        Dict.get exposedType.name decls.unionConstructors
+                                            |> Maybe.withDefault []
+                                            |> List.foldl Set.insert acc
                     )
                     Set.empty
 
@@ -439,13 +440,22 @@ importIndex moduleMapping import_ =
                                     Exposing.TypeExpose exposedType ->
                                         { values = acc.values
                                         , types = Set.insert exposedType.name acc.types
-                                        , hasOpenedUnion = acc.hasOpenedUnion || exposedType.open /= Nothing
-                                        , openTypes =
-                                            if exposedType.open /= Nothing then
-                                                Set.insert exposedType.name acc.openTypes
+                                        , hasOpenedUnion =
+                                            acc.hasOpenedUnion
+                                                || (case exposedType.open of
+                                                        Nothing ->
+                                                            False
 
-                                            else
-                                                acc.openTypes
+                                                        Just _ ->
+                                                            True
+                                                   )
+                                        , openTypes =
+                                            case exposedType.open of
+                                                Just _ ->
+                                                    Set.insert exposedType.name acc.openTypes
+
+                                                Nothing ->
+                                                    acc.openTypes
                                         , opaqueTypes = acc.opaqueTypes
                                         }
                             )

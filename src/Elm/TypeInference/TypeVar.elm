@@ -42,11 +42,12 @@ toString ( style, super ) =
     let
         prefix : String
         prefix =
-            if super == Normal then
-                ""
+            case super of
+                Normal ->
+                    ""
 
-            else
-                superTypeToString super
+                _ ->
+                    superTypeToString super
     in
     case ( super, style ) of
         ( Normal, Generated theId ) ->
