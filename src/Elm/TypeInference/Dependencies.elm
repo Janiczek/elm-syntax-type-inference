@@ -197,7 +197,7 @@ fromDocsFields resolver fields =
         fields
 
 
-register : ModuleIds.Mapping -> Dependencies -> StateM ( Dict ( PackageName, ModuleId, VarName ) TypeAlias, ModuleIds.Mapping )
+register : ModuleIds.Mapping -> Dependencies -> StateM ( Dict ( ModuleId, PackageName, VarName ) TypeAlias, ModuleIds.Mapping )
 register moduleMapping deps =
     let
         moduleMapping1 : ModuleIds.Mapping
@@ -218,7 +218,7 @@ registerPackage :
     -> Dependencies
     -> PackageName
     -> DependencyPackage
-    -> StateM (Dict ( PackageName, ModuleId, VarName ) TypeAlias)
+    -> StateM (Dict ( ModuleId, PackageName, VarName ) TypeAlias)
 registerPackage moduleMapping deps pkgName pkg =
     let
         resolver : Resolver
@@ -235,7 +235,7 @@ registerModule :
     -> PackageName
     -> Resolver
     -> Elm.Docs.Module
-    -> StateM (Dict ( PackageName, ModuleId, VarName ) TypeAlias)
+    -> StateM (Dict ( ModuleId, PackageName, VarName ) TypeAlias)
 registerModule moduleMapping pkgName resolver mod =
     case ModuleIds.getIdByDotted mod.name moduleMapping of
         Nothing ->
@@ -264,7 +264,7 @@ registerModule moduleMapping pkgName resolver mod =
                 addBinding name tipe =
                     State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <|
                         \monoType ->
-                            State.addGlobalBinding ( pkgName, moduleId, name ) (TypeI.closeOver monoType)
+                            State.addGlobalBinding ( moduleId, pkgName, name ) (TypeI.closeOver monoType)
             in
             State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <|
                 \_ ->
@@ -316,7 +316,7 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
                                 argTypes
                                     |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
                         in
-                        State.addGlobalBinding ( pkgName, moduleId, ctorName ) (TypeI.closeOver ctorType)
+                        State.addGlobalBinding ( moduleId, pkgName, ctorName ) (TypeI.closeOver ctorType)
             )
         |> State.map (always ())
 
@@ -329,7 +329,7 @@ registerAlias :
     -> String
     -> Resolver
     -> Elm.Docs.Alias
-    -> StateM (Maybe ( ( PackageName, ModuleId, VarName ), TypeAlias ))
+    -> StateM (Maybe ( ( ModuleId, PackageName, VarName ), TypeAlias ))
 registerAlias pkgName moduleId dottedModuleName resolver alias_ =
     let
         toError : ErrorDetails -> Error
@@ -356,7 +356,7 @@ registerAlias pkgName moduleId dottedModuleName resolver alias_ =
                                                 aliasMono
                                                 resolvedFields
                                     in
-                                    State.addGlobalBinding ( pkgName, moduleId, alias_.name ) (TypeI.closeOver ctorType)
+                                    State.addGlobalBinding ( moduleId, pkgName, alias_.name ) (TypeI.closeOver ctorType)
 
                         _ ->
                             State.pure ()
@@ -365,6 +365,6 @@ registerAlias pkgName moduleId dottedModuleName resolver alias_ =
                 \() ->
                     State.pure <|
                         Just
-                            ( ( pkgName, moduleId, alias_.name )
+                            ( ( moduleId, pkgName, alias_.name )
                             , { args = List.map TypeVar.parse alias_.args, type_ = aliasMono }
                             )

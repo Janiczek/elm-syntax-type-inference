@@ -63,7 +63,7 @@ while a project using it might use `Char.Extra` from `elmcraft/core-extra`).
 
 -}
 type alias GlobalKey =
-    ( PackageName, ModuleId, VarName )
+    ( ModuleId, PackageName, VarName )
 
 
 type alias State =
@@ -509,7 +509,7 @@ addGlobalBinding key type_ =
 lookupGlobalEnv : ModuleIds.Mapping -> PackageName -> ModuleId -> VarName -> StateM MonoType
 lookupGlobalEnv moduleMapping package moduleId var =
     do getGlobalEnv <| \env ->
-    case Dict.get ( package, moduleId, var ) env of
+    case Dict.get ( moduleId, package, var ) env of
         Nothing ->
             let
                 moduleName : List String

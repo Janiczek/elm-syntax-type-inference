@@ -571,7 +571,7 @@ moduleCtx currentPackage (DependencyEnv depEnv) moduleMapping importedInterfaces
                     { inheritedAliases = Dict.union interface.typeAliases acc.inheritedAliases
                     , globalEnv =
                         Dict.foldl
-                            (\name scheme inner -> Dict.insert ( "", moduleId, name ) scheme inner)
+                            (\name scheme inner -> Dict.insert ( moduleId, "", name ) scheme inner)
                             acc.globalEnv
                             interface.values
                     }
@@ -653,7 +653,7 @@ moduleResult ctx outgoingAliases =
                                     ctx.thisIndex.exposedValues
                                         |> Set.foldl
                                             (\name acc ->
-                                                case Dict.get ( "", ctx.thisIndex.moduleId, name ) globalEnv of
+                                                case Dict.get ( ctx.thisIndex.moduleId, "", name ) globalEnv of
                                                     Just scheme ->
                                                         Dict.insert name scheme acc
 
@@ -841,7 +841,7 @@ gatherTypeAliases ctx file =
                                             |> State.andThen
                                                 (\ctorType ->
                                                     State.addGlobalBinding
-                                                        ( "", moduleId, Node.value typeAlias.name )
+                                                        ( moduleId, "", Node.value typeAlias.name )
                                                         (TypeI.closeOver ctorType)
                                                 )
 
@@ -854,7 +854,7 @@ gatherTypeAliases ctx file =
                                     \() ->
                                         State.pure <|
                                             Just
-                                                ( ( "", moduleId, Node.value typeAlias.name )
+                                                ( ( moduleId, "", Node.value typeAlias.name )
                                                 , { args = List.map (Node.value >> TypeVar.parse) typeAlias.generics
                                                   , type_ = type__
                                                   }
@@ -945,7 +945,7 @@ registerCustomType resolver moduleId moduleName customType =
                                 ctorType =
                                     List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
                             in
-                            State.addGlobalBinding ( "", moduleId, ctorName ) (TypeI.closeOver ctorType)
+                            State.addGlobalBinding ( moduleId, "", ctorName ) (TypeI.closeOver ctorType)
                         )
                     |> Result.Extra.merge
             )
@@ -969,7 +969,7 @@ registerPort resolver moduleId moduleName sig =
         |> Result.map
             (\t ->
                 State.addGlobalBinding
-                    ( "", moduleId, Node.value sig.name )
+                    ( moduleId, "", Node.value sig.name )
                     (TypeI.closeOver t)
             )
         |> Result.Extra.merge
@@ -1036,7 +1036,7 @@ registerEffectCommand ctx =
                                 }
                     in
                     State.addGlobalBinding
-                        ( "", ctx.thisIndex.moduleId, ModuleIndex.effectCommandVar )
+                        ( ctx.thisIndex.moduleId, "", ModuleIndex.effectCommandVar )
                         (TypeI.closeOver magicType)
 
 
@@ -1077,5 +1077,5 @@ registerEffectSubscription ctx =
                                 }
                     in
                     State.addGlobalBinding
-                        ( "", ctx.thisIndex.moduleId, ModuleIndex.effectSubscriptionVar )
+                        ( ctx.thisIndex.moduleId, "", ModuleIndex.effectSubscriptionVar )
                         (TypeI.closeOver magicType)

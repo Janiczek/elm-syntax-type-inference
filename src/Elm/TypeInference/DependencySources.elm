@@ -335,7 +335,7 @@ packageAliases moduleMapping deps package files =
                                                 )
                                             |> Result.map
                                                 (\body ->
-                                                    ( ( package, thisModule.moduleId, Node.value alias_.name )
+                                                    ( ( thisModule.moduleId, package, Node.value alias_.name )
                                                     , { args = List.map (Node.value >> TypeVar.parse) alias_.generics
                                                       , type_ = body
                                                       }

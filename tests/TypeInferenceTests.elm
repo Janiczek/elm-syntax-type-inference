@@ -2375,7 +2375,7 @@ generatedVar n =
     TypeI.TypeVar ( TypeVar.Generated n, TypeVar.Normal )
 
 
-runUnify : Dict ( PackageName, ModuleId, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+runUnify : Dict ( ModuleId, PackageName, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
     (State.do
         (Unify.unifyMany
@@ -2413,9 +2413,9 @@ unifyAliasSuite =
                     (TypeI.TypeVar ( TypeVar.Named "a", TypeVar.Normal ))
             }
 
-        typeAliases : Dict ( PackageName, ModuleId, String ) TypeAlias
+        typeAliases : Dict ( ModuleId, PackageName, String ) TypeAlias
         typeAliases =
-            Dict.singleton ( "", mainModuleId, "Pair" ) pairAlias
+            Dict.singleton ( mainModuleId, "", "Pair" ) pairAlias
 
         pairOf : MonoType -> MonoType
         pairOf t =
@@ -2557,9 +2557,9 @@ comparableAliasedTupleRegression =
             , type_ = TypeI.List TypeI.String
             }
 
-        typeAliases : Dict ( PackageName, ModuleId, String ) TypeAlias
+        typeAliases : Dict ( ModuleId, PackageName, String ) TypeAlias
         typeAliases =
-            Dict.singleton ( "", mainModuleId, "ModuleName" ) moduleNameAlias
+            Dict.singleton ( mainModuleId, "", "ModuleName" ) moduleNameAlias
 
         moduleNameType : MonoType
         moduleNameType =

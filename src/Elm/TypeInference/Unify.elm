@@ -23,7 +23,7 @@ type alias TypeAlias =
 
 
 type alias TypeAliases =
-    Dict ( PackageName, ModuleId, VarName ) TypeAlias
+    Dict ( ModuleId, PackageName, VarName ) TypeAlias
 
 
 type alias UnifyConfig =
@@ -111,7 +111,7 @@ expandAliasHelp fuel typeAliases type_ =
                 type_
 
             else
-                case Dict.get ( ut.package, ut.moduleId, ut.name ) typeAliases of
+                case Dict.get ( ut.moduleId, ut.package, ut.name ) typeAliases of
                     Nothing ->
                         type_
 
@@ -168,7 +168,7 @@ expandAliasDeepHelp fuel typeAliases type_ =
                 expandDeepChildren fuel typeAliases type_
 
             else
-                case Dict.get ( ut.package, ut.moduleId, ut.name ) typeAliases of
+                case Dict.get ( ut.moduleId, ut.package, ut.name ) typeAliases of
                     Nothing ->
                         expandDeepChildren fuel typeAliases type_
 

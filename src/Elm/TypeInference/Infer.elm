@@ -51,7 +51,7 @@ import Result.Extra
 type alias Ctx =
     { modules : Dict ModuleId ModuleIndex
     , thisModule : ModuleIndex
-    , typeAliases : Dict ( PackageName, ModuleId, VarName ) TypeAlias
+    , typeAliases : Dict ( ModuleId, PackageName, VarName ) TypeAlias
     , index : ModuleLookup.Index
     , allowKernel : Bool
     , moduleMapping : ModuleIds.Mapping
@@ -339,7 +339,7 @@ topLevelMember ctx declNode fn =
         ctx
         declNode
         fn
-        (\varName -> State.addGlobalBinding ( "", ctx.thisModule.moduleId, varName ))
+        (\varName -> State.addGlobalBinding ( ctx.thisModule.moduleId, "", varName ))
 
 
 {-| A `let..in` function declaration. Adds a binding to lexical `lexicalEnv`
