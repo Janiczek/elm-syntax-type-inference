@@ -45,7 +45,6 @@ import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations, TypeE
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import List.ExtraExtra
 import Regex exposing (Regex)
-import Result.Extra
 
 
 type alias Ctx =
@@ -264,13 +263,17 @@ annotationType ctx maybeSigNode =
             State.pure Nothing
 
         Just sigNode ->
-            Node.value sigNode
-                |> .typeAnnotation
-                |> Node.value
-                |> TypeI.fromTypeAnnotation (typeResolver ctx)
-                |> Result.mapError (State.error << toError ctx << TypeI.fromTypeAnnotationError)
-                |> Result.map (Just >> State.pure)
-                |> Result.Extra.merge
+            case
+                Node.value sigNode
+                    |> .typeAnnotation
+                    |> Node.value
+                    |> TypeI.fromTypeAnnotation (typeResolver ctx)
+            of
+                Err fromTypeAnnotationError ->
+                    State.error (toError ctx (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+
+                Ok t ->
+                    State.pure (Just t)
 
 
 {-| `declId ≡ annotationType`, if the function is annotated.

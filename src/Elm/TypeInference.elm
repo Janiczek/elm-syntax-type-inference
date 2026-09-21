@@ -814,12 +814,16 @@ gatherTypeAliases ctx file =
 
                             type_ : StateM MonoType
                             type_ =
-                                typeAlias.typeAnnotation
-                                    |> Node.value
-                                    |> TypeI.fromTypeAnnotation resolver
-                                    |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
-                                    |> Result.map State.pure
-                                    |> Result.Extra.merge
+                                case
+                                    typeAlias.typeAnnotation
+                                        |> Node.value
+                                        |> TypeI.fromTypeAnnotation resolver
+                                of
+                                    Err fromTypeAnnotationError ->
+                                        State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+
+                                    Ok aliasedType ->
+                                        State.pure aliasedType
 
                             -- A record type alias also gets a constructor function
                             -- (eg. `type alias Foo = { a : Int }` lets you write `Foo 1`).
@@ -830,12 +834,16 @@ gatherTypeAliases ctx file =
                                         fields
                                             |> State.traverse
                                                 (\fieldNode ->
-                                                    Tuple.second (Node.value fieldNode)
-                                                        |> Node.value
-                                                        |> TypeI.fromTypeAnnotation resolver
-                                                        |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
-                                                        |> Result.map State.pure
-                                                        |> Result.Extra.merge
+                                                    case
+                                                        Tuple.second (Node.value fieldNode)
+                                                            |> Node.value
+                                                            |> TypeI.fromTypeAnnotation resolver
+                                                    of
+                                                        Err fromTypeAnnotationError ->
+                                                            State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+
+                                                        Ok fieldValueType ->
+                                                            State.pure fieldValueType
                                                 )
                                             |> State.map
                                                 (\fieldTypes ->
@@ -944,25 +952,24 @@ registerCustomType resolver moduleId moduleName customType =
                     argTypes : Result FromTypeAnnotationError (List MonoType)
                     argTypes =
                         ctor.arguments
-                            |> List.map (Node.value >> TypeI.fromTypeAnnotation resolver)
-                            |> Result.Extra.combine
+                            |> Result.Extra.combineMap
+                                (\(Node.Node _ arg) -> TypeI.fromTypeAnnotation resolver arg)
                 in
-                argTypes
-                    |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
-                    |> Result.map
-                        (\args ->
-                            let
-                                ctorName : String
-                                ctorName =
-                                    Node.value ctor.name
+                case argTypes of
+                    Err fromTypeAnnotationError ->
+                        State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
 
-                                ctorType : MonoType
-                                ctorType =
-                                    List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
-                            in
-                            State.addGlobalBinding ( moduleId, "", ctorName ) (TypeI.closeOver ctorType)
-                        )
-                    |> Result.Extra.merge
+                    Ok args ->
+                        let
+                            ctorName : String
+                            ctorName =
+                                Node.value ctor.name
+
+                            ctorType : MonoType
+                            ctorType =
+                                List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
+                        in
+                        State.addGlobalBinding ( moduleId, "", ctorName ) (TypeI.closeOver ctorType)
             )
         |> State.map (always ())
 
