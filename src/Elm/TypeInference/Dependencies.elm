@@ -21,7 +21,6 @@ import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
-import List.ExtraExtra
 import Result.Extra
 
 
@@ -208,9 +207,17 @@ register moduleMapping deps =
         moduleMapping1 : ModuleIds.Mapping
         moduleMapping1 =
             deps
-                |> Dict.values
-                |> List.ExtraExtra.fastConcatMap .modules
-                |> List.foldl (\mod acc -> ModuleIds.intern (FullModuleName.fromDotted mod.name) acc |> Tuple.second) moduleMapping
+                |> Dict.foldl
+                    (\_ item accAcrossDeps ->
+                        item.modules
+                            |> List.foldl
+                                (\mod acc ->
+                                    ModuleIds.intern (FullModuleName.fromDotted mod.name) acc
+                                        |> Tuple.second
+                                )
+                                accAcrossDeps
+                    )
+                    moduleMapping
     in
     deps
         |> Dict.toList
