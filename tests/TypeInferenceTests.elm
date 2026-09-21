@@ -1724,7 +1724,7 @@ main = Cmd.none
                 in
                 getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "main"
                     |> Result.map Type.toString
-                    |> Expect.equal (Ok "Platform.Cmd.Cmd a")
+                    |> Expect.equal (Ok "Platform.Cmd.Cmd msg")
         , Test.test "custom operator" <| \() ->
         let
             pkgCustomOps : Dependency
@@ -3004,7 +3004,7 @@ aliasParamNameCollisionRegression =
     Test.test "type alias whose own generic param name collides with the caller's generic name (regression test)" <| \() ->
     getDeclType modules [ "Main" ] "apply"
         |> Result.map Type.toString
-        |> Expect.equal (Ok "Main.Wrap a -> a -> a")
+        |> Expect.equal (Ok "Main.Wrap acc -> acc -> acc")
 
 
 recordConstructorFunctionRegression : Test
@@ -3258,7 +3258,7 @@ shadowedListRegression =
                 [ "Main" ]
                 "singleton"
                 |> Result.map Type.toString
-                |> Expect.equal (Ok "a -> b -> Main.List a b")
+                |> Expect.equal (Ok "id -> value -> Main.List id value")
 
 
 duplicateImportAliasRegression : Test
@@ -3939,11 +3939,11 @@ effectSuite =
         , Test.test "command has the right type (MyCmd msg -> Cmd msg)" <| \() ->
         inferAs (Just "elm/random") commandModule "x"
             |> Result.map Type.toString
-            |> Expect.equal (Ok "Main.MyCmd a -> Platform.Cmd.Cmd a")
+            |> Expect.equal (Ok "Main.MyCmd msg -> Platform.Cmd.Cmd msg")
         , Test.test "subscription has the right type (MySub msg -> Sub msg)" <| \() ->
         inferAs (Just "elm/time") subscriptionModule "x"
             |> Result.map Type.toString
-            |> Expect.equal (Ok "Main.MySub a -> Platform.Sub.Sub a")
+            |> Expect.equal (Ok "Main.MySub msg -> Platform.Sub.Sub msg")
         ]
 
 

@@ -15,6 +15,7 @@ module Elm.TypeInference.Type.Internal exposing
     , monoPublicKey
     , monoTypeVars
     , number_
+    , renameToAnnotation
     , toPublicPair
     , toPublicType
     )
@@ -991,6 +992,182 @@ shaderSlotToPublic f extensionTypevar fields =
             ( Dict.empty
             , Nothing
             )
+
+
+{-| Rename inferred vars to those from a type annotation.
+
+We walk both types in parallel - we need to see a Named (in annotation) and
+Generated (in inferred) var at the same time (with the same SuperType
+constraint) -> then we rename.
+
+Returns `Nothing` when the shapes don't line up. Shouldn't happen for
+type-checked code.
+
+-}
+renameToAnnotation : MonoType -> MonoType -> Maybe MonoType
+renameToAnnotation annoMono inferredMono =
+    case collectAnnotationNames annoMono inferredMono Dict.empty of
+        Nothing ->
+            Nothing
+
+        Just mapping ->
+            Just (mapVarsMono (applyAnnotationNames mapping) inferredMono)
+
+
+applyAnnotationNames : Dict Int TypeVar -> TypeVar -> TypeVar
+applyAnnotationNames mapping (( style, super ) as var) =
+    case style of
+        Generated theId ->
+            Dict.get (VarSet.genKeyFrom theId super) mapping
+                |> Maybe.withDefault var
+
+        Named _ ->
+            var
+
+
+collectAnnotationNames : MonoType -> MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
+collectAnnotationNames annoMono inferredMono acc =
+    case ( collapseExtensible annoMono, collapseExtensible inferredMono ) of
+        ( TypeVar ( Named annoName, annoSuper ), TypeVar ( Generated inferredId, inferredSuper ) ) ->
+            if annoSuper /= inferredSuper then
+                Nothing
+
+            else
+                let
+                    key : Int
+                    key =
+                        VarSet.genKeyFrom inferredId inferredSuper
+
+                    wanted : TypeVar
+                    wanted =
+                        ( Named annoName, annoSuper )
+                in
+                case Dict.get key acc of
+                    Nothing ->
+                        Just (Dict.insert key wanted acc)
+
+                    Just existing ->
+                        if existing == wanted then
+                            Just acc
+
+                        else
+                            Nothing
+
+        ( TypeVar ( Named annoName, annoSuper ), TypeVar ( Named inferredName, inferredSuper ) ) ->
+            if ( Named annoName, annoSuper ) == ( Named inferredName, inferredSuper ) then
+                Just acc
+
+            else
+                Nothing
+
+        ( TypeVar _, TypeVar _ ) ->
+            -- Should be impossible (annotations shouldn't contain generated vars)
+            Nothing
+
+        ( TypeVar _, _ ) ->
+            Nothing
+
+        ( _, TypeVar _ ) ->
+            Nothing
+
+        ( Function a1, Function b1 ) ->
+            collectAnnotationNames a1.from b1.from acc
+                |> Maybe.andThen (collectAnnotationNames a1.to b1.to)
+
+        ( List a, List b ) ->
+            collectAnnotationNames a b acc
+
+        ( Tuple2 a1 a2, Tuple2 b1 b2 ) ->
+            collectAnnotationNames a1 b1 acc
+                |> Maybe.andThen (collectAnnotationNames a2 b2)
+
+        ( Tuple3 a1 a2 a3, Tuple3 b1 b2 b3 ) ->
+            collectAnnotationNames a1 b1 acc
+                |> Maybe.andThen (collectAnnotationNames a2 b2)
+                |> Maybe.andThen (collectAnnotationNames a3 b3)
+
+        ( Record r1, Record r2 ) ->
+            collectRecordFields r1.fields r2.fields acc
+
+        ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
+            collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc
+                |> Maybe.andThen (collectRecordFields r1.fields r2.fields)
+
+        ( UserDefinedType u1, UserDefinedType u2 ) ->
+            if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
+                Nothing
+
+            else
+                collectAnnotationArgs u1.args u2.args acc
+
+        ( WebGLShader s1, WebGLShader s2 ) ->
+            collectAnnotationNames s1.attributesExtension s2.attributesExtension acc
+                |> Maybe.andThen (collectRecordFields s1.attributes s2.attributes)
+                |> Maybe.andThen (collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
+                |> Maybe.andThen (collectRecordFields s1.uniforms s2.uniforms)
+                |> Maybe.andThen (collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
+                |> Maybe.andThen (collectRecordFields s1.varyings s2.varyings)
+
+        ( Int, Int ) ->
+            Just acc
+
+        ( Float, Float ) ->
+            Just acc
+
+        ( Char, Char ) ->
+            Just acc
+
+        ( String, String ) ->
+            Just acc
+
+        ( Bool, Bool ) ->
+            Just acc
+
+        ( Unit, Unit ) ->
+            Just acc
+
+        _ ->
+            Nothing
+
+
+collectRecordFields : Dict VarName MonoType -> Dict VarName MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
+collectRecordFields fields1 fields2 acc =
+    if Dict.size fields1 /= Dict.size fields2 then
+        Nothing
+
+    else
+        Dict.toList fields1
+            |> collectFieldList fields2 acc
+
+
+collectFieldList : Dict VarName MonoType -> Dict Int TypeVar -> List ( VarName, MonoType ) -> Maybe (Dict Int TypeVar)
+collectFieldList fields2 acc remaining =
+    case remaining of
+        [] ->
+            Just acc
+
+        ( name, annoField ) :: rest ->
+            case Dict.get name fields2 of
+                Nothing ->
+                    Nothing
+
+                Just inferredField ->
+                    collectAnnotationNames annoField inferredField acc
+                        |> Maybe.andThen (\acc1 -> collectFieldList fields2 acc1 rest)
+
+
+collectAnnotationArgs : List MonoType -> List MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
+collectAnnotationArgs annos inferreds acc =
+    case ( annos, inferreds ) of
+        ( [], [] ) ->
+            Just acc
+
+        ( a :: restA, b :: restB ) ->
+            collectAnnotationNames a b acc
+                |> Maybe.andThen (collectAnnotationArgs restA restB)
+
+        _ ->
+            Nothing
 
 
 {-| A deduplication key for a normalized monotype inside a single `TypeLookupTable`.

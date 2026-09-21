@@ -58,8 +58,19 @@ get range (Internal.TLT tlt) =
 
                 Nothing ->
                     let
-                        ( monoType, _, subst1 ) =
+                        ( monoType0, _, subst1 ) =
                             SubstitutionMap.substituteMono tlt.subst (TypeI.id_ id)
+
+                        monoType : TypeI.MonoType
+                        monoType =
+                            case Dict.get id tlt.annotationFor of
+                                Nothing ->
+                                    monoType0
+
+                                Just annoMono ->
+                                    monoType0
+                                        |> TypeI.renameToAnnotation annoMono
+                                        |> Maybe.withDefault monoType0
 
                         key : String
                         key =
@@ -85,6 +96,7 @@ get range (Internal.TLT tlt) =
                         , moduleMapping = tlt.moduleMapping
                         , cache = arraySetGrowing Nothing id (Just pubType) tlt.cache
                         , pool = pool1
+                        , annotationFor = tlt.annotationFor
                         }
                     )
 

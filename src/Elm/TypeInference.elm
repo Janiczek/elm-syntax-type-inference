@@ -63,6 +63,7 @@ import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
 import List.ExtraExtra
 import Maybe.Extra
+import RangeLike
 import Result.Extra
 import Set exposing (Set)
 import TypeLookupTable exposing (TypeLookupTable)
@@ -624,7 +625,7 @@ inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex fi
                         \() ->
                             State.do (solveModule ctx typeAliases file) <|
                                 \() ->
-                                    State.do (moduleResult ctx outgoingAliases) <|
+                                    State.do (moduleResult ctx file outgoingAliases) <|
                                         \result ->
                                             State.pure result
     )
@@ -634,13 +635,14 @@ inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex fi
 
 moduleResult :
     ModuleCtx
+    -> File
     -> Dict GlobalKey TypeAlias
     ->
         StateM
             { table : TypeLookupTable
             , interface : ModuleInterface
             }
-moduleResult ctx outgoingAliases =
+moduleResult ctx file outgoingAliases =
     State.do State.getNodeIds <|
         \nodeIds ->
             State.do State.getSubst <|
@@ -661,6 +663,35 @@ moduleResult ctx outgoingAliases =
                                                         acc
                                             )
                                             Dict.empty
+
+                                annotationFor : Dict TypeI.Id TypeI.MonoType
+                                annotationFor =
+                                    file.declarations
+                                        |> List.foldl
+                                            (\declNode acc ->
+                                                case Node.value declNode of
+                                                    Declaration.FunctionDeclaration fn ->
+                                                        case fn.signature of
+                                                            Nothing ->
+                                                                acc
+
+                                                            Just sigNode ->
+                                                                case Dict.get (RangeLike.fromRange (Node.range declNode)) nodeIds of
+                                                                    Nothing ->
+                                                                        acc
+
+                                                                    Just declId ->
+                                                                        case TypeI.fromTypeAnnotation ctx.resolver (Node.value (Node.value sigNode).typeAnnotation) of
+                                                                            Err _ ->
+                                                                                acc
+
+                                                                            Ok annoMono ->
+                                                                                Dict.insert declId annoMono acc
+
+                                                    _ ->
+                                                        acc
+                                            )
+                                            Dict.empty
                             in
                             State.pure
                                 { table =
@@ -670,6 +701,7 @@ moduleResult ctx outgoingAliases =
                                         , moduleMapping = ctx.moduleMapping
                                         , cache = Array.empty
                                         , pool = Dict.empty
+                                        , annotationFor = annotationFor
                                         }
                                 , interface =
                                     { moduleIndex = ctx.thisIndex
