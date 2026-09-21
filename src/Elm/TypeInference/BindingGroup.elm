@@ -61,21 +61,17 @@ solveGroup cfg members =
             )
         )
     <| \() ->
-    State.do
-        (State.traverseUnit
-            (\member ->
-                case member.annotation of
-                    Just _ ->
-                        State.pure ()
+    State.traverseUnit
+        (\member ->
+            case member.annotation of
+                Just _ ->
+                    State.pure ()
 
-                    Nothing ->
-                        State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
-                        member.install scheme
-            )
-            members
+                Nothing ->
+                    State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
+                    member.install scheme
         )
-    <| \() ->
-    State.pure ()
+        members
 
 
 {-| A declaration body must be at least as general as its annotation.
