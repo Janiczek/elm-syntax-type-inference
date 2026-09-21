@@ -123,10 +123,15 @@ resolveGlobalVar ctx package moduleId name =
     let
         ( aliasedPackage, aliasedModuleId, aliasedName ) =
             if package == "" then
-                ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
-                    |> Result.withDefault Nothing
-                    |> Maybe.map (\( m, n ) -> ( "", m, n ))
-                    |> Maybe.withDefault ( package, moduleId, name )
+                case
+                    ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
+                        |> Result.withDefault Nothing
+                of
+                    Just ( m, n ) ->
+                        ( "", m, n )
+
+                    Nothing ->
+                        ( package, moduleId, name )
 
             else
                 ( package, moduleId, name )

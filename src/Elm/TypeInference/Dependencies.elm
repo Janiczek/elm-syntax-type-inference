@@ -162,15 +162,17 @@ fromDocsType resolver type_ =
                     Result.Extra.combineMap (fromDocsType resolver) args
                         |> Result.map
                             (\argTypes ->
-                                TypeI.collapsePrimitive package moduleId typeName argTypes
-                                    |> Maybe.withDefault
-                                        (UserDefinedType
+                                case TypeI.collapsePrimitive package moduleId typeName argTypes of
+                                    Just collapsed ->
+                                        collapsed
+
+                                    Nothing ->
+                                        UserDefinedType
                                             { package = package
                                             , moduleId = moduleId
                                             , name = typeName
                                             , args = argTypes
                                             }
-                                        )
                             )
                 )
                 (resolver moduleNameStr)
@@ -304,15 +306,17 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
         resultType =
             -- We later expect eg. Bools in IfBlock conditions instead of
             -- UserDefinedType "Bool"s, so let's collapse here
-            TypeI.collapsePrimitive pkgName moduleId union.name args
-                |> Maybe.withDefault
-                    (UserDefinedType
+            case TypeI.collapsePrimitive pkgName moduleId union.name args of
+                Just collapsed ->
+                    collapsed
+
+                Nothing ->
+                    UserDefinedType
                         { package = pkgName
                         , moduleId = moduleId
                         , name = union.name
                         , args = args
                         }
-                    )
     in
     union.tags
         |> State.traverse

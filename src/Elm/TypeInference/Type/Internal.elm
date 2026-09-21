@@ -729,15 +729,17 @@ fromTypeAnnotation resolver typeAnnotation =
                             |> Result.mapError AmbiguousModuleName
                             |> Result.map
                                 (\( package, moduleId ) ->
-                                    collapsePrimitive package moduleId typeName args_
-                                        |> Maybe.withDefault
-                                            (UserDefinedType
+                                    case collapsePrimitive package moduleId typeName args_ of
+                                        Just collapsed ->
+                                            collapsed
+
+                                        Nothing ->
+                                            UserDefinedType
                                                 { package = package
                                                 , moduleId = moduleId
                                                 , name = typeName
                                                 , args = args_
                                                 }
-                                            )
                                 )
                     )
 
