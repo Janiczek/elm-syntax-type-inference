@@ -98,19 +98,22 @@ neededSources deps sources =
         docsTypes : Dict String (Set String)
         docsTypes =
             deps
-                |> Dict.values
-                |> List.ExtraExtra.fastConcatMap .modules
-                |> List.foldl
-                    (\mod acc ->
-                        Dict.update mod.name
-                            (\existing ->
-                                Just
-                                    (Set.union
-                                        (documentedTypeNames mod)
-                                        (Maybe.withDefault Set.empty existing)
-                                    )
-                            )
-                            acc
+                |> Dict.foldl
+                    (\_ dep accAcrossDeps ->
+                        dep.modules
+                            |> List.foldl
+                                (\mod acc ->
+                                    Dict.update mod.name
+                                        (\existing ->
+                                            Just
+                                                (Set.union
+                                                    (documentedTypeNames mod)
+                                                    (Maybe.withDefault Set.empty existing)
+                                                )
+                                        )
+                                        acc
+                                )
+                                accAcrossDeps
                     )
                     Dict.empty
     in
