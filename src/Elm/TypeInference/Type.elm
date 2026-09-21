@@ -465,12 +465,10 @@ toTypeAnnotation type_ =
         WebGLShader r ->
             TypeAnnotation.Typed
                 (Node.empty ( [ "WebGL" ], "Shader" ))
-                ([ shaderSlotToTypeAnnotation r.attributesFields r.attributesExtensionTypevar
-                 , shaderSlotToTypeAnnotation r.uniformsFields r.uniformsExtensionTypevar
-                 , shaderSlotToTypeAnnotation r.varyingsFields r.varyingsExtensionTypevar
-                 ]
-                    |> List.map Node.empty
-                )
+                [ Node.empty <| shaderSlotToTypeAnnotation r.attributesFields r.attributesExtensionTypevar
+                , Node.empty <| shaderSlotToTypeAnnotation r.uniformsFields r.uniformsExtensionTypevar
+                , Node.empty <| shaderSlotToTypeAnnotation r.varyingsFields r.varyingsExtensionTypevar
+                ]
 
 
 recordFieldsToRecordDefinition : Dict String Type -> TypeAnnotation.RecordDefinition
