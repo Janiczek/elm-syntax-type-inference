@@ -958,8 +958,10 @@ bind cfg typeVar type_ =
                                     ( Generated freshId, m )
                             in
                             State.modifySubst
-                                (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                    >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                                (\subst ->
+                                    subst
+                                        |> SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                        |> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
                                 )
 
             _ ->

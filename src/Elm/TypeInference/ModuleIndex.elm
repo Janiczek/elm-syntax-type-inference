@@ -96,7 +96,7 @@ fromFile moduleMapping file =
         decls : Declarations
         decls =
             List.foldl
-                (Node.value >> addDeclaration)
+                (\(Node.Node _ declaration) acc -> addDeclaration declaration acc)
                 emptyDeclarations
                 file.declarations
 

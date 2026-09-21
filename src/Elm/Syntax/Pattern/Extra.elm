@@ -37,7 +37,7 @@ varNames pattern =
             []
 
         TuplePattern patterns ->
-            List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns
+            List.ExtraExtra.fastConcatMap (\(Node.Node _ part) -> varNames part) patterns
 
         RecordPattern fields ->
             List.map Node.value fields
@@ -46,10 +46,10 @@ varNames pattern =
             varNames (Node.value p1) ++ varNames (Node.value p2)
 
         ListPattern patterns ->
-            List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns
+            List.ExtraExtra.fastConcatMap (\(Node.Node _ element) -> varNames element) patterns
 
         NamedPattern _ patterns ->
-            List.ExtraExtra.fastConcatMap (Node.value >> varNames) patterns
+            List.ExtraExtra.fastConcatMap (\(Node.Node _ payload) -> varNames payload) patterns
 
         AsPattern p1 name ->
             Node.value name :: varNames (Node.value p1)

@@ -199,10 +199,10 @@ docsModuleRefs modules =
     modules
         |> List.ExtraExtra.fastConcatMap
             (\mod ->
-                List.ExtraExtra.fastConcatMap (.tipe >> docsTypeRefs) mod.values
-                    ++ List.ExtraExtra.fastConcatMap (.tipe >> docsTypeRefs) mod.binops
-                    ++ List.ExtraExtra.fastConcatMap (\union -> List.ExtraExtra.fastConcatMap (Tuple.second >> List.ExtraExtra.fastConcatMap docsTypeRefs) union.tags) mod.unions
-                    ++ List.ExtraExtra.fastConcatMap (.tipe >> docsTypeRefs) mod.aliases
+                List.ExtraExtra.fastConcatMap (\value -> docsTypeRefs value.tipe) mod.values
+                    ++ List.ExtraExtra.fastConcatMap (\binop -> docsTypeRefs binop.tipe) mod.binops
+                    ++ List.ExtraExtra.fastConcatMap (\union -> List.ExtraExtra.fastConcatMap (\( _, payload ) -> List.ExtraExtra.fastConcatMap docsTypeRefs payload) union.tags) mod.unions
+                    ++ List.ExtraExtra.fastConcatMap (\typeAlias -> docsTypeRefs typeAlias.tipe) mod.aliases
             )
 
 
@@ -234,7 +234,7 @@ docsTypeRefs tipe =
                 ++ List.ExtraExtra.fastConcatMap docsTypeRefs args
 
         Elm.Type.Record fields _ ->
-            List.ExtraExtra.fastConcatMap (Tuple.second >> docsTypeRefs) fields
+            List.ExtraExtra.fastConcatMap (\( _, value ) -> docsTypeRefs value) fields
 
 
 isPrimitiveRef : String -> String -> Bool

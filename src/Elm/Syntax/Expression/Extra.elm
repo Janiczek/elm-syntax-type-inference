@@ -85,15 +85,13 @@ referencedNamesIn bound expression =
                 letBound =
                     letBlock.declarations
                         |> List.ExtraExtra.fastConcatMap
-                            (Node.value
-                                >> (\declaration ->
-                                        case declaration of
-                                            LetFunction fn ->
-                                                [ functionName fn ]
+                            (\(Node.Node _ declaration) ->
+                                case declaration of
+                                    LetFunction fn ->
+                                        [ functionName fn ]
 
-                                            LetDestructuring patternNode _ ->
-                                                Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
-                                   )
+                                    LetDestructuring patternNode _ ->
+                                        Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
                             )
                         |> Set.fromList
 
@@ -109,7 +107,7 @@ referencedNamesIn bound expression =
                                 argumentNames : List String
                                 argumentNames =
                                     (Node.value fn.declaration).arguments
-                                        |> List.ExtraExtra.fastConcatMap (Node.value >> Elm.Syntax.Pattern.Extra.varNames)
+                                        |> List.ExtraExtra.fastConcatMap (\(Node.Node _ arg) -> Elm.Syntax.Pattern.Extra.varNames arg)
                             in
                             referencedNamesIn (Set.union nestedBound (Set.fromList argumentNames)) (Node.value (Node.value fn.declaration).expression)
 
@@ -133,12 +131,12 @@ referencedNamesIn bound expression =
                 argumentNames : List String
                 argumentNames =
                     lambda.args
-                        |> List.ExtraExtra.fastConcatMap (Node.value >> Elm.Syntax.Pattern.Extra.varNames)
+                        |> List.ExtraExtra.fastConcatMap (\(Node.Node _ param) -> Elm.Syntax.Pattern.Extra.varNames param)
             in
             referencedNamesIn (Set.union bound (Set.fromList argumentNames)) (Node.value lambda.expression)
 
         RecordExpr setters ->
-            setters |> List.ExtraExtra.fastConcatMap (Node.value >> Tuple.second >> e)
+            setters |> List.ExtraExtra.fastConcatMap (\(Node.Node _ ( _, value )) -> e value)
 
         ListExpr nodes ->
             many nodes
@@ -151,7 +149,7 @@ referencedNamesIn bound expression =
 
         RecordUpdateExpression recordVarNode setters ->
             ( Nothing, Node.value recordVarNode )
-                :: (setters |> List.ExtraExtra.fastConcatMap (Node.value >> Tuple.second >> e))
+                :: (setters |> List.ExtraExtra.fastConcatMap (\(Node.Node _ ( _, value )) -> e value))
 
         GLSLExpression _ ->
             []

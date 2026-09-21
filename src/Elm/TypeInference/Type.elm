@@ -460,7 +460,7 @@ toTypeAnnotation type_ =
         Named { moduleName, name, arguments } ->
             TypeAnnotation.Typed
                 (Node.empty ( moduleName, name ))
-                (List.map (toTypeAnnotation >> Node.empty) arguments)
+                (List.map (\arg -> Node.empty (toTypeAnnotation arg)) arguments)
 
         WebGLShader r ->
             TypeAnnotation.Typed

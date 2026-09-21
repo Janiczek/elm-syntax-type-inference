@@ -1303,8 +1303,10 @@ glslDeclaration chunk =
                             declarators
                                 |> String.split ","
                                 |> List.filterMap
-                                    (glslDeclaratorName
-                                        >> Maybe.map (\varName -> ( storageQualifier, varName, varType_ ))
+                                    (\declarator ->
+                                        declarator
+                                            |> glslDeclaratorName
+                                            |> Maybe.map (\varName -> ( storageQualifier, varName, varType_ ))
                                     )
 
                 _ ->
