@@ -118,9 +118,8 @@ neededSources deps sources =
                     Dict.empty
     in
     deps
-        |> Dict.toList
-        |> List.filterMap
-            (\( package, pkg ) ->
+        |> Dict.foldr
+            (\package pkg needsSourcesAcc ->
                 let
                     unknownModules : List String
                     unknownModules =
@@ -154,11 +153,12 @@ neededSources deps sources =
                 in
                 case remaining of
                     [] ->
-                        Nothing
+                        needsSourcesAcc
 
                     _ :: _ ->
-                        Just ( package, remaining )
+                        ( package, remaining ) :: needsSourcesAcc
             )
+            []
 
 
 suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
