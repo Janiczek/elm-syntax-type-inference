@@ -570,10 +570,10 @@ instantiate (Forall boundVars monoType) =
             pure monoType
 
         _ ->
-            do (traverse (always getNextIdAndTick) boundVars) <| \varIds ->
+            do (traverse (\var -> map (\id -> ( var, id )) getNextIdAndTick) boundVars) <| \varIds ->
             let
                 ( renamingGen, renamingNamed ) =
-                    List.map2 Tuple.pair boundVars varIds
+                    varIds
                         |> List.foldl
                             (\( ( style, super ), freshId ) ( genAcc, namedAcc ) ->
                                 case style of
