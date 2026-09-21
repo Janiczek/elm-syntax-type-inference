@@ -327,12 +327,12 @@ recurse f type_ =
             Tuple3 (f t1) (f t2) (f t3)
 
         Record { fields } ->
-            Record { fields = Dict.map (always f) fields }
+            Record { fields = Dict.map (\_ value -> f value) fields }
 
         ExtensibleRecord r ->
             ExtensibleRecord
                 { extensionTypevar = f r.extensionTypevar
-                , fields = Dict.map (always f) r.fields
+                , fields = Dict.map (\_ value -> f value) r.fields
                 }
 
         UserDefinedType r ->
@@ -346,11 +346,11 @@ recurse f type_ =
         WebGLShader r ->
             WebGLShader
                 { attributesExtension = f r.attributesExtension
-                , attributes = Dict.map (always f) r.attributes
+                , attributes = Dict.map (\_ t -> f t) r.attributes
                 , uniformsExtension = f r.uniformsExtension
-                , uniforms = Dict.map (always f) r.uniforms
+                , uniforms = Dict.map (\_ t -> f t) r.uniforms
                 , varyingsExtension = f r.varyingsExtension
-                , varyings = Dict.map (always f) r.varyings
+                , varyings = Dict.map (\_ t -> f t) r.varyings
                 }
 
 
