@@ -110,20 +110,40 @@ insertSlot : TypeVar -> Slot -> SubstitutionMap -> SubstitutionMap
 insertSlot ( style, super ) slot store =
     case style of
         Generated theId ->
-            { store | slotsGen = arraySetGrowing Nothing theId (Just slot) store.slotsGen }
+            { slotsGen = arraySetGrowing Nothing theId (Just slot) store.slotsGen
+            , slotsNamed = store.slotsNamed
+            , unionFindRanksGen = store.unionFindRanksGen
+            , unionFindRanksNamed = store.unionFindRanksNamed
+            , letRanks = store.letRanks
+            }
 
         Named name ->
-            { store | slotsNamed = Dict.insert (VarSet.namedKeyFrom name super) slot store.slotsNamed }
+            { slotsNamed = Dict.insert (VarSet.namedKeyFrom name super) slot store.slotsNamed
+            , slotsGen = store.slotsGen
+            , unionFindRanksGen = store.unionFindRanksGen
+            , unionFindRanksNamed = store.unionFindRanksNamed
+            , letRanks = store.letRanks
+            }
 
 
 removeSlot : TypeVar -> SubstitutionMap -> SubstitutionMap
 removeSlot ( style, super ) store =
     case style of
         Generated theId ->
-            { store | slotsGen = Array.set theId Nothing store.slotsGen }
+            { slotsGen = Array.set theId Nothing store.slotsGen
+            , slotsNamed = store.slotsNamed
+            , unionFindRanksGen = store.unionFindRanksGen
+            , unionFindRanksNamed = store.unionFindRanksNamed
+            , letRanks = store.letRanks
+            }
 
         Named name ->
-            { store | slotsNamed = Dict.remove (VarSet.namedKeyFrom name super) store.slotsNamed }
+            { slotsNamed = Dict.remove (VarSet.namedKeyFrom name super) store.slotsNamed
+            , slotsGen = store.slotsGen
+            , unionFindRanksGen = store.unionFindRanksGen
+            , unionFindRanksNamed = store.unionFindRanksNamed
+            , letRanks = store.letRanks
+            }
 
 
 memberSlot : TypeVar -> SubstitutionMap -> Bool
@@ -157,10 +177,20 @@ insertRank : TypeVar -> Int -> SubstitutionMap -> SubstitutionMap
 insertRank ( style, super ) rank store =
     case style of
         Generated theId ->
-            { store | unionFindRanksGen = arraySetGrowing 0 theId rank store.unionFindRanksGen }
+            { unionFindRanksGen = arraySetGrowing 0 theId rank store.unionFindRanksGen
+            , slotsGen = store.slotsGen
+            , slotsNamed = store.slotsNamed
+            , unionFindRanksNamed = store.unionFindRanksNamed
+            , letRanks = store.letRanks
+            }
 
         Named name ->
-            { store | unionFindRanksNamed = Dict.insert (VarSet.namedKeyFrom name super) rank store.unionFindRanksNamed }
+            { unionFindRanksNamed = Dict.insert (VarSet.namedKeyFrom name super) rank store.unionFindRanksNamed
+            , slotsGen = store.slotsGen
+            , slotsNamed = store.slotsNamed
+            , unionFindRanksGen = store.unionFindRanksGen
+            , letRanks = store.letRanks
+            }
 
 
 {-| How deeply nested inside `let`/binding groups a type variable was created.
@@ -336,7 +366,12 @@ unionFindRankOf store var =
 -}
 stampIdAtLetRank : Id -> LetRank -> SubstitutionMap -> SubstitutionMap
 stampIdAtLetRank id letRank store =
-    { store | letRanks = arraySetGrowing 0 id letRank store.letRanks }
+    { letRanks = arraySetGrowing 0 id letRank store.letRanks
+    , slotsGen = store.slotsGen
+    , slotsNamed = store.slotsNamed
+    , unionFindRanksGen = store.unionFindRanksGen
+    , unionFindRanksNamed = store.unionFindRanksNamed
+    }
 
 
 {-| Overwrite an id's let-rank. Used when a binding-group placeholder was
@@ -362,7 +397,12 @@ setVarLetRank : TypeVar -> LetRank -> SubstitutionMap -> SubstitutionMap
 setVarLetRank var letRank store =
     case Tuple.first var of
         TypeVar.Generated id ->
-            { store | letRanks = arraySetGrowing 0 id letRank store.letRanks }
+            { letRanks = arraySetGrowing 0 id letRank store.letRanks
+            , slotsGen = store.slotsGen
+            , slotsNamed = store.slotsNamed
+            , unionFindRanksGen = store.unionFindRanksGen
+            , unionFindRanksNamed = store.unionFindRanksNamed
+            }
 
         TypeVar.Named _ ->
             store
