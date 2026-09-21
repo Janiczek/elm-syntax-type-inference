@@ -694,35 +694,25 @@ solveModule :
     -> StateM ()
 solveModule ctx typeAliases file =
     let
-        topLevelFunctions : List ( VarName, ( Node Declaration, Expression.Function ) )
+        topLevelFunctions : Dict VarName ( Node Declaration, Expression.Function )
         topLevelFunctions =
             file.declarations
-                |> List.filterMap
-                    (\declNode ->
+                |> List.foldl
+                    (\declNode byName ->
                         case Node.value declNode of
                             Declaration.FunctionDeclaration fn ->
-                                Just
-                                    ( Elm.Syntax.Expression.Extra.functionName fn
-                                    , ( declNode, fn )
-                                    )
+                                Dict.insert (Elm.Syntax.Expression.Extra.functionName fn)
+                                    ( declNode, fn )
+                                    byName
 
                             _ ->
-                                Nothing
+                                byName
                     )
-
-        ( nodeSet, byKey ) =
-            List.foldl
-                (\( name, member ) ( names, dict ) ->
-                    ( Set.insert name names
-                    , Dict.insert name member dict
-                    )
-                )
-                ( Set.empty, Dict.empty )
-                topLevelFunctions
+                    Dict.empty
 
         edges : VarName -> List VarName
         edges key =
-            case Dict.get key byKey of
+            case Dict.get key topLevelFunctions of
                 Nothing ->
                     []
 
@@ -735,14 +725,20 @@ solveModule ctx typeAliases file =
                                     Ok (Just ( "", moduleId )) ->
                                         let
                                             ( resolvedModule, resolvedName ) =
-                                                ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId varName
-                                                    |> Result.withDefault Nothing
-                                                    |> Maybe.withDefault ( moduleId, varName )
+                                                case
+                                                    ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId varName
+                                                        |> Result.withDefault Nothing
+                                                of
+                                                    Just resolved ->
+                                                        resolved
+
+                                                    Nothing ->
+                                                        ( moduleId, varName )
                                         in
                                         -- Only this module's own declarations
                                         -- are being ordered here; everything
                                         -- else is already in `globalEnv`.
-                                        if resolvedModule == ctx.thisIndex.moduleId && Set.member resolvedName nodeSet then
+                                        if resolvedModule == ctx.thisIndex.moduleId && Dict.member resolvedName topLevelFunctions then
                                             Just resolvedName
 
                                         else
@@ -754,7 +750,7 @@ solveModule ctx typeAliases file =
 
         sccs : List (List VarName)
         sccs =
-            SCC.stronglyConnectedComponents (Set.toList nodeSet) edges
+            SCC.stronglyConnectedComponents (Dict.keys topLevelFunctions) edges
 
         inferCtx : Infer.Ctx
         inferCtx =
@@ -770,11 +766,13 @@ solveModule ctx typeAliases file =
         |> State.traverse
             (\group ->
                 group
-                    |> List.filterMap (\key -> Dict.get key byKey)
+                    |> List.filterMap (\key -> Dict.get key topLevelFunctions)
                     |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember inferCtx declNode fn)
                     |> State.andThen
-                        (BindingGroup.solveGroup
-                            (Infer.unifyConfigForGroup inferCtx group)
+                        (\inferredMembers ->
+                            inferredMembers
+                                |> BindingGroup.solveGroup
+                                    (Infer.unifyConfigForGroup inferCtx group)
                         )
             )
         |> State.map (always ())
