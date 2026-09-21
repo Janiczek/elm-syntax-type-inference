@@ -51,6 +51,7 @@ suite =
         , glslSuite
         , shaderAnnotationSuite
         , largeInputsSuite
+        , doublingChainRegression
         , importedTypeInferredProperly
         , infiniteLoopRegression
         , aliasParamNameCollisionRegression
@@ -816,6 +817,69 @@ main =
                     |> inferMainModule
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
+        ]
+
+
+{-| Mairson's DEXPTIME-hardness construction for ML type inference.
+
+Each `fN` doubles its predecessor's type:
+<https://dl.acm.org/doi/10.1145/96709.96748>
+"Deciding ML typability is complete for deterministic exponential time"
+
+    f0 x = ( x, x )
+    f1 x = f0 (f0 x)   -- : a -> ( ( a, a ), ( a, a ) )
+    f2 x = f1 (f1 x)   -- : a -> (((a,a),(a,a)),((a,a),(a,a)),...)  (16 a's)
+    ...
+    fN x = f(N-1) (f(N-1) x)   -- type has 4^N leaves
+
+This lib can handle n = 4 (256 leaves) but not n = 5 (1024 leaves).
+For more we'd need some structural sharing.
+
+-}
+doublingChainRegression : Test
+doublingChainRegression =
+    let
+        doublingChainSource : Int -> String
+        doublingChainSource n =
+            let
+                decl : Int -> String
+                decl i =
+                    if i == 0 then
+                        """
+f0 x =
+    ( x, x )
+"""
+
+                    else
+                        """
+f{N} x =
+    f{N-1} (f{N-1} x)
+"""
+                            |> String.replace "{N}" (String.fromInt i)
+                            |> String.replace "{N-1}" (String.fromInt (i - 1))
+            in
+            """
+module Main exposing (main)
+
+
+{DECLS}
+
+main =
+    f{N}
+"""
+                |> String.replace "{DECLS}" (List.range 0 n |> List.map decl |> String.join "\n")
+                |> String.replace "{N}" (String.fromInt n)
+    in
+    Test.describe "exponential blowup (self-pairing doubling chain)"
+        [ Test.test "f1's inferred type is the expected doubled pair" <| \() ->
+        getDeclType (Dict.singleton [ "Main" ] (doublingChainSource 1)) [ "Main" ] "f1"
+            |> Result.map Type.toString
+            |> Expect.equal (Ok "a -> ( ( a, a ), ( a, a ) )")
+        , Test.test "doubling chain up to n = 4 (256 leaves) still infers quickly" <| \() ->
+        doublingChainSource 4
+            |> inferMainModule
+            |> Result.map (always ())
+            |> Expect.equal (Ok ())
         ]
 
 
