@@ -1,5 +1,6 @@
 module TypeLookupTable.Internal exposing (TypeLookupTable(..), empty)
 
+import Array exposing (Array)
 import Dict exposing (Dict)
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
@@ -13,7 +14,7 @@ type TypeLookupTable
         { nodeIds : Dict RangeLike Id
         , subst : SubstitutionMap.SubstitutionMap
         , moduleMapping : ModuleIds.Mapping
-        , cache : Dict Id Type
+        , cache : Array (Maybe Type)
         , pool : Dict String Type
         }
 
@@ -24,6 +25,6 @@ empty =
         { nodeIds = Dict.empty
         , subst = SubstitutionMap.empty
         , moduleMapping = ModuleIds.empty
-        , cache = Dict.empty
+        , cache = Array.empty
         , pool = Dict.empty
         }

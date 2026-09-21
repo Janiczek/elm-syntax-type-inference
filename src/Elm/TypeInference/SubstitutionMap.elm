@@ -22,6 +22,7 @@ Once created, `substitute*` functions are the way to consume it.
 
 -}
 
+import Array exposing (Array)
 import Bitwise
 import Dict exposing (Dict)
 import Elm.TypeInference.Type exposing (VarName)
@@ -32,32 +33,32 @@ import Elm.TypeInference.Type.Internal as TypeI
         , Type(..)
         )
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar, TypeVarStyle(..))
-import Elm.TypeInference.VarSet as VarSet exposing (GenKey, NamedKey)
+import Elm.TypeInference.VarSet as VarSet exposing (NamedKey)
 
 
 type alias SubstitutionMap =
-    { -- Each var's data. PERF: split by key kind so generated vars (the hot path) use Int comparisons
-      slotsGen : Dict GenKey Slot
+    { -- Each var's data, indexed by `Id`.
+      slotsGen : Array (Maybe Slot)
     , slotsNamed : Dict NamedKey Slot
     , -- Union-find rank per root (missing = 0): approximate tree height,
       -- bumped on equal-union-find-rank merge to keep `find` chains short.
       -- Performance heuristic.
-      unionFindRanksGen : Dict GenKey Int
+      unionFindRanksGen : Array Int
     , unionFindRanksNamed : Dict NamedKey Int
-    , -- Let-rank of each generated id at the moment it was created.
+    , -- Let-rank of each generated ID at the moment it was created.
       -- Lowered to min(side1,side2) on unify.
       -- Important for "business logic": `State.generalize` quantifies vars above current let-rank.
-      letRanks : Dict Id LetRank
+      letRanks : Array LetRank
     }
 
 
 empty : SubstitutionMap
 empty =
-    { slotsGen = Dict.empty
+    { slotsGen = Array.empty
     , slotsNamed = Dict.empty
-    , unionFindRanksGen = Dict.empty
+    , unionFindRanksGen = Array.empty
     , unionFindRanksNamed = Dict.empty
-    , letRanks = Dict.empty
+    , letRanks = Array.empty
     }
 
 
@@ -67,17 +68,39 @@ forLookup : SubstitutionMap -> SubstitutionMap
 forLookup store =
     { slotsGen = store.slotsGen
     , slotsNamed = store.slotsNamed
-    , unionFindRanksGen = Dict.empty
+    , unionFindRanksGen = Array.empty
     , unionFindRanksNamed = Dict.empty
-    , letRanks = Dict.empty
+    , letRanks = Array.empty
     }
+
+
+{-| `Array.set` no-ops when the index is out of bounds.
+This function grows the array instead.
+
+Kept inline instead of in Array.ExtraExtra: somehow it's ~4% slower there - weird!
+This sits on the hottest path in the library.
+
+-}
+arraySetGrowing : a -> Int -> a -> Array a -> Array a
+arraySetGrowing default index value array =
+    let
+        len : Int
+        len =
+            Array.length array
+    in
+    if index < len then
+        Array.set index value array
+
+    else
+        Array.push value (Array.append array (Array.repeat (index - len) default))
 
 
 getSlot : TypeVar -> SubstitutionMap -> Maybe Slot
 getSlot ( style, super ) store =
     case style of
         Generated theId ->
-            Dict.get (VarSet.genKeyFrom theId super) store.slotsGen
+            Array.get theId store.slotsGen
+                |> Maybe.andThen identity
 
         Named name ->
             Dict.get (VarSet.namedKeyFrom name super) store.slotsNamed
@@ -87,7 +110,7 @@ insertSlot : TypeVar -> Slot -> SubstitutionMap -> SubstitutionMap
 insertSlot ( style, super ) slot store =
     case style of
         Generated theId ->
-            { store | slotsGen = Dict.insert (VarSet.genKeyFrom theId super) slot store.slotsGen }
+            { store | slotsGen = arraySetGrowing Nothing theId (Just slot) store.slotsGen }
 
         Named name ->
             { store | slotsNamed = Dict.insert (VarSet.namedKeyFrom name super) slot store.slotsNamed }
@@ -97,7 +120,7 @@ removeSlot : TypeVar -> SubstitutionMap -> SubstitutionMap
 removeSlot ( style, super ) store =
     case style of
         Generated theId ->
-            { store | slotsGen = Dict.remove (VarSet.genKeyFrom theId super) store.slotsGen }
+            { store | slotsGen = Array.set theId Nothing store.slotsGen }
 
         Named name ->
             { store | slotsNamed = Dict.remove (VarSet.namedKeyFrom name super) store.slotsNamed }
@@ -107,7 +130,12 @@ memberSlot : TypeVar -> SubstitutionMap -> Bool
 memberSlot ( style, super ) store =
     case style of
         Generated theId ->
-            Dict.member (VarSet.genKeyFrom theId super) store.slotsGen
+            case Array.get theId store.slotsGen of
+                Just (Just _) ->
+                    True
+
+                _ ->
+                    False
 
         Named name ->
             Dict.member (VarSet.namedKeyFrom name super) store.slotsNamed
@@ -117,7 +145,7 @@ getRank : TypeVar -> SubstitutionMap -> Int
 getRank ( style, super ) store =
     case style of
         Generated theId ->
-            Dict.get (VarSet.genKeyFrom theId super) store.unionFindRanksGen
+            Array.get theId store.unionFindRanksGen
                 |> Maybe.withDefault 0
 
         Named name ->
@@ -129,7 +157,7 @@ insertRank : TypeVar -> Int -> SubstitutionMap -> SubstitutionMap
 insertRank ( style, super ) rank store =
     case style of
         Generated theId ->
-            { store | unionFindRanksGen = Dict.insert (VarSet.genKeyFrom theId super) rank store.unionFindRanksGen }
+            { store | unionFindRanksGen = arraySetGrowing 0 theId rank store.unionFindRanksGen }
 
         Named name ->
             { store | unionFindRanksNamed = Dict.insert (VarSet.namedKeyFrom name super) rank store.unionFindRanksNamed }
@@ -308,7 +336,7 @@ unionFindRankOf store var =
 -}
 stampIdAtLetRank : Id -> LetRank -> SubstitutionMap -> SubstitutionMap
 stampIdAtLetRank id letRank store =
-    { store | letRanks = Dict.insert id letRank store.letRanks }
+    { store | letRanks = arraySetGrowing 0 id letRank store.letRanks }
 
 
 {-| Overwrite an id's let-rank. Used when a binding-group placeholder was
@@ -323,7 +351,7 @@ letRankOf : TypeVar -> SubstitutionMap -> LetRank
 letRankOf var store =
     case Tuple.first var of
         TypeVar.Generated id ->
-            Dict.get id store.letRanks
+            Array.get id store.letRanks
                 |> Maybe.withDefault 0
 
         TypeVar.Named _ ->
@@ -334,7 +362,7 @@ setVarLetRank : TypeVar -> LetRank -> SubstitutionMap -> SubstitutionMap
 setVarLetRank var letRank store =
     case Tuple.first var of
         TypeVar.Generated id ->
-            { store | letRanks = Dict.insert id letRank store.letRanks }
+            { store | letRanks = arraySetGrowing 0 id letRank store.letRanks }
 
         TypeVar.Named _ ->
             store

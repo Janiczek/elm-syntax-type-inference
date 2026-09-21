@@ -32,6 +32,7 @@ The process:
 
 -}
 
+import Array
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.Declaration as Declaration exposing (Declaration)
@@ -667,7 +668,7 @@ moduleResult ctx outgoingAliases =
                                         { nodeIds = nodeIds
                                         , subst = SubstitutionMap.forLookup substitutionMap
                                         , moduleMapping = ctx.moduleMapping
-                                        , cache = Dict.empty
+                                        , cache = Array.empty
                                         , pool = Dict.empty
                                         }
                                 , interface =

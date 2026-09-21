@@ -6,6 +6,7 @@ module TypeLookupTable exposing (TypeLookupTable, get, empty)
 
 -}
 
+import Array exposing (Array)
 import Dict
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
@@ -51,7 +52,7 @@ get range (Internal.TLT tlt) =
             ( Nothing, Internal.TLT tlt )
 
         Just id ->
-            case Dict.get id tlt.cache of
+            case Array.get id tlt.cache |> Maybe.andThen identity of
                 Just cached ->
                     ( Just cached, Internal.TLT tlt )
 
@@ -82,7 +83,28 @@ get range (Internal.TLT tlt) =
                         { nodeIds = tlt.nodeIds
                         , subst = subst1
                         , moduleMapping = tlt.moduleMapping
-                        , cache = Dict.insert id pubType tlt.cache
+                        , cache = arraySetGrowing Nothing id (Just pubType) tlt.cache
                         , pool = pool1
                         }
                     )
+
+
+{-| `Array.set` no-ops when the index is out of bounds.
+This function grows the array instead.
+
+Kept inline instead of in Array.ExtraExtra: somehow it's ~4% slower there - weird!
+This sits on the hottest path in the library.
+
+-}
+arraySetGrowing : a -> Int -> a -> Array a -> Array a
+arraySetGrowing default index value array =
+    let
+        len : Int
+        len =
+            Array.length array
+    in
+    if index < len then
+        Array.set index value array
+
+    else
+        Array.push value (Array.append array (Array.repeat (index - len) default))
