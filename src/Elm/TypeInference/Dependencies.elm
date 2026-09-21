@@ -277,9 +277,9 @@ registerModule moduleMapping pkgName resolver mod =
                     State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <| \monoType ->
                     State.addGlobalBinding ( moduleId, pkgName, name ) (TypeI.closeOver monoType)
             in
-            State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
-            State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
-            State.do (State.traverse (\union -> registerUnion pkgName moduleId mod.name resolver union) mod.unions) <| \_ ->
+            State.do (State.traverseUnit (\v -> addBinding v.name v.tipe) mod.values) <| \() ->
+            State.do (State.traverseUnit (\b -> addBinding b.name b.tipe) mod.binops) <| \() ->
+            State.do (State.traverseUnit (\union -> registerUnion pkgName moduleId mod.name resolver union) mod.unions) <| \() ->
             mod.aliases
                 |> State.traverse (\typeAlias -> registerAlias pkgName moduleId mod.name resolver typeAlias)
                 |> State.map
