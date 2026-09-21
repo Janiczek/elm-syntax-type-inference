@@ -195,9 +195,19 @@ inferNodes nodes (Project p) =
                 |> List.ExtraExtra.fastConcatMap
                     (\component ->
                         component
-                            |> List.filterMap (\id -> Dict.get id p.byName)
-                            |> List.filter
-                                (\m -> not (Dict.member m.index.moduleId p.acc.interfaces))
+                            |> List.filterMap
+                                (\id ->
+                                    case Dict.get id p.byName of
+                                        Nothing ->
+                                            Nothing
+
+                                        (Just m) as justM ->
+                                            if Dict.member m.index.moduleId p.acc.interfaces then
+                                                Nothing
+
+                                            else
+                                                justM
+                                )
                     )
 
         newAcc : ProjectAcc
