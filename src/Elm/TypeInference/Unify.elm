@@ -1,6 +1,7 @@
 module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 
 import Dict exposing (Dict)
+import Dict.Extra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
@@ -1178,7 +1179,7 @@ occursCheck typeVar type_ =
     let
         inFields : Dict VarName MonoType -> Bool
         inFields fields =
-            List.any (occursCheck typeVar) (Dict.values fields)
+            Dict.Extra.any (\_ valueType -> occursCheck typeVar valueType) fields
     in
     case type_ of
         TypeVar var ->
