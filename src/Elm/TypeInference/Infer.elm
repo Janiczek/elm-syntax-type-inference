@@ -838,7 +838,12 @@ solveLetDeclarations ctx declarations =
         hasLetAnnotation declNode =
             case Node.value declNode of
                 LetFunction fn ->
-                    fn.signature /= Nothing
+                    case fn.signature of
+                        Just _ ->
+                            True
+
+                        Nothing ->
+                            False
 
                 LetDestructuring _ _ ->
                     False

@@ -121,17 +121,19 @@ fromFile moduleMapping file =
       , dottedModuleName = FullModuleName.toString moduleName
       , declaredValues =
             decls.values
-                |> (if effectCommand /= Nothing then
-                        Set.insert effectCommandVar
+                |> (case effectCommand of
+                        Just _ ->
+                            Set.insert effectCommandVar
 
-                    else
-                        identity
+                        Nothing ->
+                            identity
                    )
-                |> (if effectSubscription /= Nothing then
-                        Set.insert effectSubscriptionVar
+                |> (case effectSubscription of
+                        Just _ ->
+                            Set.insert effectSubscriptionVar
 
-                    else
-                        identity
+                        Nothing ->
+                            identity
                    )
       , declaredTypes = decls.types
       , exposedValues = exposedValues exposing_ decls
