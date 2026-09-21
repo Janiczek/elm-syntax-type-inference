@@ -525,8 +525,8 @@ importExposesValue target import_ varName =
 
             else
                 let
-                    viaOpenUnion : Bool
-                    viaOpenUnion =
+                    viaOpenUnion : () -> Bool
+                    viaOpenUnion () =
                         Set.member varName target.exposedValues
                             && List.any
                                 (\openType ->
@@ -545,7 +545,7 @@ importExposesValue target import_ varName =
                             && Set.member varName target.recordAliases
                             && Set.member varName target.exposedValues
                 in
-                viaRecordAlias || viaOpenUnion
+                viaRecordAlias || viaOpenUnion ()
 
 
 {-| Does this import's own `exposing` clause name this type?
