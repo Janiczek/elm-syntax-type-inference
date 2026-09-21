@@ -608,9 +608,12 @@ isRecordAlias alias_ =
 
 dependencyModuleDefinesType : Index -> ModuleId -> VarName -> Maybe ( PackageName, ModuleId )
 dependencyModuleDefinesType (Index index) moduleId typeName =
-    ownersOf index.types moduleId typeName
-        |> List.head
-        |> Maybe.map (\packageName -> ( packageName, moduleId ))
+    case ownersOf index.types moduleId typeName of
+        [] ->
+            Nothing
+
+        packageName :: _ ->
+            Just ( packageName, moduleId )
 
 
 implicitTypeModule : ModuleName -> VarName -> Maybe ( PackageName, ModuleId )
@@ -803,11 +806,11 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                         let
                             defaultId : Result ResolverAmbiguity ModuleId
                             defaultId =
-                                case candidates |> List.head of
-                                    Just head ->
+                                case candidates of
+                                    head :: _ ->
                                         Ok head
 
-                                    Nothing ->
+                                    [] ->
                                         if List.isEmpty qualifier then
                                             Ok thisModule.moduleId
 
