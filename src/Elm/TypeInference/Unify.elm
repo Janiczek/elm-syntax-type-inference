@@ -1224,7 +1224,7 @@ occursCheck typeVar type_ =
             occursCheck typeVar r.extensionTypevar || inFields r.fields
 
         UserDefinedType r ->
-            List.any (occursCheck typeVar) r.args
+            List.any (\arg -> occursCheck typeVar arg) r.args
 
         WebGLShader r ->
             occursCheck typeVar r.attributesExtension

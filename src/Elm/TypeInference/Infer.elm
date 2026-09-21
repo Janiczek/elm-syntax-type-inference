@@ -181,7 +181,7 @@ isKernelQualifier ctx maybeQualifier =
                 case qualifier of
                     ( single, [] ) ->
                         ModuleIndex.modulesWithAlias ctx.thisModule single
-                            |> List.any (isKernelModuleId ctx)
+                            |> List.any (\mod -> isKernelModuleId ctx mod)
 
                     _ ->
                         False
