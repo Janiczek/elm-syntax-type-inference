@@ -272,9 +272,9 @@ registerModule moduleMapping pkgName resolver mod =
             in
             State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
             State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
-            State.do (State.traverse (registerUnion pkgName moduleId mod.name resolver) mod.unions) <| \_ ->
+            State.do (State.traverse (\union -> registerUnion pkgName moduleId mod.name resolver union) mod.unions) <| \_ ->
             mod.aliases
-                |> State.traverse (registerAlias pkgName moduleId mod.name resolver)
+                |> State.traverse (\typeAlias -> registerAlias pkgName moduleId mod.name resolver typeAlias)
                 |> State.map
                     (\maybeTypeAliases ->
                         maybeTypeAliases

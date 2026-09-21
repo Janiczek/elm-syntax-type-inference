@@ -96,13 +96,15 @@ inferMany : (a -> StateM Inferred) -> List a -> StateM ( List Id, Equations )
 inferMany f items =
     State.traverse f items
         |> State.map
-            (List.foldr
-                (\( id_, eqs ) ( ids, allEqs ) ->
-                    ( id_ :: ids
-                    , TypeEquation.append eqs allEqs
-                    )
-                )
-                ( [], TypeEquation.empty )
+            (\inferred ->
+                inferred
+                    |> List.foldr
+                        (\( id_, eqs ) ( ids, allEqs ) ->
+                            ( id_ :: ids
+                            , TypeEquation.append eqs allEqs
+                            )
+                        )
+                        ( [], TypeEquation.empty )
             )
 
 
@@ -950,7 +952,7 @@ solveLetDeclarations ctx declarations =
             State.do
                 (functions
                     |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
-                    |> State.andThen (BindingGroup.solveGroup (unifyConfig ctx))
+                    |> State.andThen (\members -> BindingGroup.solveGroup (unifyConfig ctx) members)
                 )
             <| \() ->
             destructurings
