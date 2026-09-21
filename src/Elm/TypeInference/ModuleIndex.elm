@@ -459,16 +459,27 @@ importIndex moduleMapping import_ =
                                         , opaqueTypes = acc.opaqueTypes
                                         }
                             )
-                            { values = Set.empty
-                            , types = Set.empty
-                            , hasOpenedUnion = False
-                            , openTypes = Set.empty
-                            , opaqueTypes = Set.empty
-                            }
+                            explicitExposingIndexEmpty
                             exposedNodes
       }
     , moduleMapping1
     )
+
+
+explicitExposingIndexEmpty :
+    { values : Set VarName
+    , types : Set VarName
+    , hasOpenedUnion : Bool
+    , openTypes : Set VarName
+    , opaqueTypes : Set VarName
+    }
+explicitExposingIndexEmpty =
+    { values = Set.empty
+    , types = Set.empty
+    , hasOpenedUnion = False
+    , openTypes = Set.empty
+    , opaqueTypes = Set.empty
+    }
 
 
 {-| Could this import bring this value/operator into unqualified scope?

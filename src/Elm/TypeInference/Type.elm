@@ -413,23 +413,22 @@ toTypeAnnotation type_ =
                 (Node.empty (toTypeAnnotation to))
 
         Int ->
-            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Int" )) []
+            typeAnnotationBasicsInt
 
         Float ->
-            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Float" )) []
+            typeAnnotationBasicsFloat
 
         Char ->
-            TypeAnnotation.Typed (Node.empty ( [ "Char" ], "Char" )) []
+            typeAnnotationCharChar
 
         String ->
-            TypeAnnotation.Typed (Node.empty ( [ "String" ], "String" )) []
+            typeAnnotationStringString
 
         Bool ->
-            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Bool" )) []
+            typeAnnotationBasicsBool
 
         List itemType ->
-            TypeAnnotation.Typed
-                (Node.empty ( [ "List" ], "List" ))
+            TypeAnnotation.Typed listListNameNode
                 [ Node.empty (toTypeAnnotation itemType) ]
 
         Unit ->
@@ -471,10 +470,40 @@ toTypeAnnotation type_ =
                 ]
 
 
+typeAnnotationBasicsInt : TypeAnnotation
+typeAnnotationBasicsInt =
+    TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Int" )) []
+
+
+typeAnnotationBasicsFloat : TypeAnnotation
+typeAnnotationBasicsFloat =
+    TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Float" )) []
+
+
+typeAnnotationBasicsBool : TypeAnnotation
+typeAnnotationBasicsBool =
+    TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Bool" )) []
+
+
+typeAnnotationCharChar : TypeAnnotation
+typeAnnotationCharChar =
+    TypeAnnotation.Typed (Node.empty ( [ "Char" ], "Char" )) []
+
+
+typeAnnotationStringString : TypeAnnotation
+typeAnnotationStringString =
+    TypeAnnotation.Typed (Node.empty ( [ "String" ], "String" )) []
+
+
+listListNameNode : Node.Node ( ModuleName, String )
+listListNameNode =
+    Node.empty ( [ "List" ], "List" )
+
+
 recordFieldsToRecordDefinition : Dict String Type -> TypeAnnotation.RecordDefinition
 recordFieldsToRecordDefinition fields =
     fields
-        |> Dict.foldr 
+        |> Dict.foldr
             (\fieldName fieldType acc ->
                 Node.empty
                     ( Node.empty fieldName
