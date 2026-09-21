@@ -291,8 +291,14 @@ unqualifiedVarOutsideThisModule :
     -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
 unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName =
     Result.Extra.combineMap
-        (\import_ -> explicitImportDefinesValue moduleMapping index modules import_ varName)
-        (List.filter (\import_ -> ModuleIndex.importCouldExposeValue import_ varName) thisModule.imports)
+        (\import_ ->
+            if ModuleIndex.importCouldExposeValue import_ varName then
+                explicitImportDefinesValue moduleMapping index modules import_ varName
+
+            else
+                Ok Nothing
+        )
+        thisModule.imports
         |> Result.andThen
             (\explicitMatches ->
                 let

@@ -476,14 +476,15 @@ toTypeAnnotation type_ =
 recordFieldsToRecordDefinition : Dict String Type -> TypeAnnotation.RecordDefinition
 recordFieldsToRecordDefinition fields =
     fields
-        |> Dict.toList
-        |> List.map
-            (\( fieldName, fieldType ) ->
+        |> Dict.foldr 
+            (\fieldName fieldType acc ->
                 Node.empty
                     ( Node.empty fieldName
                     , Node.empty (toTypeAnnotation fieldType)
                     )
+                    :: acc
             )
+            []
 
 
 shaderSlotToType : Dict String Type -> Maybe String -> Type

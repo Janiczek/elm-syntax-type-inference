@@ -62,7 +62,6 @@ import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeReso
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
 import List.ExtraExtra
-import Maybe.Extra
 import RangeLike
 import Result.Extra
 import Set exposing (Set)
@@ -129,8 +128,9 @@ project currentPackage depEnv files =
             byName : Dict ModuleId ProjectModule
             byName =
                 modules
-                    |> List.map (\m -> ( m.index.moduleId, m ))
-                    |> Dict.fromList
+                    |> List.foldl
+                        (\m acc -> Dict.insert m.index.moduleId m acc)
+                        Dict.empty
         in
         Ok
             (Project
@@ -192,8 +192,13 @@ inferNodes nodes (Project p) =
         toPrepare : List ProjectModule
         toPrepare =
             SCC.stronglyConnectedComponents nodes (firstPartyImportsOf p.byName)
-                |> List.ExtraExtra.fastConcatMap (List.filterMap (\id -> Dict.get id p.byName))
-                |> List.filter (\m -> not (Dict.member m.index.moduleId p.acc.interfaces))
+                |> List.ExtraExtra.fastConcatMap
+                    (\component ->
+                        component
+                            |> List.filterMap (\id -> Dict.get id p.byName)
+                            |> List.filter
+                                (\m -> not (Dict.member m.index.moduleId p.acc.interfaces))
+                    )
 
         newAcc : ProjectAcc
         newAcc =
@@ -410,8 +415,15 @@ dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity }
                 needed : Dict PackageName (List String)
                 needed =
                     DependencySources.neededSources deps sourcesToResolveAmbiguity
-                        |> List.filter (\( pkg, _ ) -> Set.member pkg reachable)
-                        |> Dict.fromList
+                        |> List.foldl
+                            (\( pkg, names ) acc ->
+                                if Set.member pkg reachable then
+                                    Dict.insert pkg names acc
+
+                                else
+                                    acc
+                            )
+                            Dict.empty
             in
             if Dict.isEmpty needed then
                 case DependencySources.aliases env.moduleMapping deps sourcesToResolveAmbiguity of
@@ -883,7 +895,20 @@ gatherTypeAliases ctx file =
                     _ ->
                         State.pure Nothing
             )
-        |> State.map (Maybe.Extra.values >> Dict.fromList)
+        |> State.map
+            (\maybeTypeAliases ->
+                maybeTypeAliases
+                    |> List.foldl
+                        (\maybeTypeAlias acc ->
+                            case maybeTypeAlias of
+                                Nothing ->
+                                    acc
+
+                                Just ( typeAliasKey, typeAlias ) ->
+                                    Dict.insert typeAliasKey typeAlias acc
+                        )
+                        Dict.empty
+            )
 
 
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()

@@ -324,10 +324,12 @@ functionMember ctx declNode fn installFor =
         , annotation = Maybe.map TypeI.closeOver maybeAnnotationType
         , install = installFor varName
         , equations =
-            State.map2 TypeEquation.append
+            State.map2
+                (\sigEquations implEquations ->
+                    TypeEquation.toList (TypeEquation.append sigEquations implEquations)
+                )
                 (signatureEquations declId maybeAnnotationType)
                 (inferFnImplementation ctx declId impl)
-                |> State.map TypeEquation.toList
         }
 
 
@@ -567,10 +569,6 @@ inferExpr ctx exprNode =
                 )
             <| \caseInferreds ->
             let
-                caseIds : List ( Id, Id )
-                caseIds =
-                    List.map Tuple.first caseInferreds
-
                 caseEqs : Equations
                 caseEqs =
                     List.foldr
@@ -580,7 +578,7 @@ inferExpr ctx exprNode =
 
                 ( scrutineeEquations, bodyEquations ) =
                     List.foldr
-                        (\( patternId, bodyId ) ( scruts, bodies ) ->
+                        (\( ( patternId, bodyId ), _ ) ( scruts, bodies ) ->
                             ( ( TypeI.id_ scrutineeId
                               , TypeI.id_ patternId
                               , "Case: scrutinee = branch pattern"
@@ -594,7 +592,7 @@ inferExpr ctx exprNode =
                             )
                         )
                         ( [], [] )
-                        caseIds
+                        caseInferreds
             in
             finishEqns <|
                 TypeEquation.append scrutineeEqs

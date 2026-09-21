@@ -39,8 +39,8 @@ type alias Dependencies =
 fromList : List DependencyPackage -> Dependencies
 fromList packages =
     packages
-        |> List.map (\pkg -> ( pkg.name, pkg ))
-        |> Dict.fromList
+        |> List.foldl (\pkg acc -> Dict.insert pkg.name pkg acc)
+            Dict.empty
 
 
 {-| Resolves a module name from docs.json to its package.
@@ -270,7 +270,20 @@ registerModule moduleMapping pkgName resolver mod =
             State.do (State.traverse (registerUnion pkgName moduleId mod.name resolver) mod.unions) <| \_ ->
             mod.aliases
                 |> State.traverse (registerAlias pkgName moduleId mod.name resolver)
-                |> State.map (List.filterMap identity >> Dict.fromList)
+                |> State.map
+                    (\maybeTypeAliases ->
+                        maybeTypeAliases
+                            |> List.foldl
+                                (\maybeTypeAlias acc ->
+                                    case maybeTypeAlias of
+                                        Nothing ->
+                                            acc
+
+                                        Just ( typeAliasKey, typeAlias ) ->
+                                            Dict.insert typeAliasKey typeAlias acc
+                                )
+                                Dict.empty
+                    )
 
 
 registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> StateM ()

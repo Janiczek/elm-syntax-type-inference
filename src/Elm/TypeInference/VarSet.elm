@@ -181,15 +181,15 @@ fromList vars =
                 (\( style, super ) ( genAcc, namedAcc ) ->
                     case style of
                         Generated theId ->
-                            ( genKeyFrom theId super :: genAcc, namedAcc )
+                            ( Set.insert (genKeyFrom theId super) genAcc, namedAcc )
 
                         Named name ->
-                            ( genAcc, namedKeyFrom name super :: namedAcc )
+                            ( genAcc, Set.insert (namedKeyFrom name super) namedAcc )
                 )
-                ( [], [] )
+                ( Set.empty, Set.empty )
                 vars
     in
     { order = List.reverse vars
-    , membersGen = Set.fromList genKeys
-    , membersNamed = Set.fromList namedKeys
+    , membersGen = genKeys
+    , membersNamed = namedKeys
     }

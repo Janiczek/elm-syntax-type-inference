@@ -71,10 +71,9 @@ referencedModules deps =
                 |> List.map Tuple.first
     in
     (documented ++ referenced)
-        |> List.filter (not << String.isEmpty)
         |> List.foldl
             (\name ( seen, acc ) ->
-                if List.member name seen then
+                if String.isEmpty name || List.member name seen then
                     ( seen, acc )
 
                 else
@@ -123,9 +122,15 @@ neededSources deps sources =
                     unknownModules : List String
                     unknownModules =
                         docsModuleRefs pkg.modules
-                            |> List.filter (not << isKnownRef docsTypes)
-                            |> List.map Tuple.first
-                            |> Set.fromList
+                            |> List.foldl
+                                (\m acc ->
+                                    if isKnownRef docsTypes m then
+                                        acc
+
+                                    else
+                                        Set.insert (Tuple.first m) acc
+                                )
+                                Set.empty
                             |> Set.toList
 
                     supplied : Set String
@@ -135,8 +140,14 @@ neededSources deps sources =
                     remaining : List String
                     remaining =
                         unknownModules
-                            |> List.filter (\m -> not (Set.member m supplied))
-                            |> List.map ModuleNameExtra.dottedToFilePath
+                            |> List.filterMap
+                                (\m ->
+                                    if Set.member m supplied then
+                                        Nothing
+
+                                    else
+                                        Just (ModuleNameExtra.dottedToFilePath m)
+                                )
                 in
                 case remaining of
                     [] ->
@@ -151,8 +162,8 @@ suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
 suppliedModuleNames package sources =
     Dict.get package sources
         |> Maybe.withDefault []
-        |> List.map fileDottedName
-        |> Set.fromList
+        |> List.foldl (\m acc -> Set.insert (fileDottedName m) acc)
+            Set.empty
 
 
 fileDottedName : File -> String
@@ -165,8 +176,12 @@ fileDottedName file =
 
 documentedTypeNames : Elm.Docs.Module -> Set String
 documentedTypeNames mod =
-    Set.fromList
-        (List.map .name mod.unions ++ List.map .name mod.aliases)
+    List.foldl (\union acc -> Set.insert union.name acc)
+        (List.foldl (\typeAlias acc -> Set.insert typeAlias.name acc)
+            Set.empty
+            mod.aliases
+        )
+        mod.unions
 
 
 isKnownRef : Dict String (Set String) -> ( String, String ) -> Bool
@@ -282,10 +297,9 @@ packageAliases moduleMapping deps package files =
                             ( moduleIndex, newModuleMapping ) =
                                 ModuleIndex.fromFile accModuleMapping file
                         in
-                        ( ( moduleIndex.moduleId, moduleIndex ) :: acc, newModuleMapping )
+                        ( Dict.insert moduleIndex.moduleId moduleIndex acc, newModuleMapping )
                     )
-                    ( [], moduleMapping )
-                |> (\( reversed, finalModuleMapping ) -> ( Dict.fromList reversed, finalModuleMapping ))
+                    ( Dict.empty, moduleMapping )
 
         visiblePackages : List PackageName
         visiblePackages =
@@ -299,8 +313,8 @@ packageAliases moduleMapping deps package files =
                 |> Tuple.first
     in
     files
-        |> Result.Extra.combineMap
-            (\file ->
+        |> Result.Extra.foldlWhileOk
+            (\file dictAcrossFiles ->
                 let
                     ( thisModule, _ ) =
                         ModuleIndex.fromFile moduleMapping1 file
@@ -320,8 +334,8 @@ packageAliases moduleMapping deps package files =
                                 )
                 in
                 file.declarations
-                    |> List.filterMap
-                        (\node ->
+                    |> Result.Extra.foldlWhileOk
+                        (\node dict ->
                             case Node.value node of
                                 Declaration.AliasDeclaration alias_ ->
                                     Just
@@ -344,9 +358,9 @@ packageAliases moduleMapping deps package files =
                                         )
 
                                 _ ->
-                                    Nothing
+                                    Ok dict
                         )
-                    |> Result.Extra.combine
-                    |> Result.map Dict.fromList
+                        dictAcrossFiles
             )
-        |> Result.map (\dicts -> ( List.foldl Dict.union Dict.empty dicts, moduleMapping1 ))
+            Dict.empty
+        |> Result.map (\dict -> ( dict, moduleMapping1 ))
