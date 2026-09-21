@@ -790,8 +790,8 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
         |> Result.map
             (\resolved ->
                 case resolved of
-                    Just found ->
-                        Just found
+                    (Just _) as justFound ->
+                        justFound
 
                     Nothing ->
                         implicitTypeModule qualifier typeName
