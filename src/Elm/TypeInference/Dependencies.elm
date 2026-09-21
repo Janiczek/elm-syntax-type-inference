@@ -232,7 +232,7 @@ registerPackage moduleMapping deps pkgName pkg =
     in
     pkg.modules
         |> State.traverse (registerModule moduleMapping pkgName resolver)
-        |> State.map (List.foldl Dict.union Dict.empty)
+        |> State.map (\dicts -> dicts |> List.foldl Dict.union Dict.empty)
 
 
 registerModule :
