@@ -374,6 +374,6 @@ registerAlias pkgName moduleId dottedModuleName resolver alias_ =
     State.do registerConstructor <| \() ->
     State.pure <|
         Just
-            ( ( moduleId, pkgName, alias_.name )
+            ( ( pkgName, moduleId, alias_.name )
             , { args = List.map TypeVar.parse alias_.args, type_ = aliasMono }
             )
