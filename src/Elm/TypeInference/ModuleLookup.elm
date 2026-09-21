@@ -300,18 +300,26 @@ unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName =
         )
         thisModule.imports
         |> Result.andThen
-            (\explicitMatches ->
+            (\explicitMaybeMatches ->
                 let
                     home : ModuleId
                     home =
                         ImplicitImports.implicitValueHomeId varName
                 in
                 dependencyModuleDefines moduleMapping index home varName
-                    |> Result.map (Maybe.map (\package -> ( package, home )))
                     |> Result.map
-                        (\implicitMatch ->
-                            List.filterMap identity explicitMatches
-                                ++ List.filterMap identity [ implicitMatch ]
+                        (\maybePackage ->
+                            let
+                                explicitMatches : List ( PackageName, ModuleId )
+                                explicitMatches =
+                                    List.filterMap identity explicitMaybeMatches
+                            in
+                            case maybePackage |> Maybe.map (\package -> ( package, home )) of
+                                Nothing ->
+                                    explicitMatches
+
+                                Just implicitMatch ->
+                                    explicitMatches ++ [ implicitMatch ]
                         )
             )
         |> Result.andThen
