@@ -32,6 +32,7 @@ import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type exposing (VarName)
 import Set exposing (Set)
+import Set.Extra
 
 
 type alias ModuleIndex =
@@ -527,25 +528,24 @@ importExposesValue target import_ varName =
                 let
                     viaOpenUnion : () -> Bool
                     viaOpenUnion () =
-                        Set.member varName target.exposedValues
-                            && List.any
-                                (\openType ->
-                                    case Dict.get openType target.unionConstructors of
-                                        Just ctors ->
-                                            List.member varName ctors
+                        Set.Extra.any
+                            (\openType ->
+                                case Dict.get openType target.unionConstructors of
+                                    Just ctors ->
+                                        List.member varName ctors
 
-                                        Nothing ->
-                                            False
-                                )
-                                (Set.toList e.openTypes)
+                                    Nothing ->
+                                        False
+                            )
+                            e.openTypes
 
                     viaRecordAlias : Bool
                     viaRecordAlias =
                         Set.member varName e.opaqueTypes
                             && Set.member varName target.recordAliases
-                            && Set.member varName target.exposedValues
                 in
-                viaRecordAlias || viaOpenUnion ()
+                Set.member varName target.exposedValues
+                    && (viaRecordAlias || viaOpenUnion ())
 
 
 {-| Does this import's own `exposing` clause name this type?
