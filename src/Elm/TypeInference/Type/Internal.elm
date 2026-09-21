@@ -500,8 +500,8 @@ normalize ((Forall boundVars monoType) as type_) =
         allVars : List TypeVar
         allVars =
             VarSet.union
-                (monoTypeVars monoType)
                 (VarSet.fromList boundVars)
+                (monoTypeVars monoType)
                 |> VarSet.toList
 
         -- eg. `number` and `comparable` get their own slot sequence independent of the `Normal` one

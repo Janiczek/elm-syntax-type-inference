@@ -150,8 +150,8 @@ toList s =
 union : VarSet -> VarSet -> VarSet
 union l r =
     { order = l.order ++ r.order
-    , membersGen = Set.union l.membersGen r.membersGen
-    , membersNamed = Set.union l.membersNamed r.membersNamed
+    , membersGen = Set.union r.membersGen l.membersGen
+    , membersNamed = Set.union r.membersNamed l.membersNamed
     }
 
 

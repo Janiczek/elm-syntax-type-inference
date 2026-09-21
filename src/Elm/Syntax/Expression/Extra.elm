@@ -97,7 +97,7 @@ referencedNamesIn bound expression =
 
                 nestedBound : Set VarName
                 nestedBound =
-                    Set.union bound letBound
+                    Set.union letBound bound
 
                 declRefs : Node LetDeclaration -> List ( Maybe ModuleName, VarName )
                 declRefs declNode =
@@ -109,7 +109,7 @@ referencedNamesIn bound expression =
                                     (Node.value fn.declaration).arguments
                                         |> List.ExtraExtra.fastConcatMap (\(Node.Node _ arg) -> Elm.Syntax.Pattern.Extra.varNames arg)
                             in
-                            referencedNamesIn (Set.union nestedBound (Set.fromList argumentNames)) (Node.value (Node.value fn.declaration).expression)
+                            referencedNamesIn (Set.union (Set.fromList argumentNames) nestedBound) (Node.value (Node.value fn.declaration).expression)
 
                         LetDestructuring _ e1 ->
                             referencedNamesIn nestedBound (Node.value e1)
@@ -121,7 +121,7 @@ referencedNamesIn bound expression =
                 ++ List.ExtraExtra.fastConcatMap
                     (\( pattern, body ) ->
                         referencedNamesIn
-                            (Set.union bound (Set.fromList (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern))))
+                            (Set.union (Set.fromList (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern))) bound)
                             (Node.value body)
                     )
                     caseBlock.cases
@@ -133,7 +133,7 @@ referencedNamesIn bound expression =
                     lambda.args
                         |> List.ExtraExtra.fastConcatMap (\(Node.Node _ param) -> Elm.Syntax.Pattern.Extra.varNames param)
             in
-            referencedNamesIn (Set.union bound (Set.fromList argumentNames)) (Node.value lambda.expression)
+            referencedNamesIn (Set.union (Set.fromList argumentNames) bound) (Node.value lambda.expression)
 
         RecordExpr setters ->
             setters |> List.ExtraExtra.fastConcatMap (\(Node.Node _ ( _, value )) -> e value)

@@ -107,8 +107,8 @@ neededSources deps sources =
                                         (\existing ->
                                             Just
                                                 (Set.union
-                                                    (documentedTypeNames mod)
                                                     (Maybe.withDefault Set.empty existing)
+                                                    (documentedTypeNames mod)
                                                 )
                                         )
                                         acc
