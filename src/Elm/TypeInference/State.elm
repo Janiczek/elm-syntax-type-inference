@@ -30,6 +30,7 @@ module Elm.TypeInference.State exposing
     , setIdToCurrentLetRank
     , test_initFull
     , traverse
+    , traverseUnit
     , withDeeperLetRank
     , withScopedEnv
     )
@@ -177,6 +178,7 @@ do m fn =
 
 
 {-| Tail-recursive instead of List.foldr (which blew the stack in the past).
+Prefer `State.traverseUnit` if the function returns a `StateM ()`
 -}
 traverse : (a -> StateM b) -> List a -> StateM (List b)
 traverse f list =
@@ -196,6 +198,26 @@ traverseHelp f acc list state =
 
                 ( Ok b, newState ) ->
                     traverseHelp f (b :: acc) rest newState
+
+
+traverseUnit : (a -> StateM ()) -> List a -> StateM ()
+traverseUnit f list =
+    \state -> traverseUnitHelp f list state
+
+
+traverseUnitHelp : (a -> StateM ()) -> List a -> State -> ( Result Error (), State )
+traverseUnitHelp f list state =
+    case list of
+        [] ->
+            ( Ok (), state )
+
+        x :: rest ->
+            case f x state of
+                ( Err err, newState ) ->
+                    ( Err err, newState )
+
+                ( Ok (), newState ) ->
+                    traverseUnitHelp f rest newState
 
 
 get : StateM State

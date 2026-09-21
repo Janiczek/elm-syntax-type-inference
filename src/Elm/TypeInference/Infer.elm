@@ -925,8 +925,7 @@ solveLetDeclarations ctx declarations =
             in
             State.do (State.withDeeperLetRank inferAndUnify) <| \() ->
             boundVars
-                |> State.traverse State.generalizeBinding
-                |> State.map (always ())
+                |> State.traverseUnit State.generalizeBinding
 
         solveGroup : List Int -> StateM ()
         solveGroup groupIndices =
@@ -955,16 +954,15 @@ solveLetDeclarations ctx declarations =
                 )
             <| \() ->
             destructurings
-                |> State.traverse
+                |> State.traverseUnit
                     (\( declNode, patternNode, exprNode ) ->
                         inferDestructuring declNode patternNode exprNode
                     )
-                |> State.map (always ())
 
         preinstallAnnotated : StateM ()
         preinstallAnnotated =
             declarations
-                |> State.traverse
+                |> State.traverseUnit
                     (\declNode ->
                         case Node.value declNode of
                             LetFunction fn ->
@@ -984,12 +982,10 @@ solveLetDeclarations ctx declarations =
                             LetDestructuring _ _ ->
                                 State.pure ()
                     )
-                |> State.map (always ())
     in
     State.do preinstallAnnotated <| \() ->
     sccs
-        |> State.traverse solveGroup
-        |> State.map (always ())
+        |> State.traverseUnit solveGroup
 
 
 

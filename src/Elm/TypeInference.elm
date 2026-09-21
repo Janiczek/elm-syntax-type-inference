@@ -780,7 +780,7 @@ solveModule ctx typeAliases file =
             }
     in
     sccs
-        |> State.traverse
+        |> State.traverseUnit
             (\group ->
                 group
                     |> List.filterMap (\key -> Dict.get key topLevelFunctions)
@@ -792,7 +792,6 @@ solveModule ctx typeAliases file =
                                     (Infer.unifyConfigForGroup inferCtx group)
                         )
             )
-        |> State.map (always ())
 
 
 
@@ -907,7 +906,7 @@ gatherTypeAliases ctx file =
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
 registerConstructorsAndPorts ctx file =
     file.declarations
-        |> State.traverse
+        |> State.traverseUnit
             (\declNode ->
                 case Node.value declNode of
                     Declaration.CustomTypeDeclaration customType ->
@@ -919,7 +918,6 @@ registerConstructorsAndPorts ctx file =
                     _ ->
                         State.pure ()
             )
-        |> State.map (always ())
 
 
 registerCustomType :
@@ -957,7 +955,7 @@ registerCustomType resolver moduleId moduleName customType =
                 }
     in
     customType.constructors
-        |> State.traverse
+        |> State.traverseUnit
             (\ctorNode ->
                 let
                     ctor : SyntaxType.ValueConstructor
@@ -986,7 +984,6 @@ registerCustomType resolver moduleId moduleName customType =
                         in
                         State.addGlobalBinding ( moduleId, "", ctorName ) (TypeI.closeOver ctorType)
             )
-        |> State.map (always ())
 
 
 registerPort : TypeResolver -> ModuleId -> FullModuleName -> Signature -> StateM ()

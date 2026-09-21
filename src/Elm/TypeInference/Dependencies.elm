@@ -322,7 +322,7 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
                         }
     in
     union.tags
-        |> State.traverse
+        |> State.traverseUnit
             (\( ctorName, argTypeStrings ) ->
                 State.do (State.fromResult (Result.mapError toError (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings))) <| \argTypes ->
                 let
@@ -333,7 +333,6 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
                 in
                 State.addGlobalBinding ( moduleId, pkgName, ctorName ) (TypeI.closeOver ctorType)
             )
-        |> State.map (always ())
 
 
 {-| A record type definition gets a constructor function as well
