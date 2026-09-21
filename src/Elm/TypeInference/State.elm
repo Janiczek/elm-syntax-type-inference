@@ -573,7 +573,7 @@ instantiate (Forall boundVars monoType) =
             in
             monoType
                 |> TypeI.mapVarsMono
-                    (\( ( style, super ) as var) ->
+                    (\(( style, super ) as var) ->
                         case style of
                             Generated theId ->
                                 Dict.get (VarSet.genKeyFrom theId super) renamingGen
