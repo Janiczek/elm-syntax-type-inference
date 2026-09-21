@@ -157,7 +157,7 @@ addName moduleId packageName name acc =
 ownersOf : NameIndex -> ModuleId -> VarName -> List PackageName
 ownersOf index moduleId name =
     Dict.get moduleId index
-        |> Maybe.andThen (Dict.get name)
+        |> Maybe.andThen (\vars -> Dict.get name vars)
         |> Maybe.withDefault []
 
 
@@ -266,7 +266,7 @@ resolveOperatorFunction moduleMapping modules operatorModuleId operator =
 
                 Just functionName ->
                     moduleOfVar moduleMapping emptyIndex modules operatorModule Nothing functionName
-                        |> Result.map (Maybe.map (\( _, functionModuleId ) -> ( functionModuleId, functionName )))
+                        |> Result.map (\mod -> mod |> Maybe.map (\( _, functionModuleId ) -> ( functionModuleId, functionName )))
 
 
 unqualifiedVarInThisModule :
@@ -367,12 +367,18 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
 
         ModuleIndex.ExposesAll ->
             dependencyModuleDefines moduleMapping (Index idx) import_.moduleId varName
-                |> Result.map (Maybe.map (\package -> ( package, import_.moduleId )))
+                |> Result.map
+                    (\maybePackage ->
+                        maybePackage |> Maybe.map (\package -> ( package, import_.moduleId ))
+                    )
 
         ModuleIndex.ExposesExplicit e ->
             if Set.member varName e.values then
                 dependencyModuleDefines moduleMapping (Index idx) import_.moduleId varName
-                    |> Result.map (Maybe.map (\package -> ( package, import_.moduleId )))
+                    |> Result.map
+                        (\maybePackage ->
+                            maybePackage |> Maybe.map (\package -> ( package, import_.moduleId ))
+                        )
 
             else if not (couldBeConstructorName varName) then
                 Ok Nothing
@@ -391,7 +397,7 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
                     viaOpenUnion =
                         case
                             Dict.get import_.moduleId idx.ctorParents
-                                |> Maybe.andThen (Dict.get varName)
+                                |> Maybe.andThen (\p -> Dict.get varName p)
                         of
                             Just parent ->
                                 Set.member parent e.openTypes
@@ -401,7 +407,10 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
                 in
                 if viaRecordAlias || viaOpenUnion then
                     dependencyModuleDefines moduleMapping (Index idx) import_.moduleId varName
-                        |> Result.map (Maybe.map (\package -> ( package, import_.moduleId )))
+                        |> Result.map
+                            (\maybePackage ->
+                                maybePackage |> Maybe.map (\package -> ( package, import_.moduleId ))
+                            )
 
                 else
                     Ok Nothing
@@ -494,7 +503,10 @@ qualifiedModuleDefines moduleMapping index modules moduleId varName =
 
         Nothing ->
             dependencyModuleDefines moduleMapping index moduleId varName
-                |> Result.map (Maybe.map (\package -> ( package, moduleId )))
+                |> Result.map
+                    (\maybePackage ->
+                        maybePackage |> Maybe.map (\package -> ( package, moduleId ))
+                    )
 
 
 qualifiedModuleDefinesByName :
@@ -600,7 +612,7 @@ implicitTypeModule qualifier typeName =
 
     else
         ImplicitImports.moduleExposingTypeId typeName
-            |> Maybe.map (Tuple.pair ImplicitImports.elmCorePackage)
+            |> Maybe.map (\id -> ( ImplicitImports.elmCorePackage, id ))
 
 
 {-| A qualifier like `Parser.` can mean two different modules at once:

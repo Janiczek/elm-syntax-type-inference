@@ -159,7 +159,7 @@ fromDocsType resolver type_ =
             in
             Result.andThen
                 (\( package, moduleId ) ->
-                    Result.Extra.combineMap (fromDocsType resolver) args
+                    Result.Extra.combineMap (\arg -> fromDocsType resolver arg) args
                         |> Result.map
                             (\argTypes ->
                                 case TypeI.collapsePrimitive package moduleId typeName argTypes of
@@ -195,7 +195,10 @@ fromDocsType resolver type_ =
 fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ErrorDetails (List ( String, MonoType ))
 fromDocsFields resolver fields =
     Result.Extra.combineMap
-        (\( name, t ) -> fromDocsType resolver t |> Result.map (Tuple.pair name))
+        (\( name, value ) ->
+            fromDocsType resolver value
+                |> Result.map (\valueType -> ( name, valueType ))
+        )
         fields
 
 

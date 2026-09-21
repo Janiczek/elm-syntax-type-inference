@@ -245,7 +245,7 @@ expandDeepChildren fuel typeAliases type_ =
                 { package = r.package
                 , moduleId = r.moduleId
                 , name = r.name
-                , args = List.map (expandAliasDeepHelp fuel typeAliases) r.args
+                , args = List.map (\arg -> expandAliasDeepHelp fuel typeAliases arg) r.args
                 }
 
         TypeI.WebGLShader r ->
@@ -357,7 +357,7 @@ zipAliasArgs params args =
 
         ( param :: restParams, argType :: restArgs ) ->
             zipAliasArgs restParams restArgs
-                |> Maybe.map ((::) ( param, argType ))
+                |> Maybe.map (\restZipped -> ( param, argType ) :: restZipped)
 
         _ ->
             Nothing
@@ -413,7 +413,7 @@ collapseNamedShader : TypeAliases -> MonoType -> MonoType
 collapseNamedShader typeAliases type_ =
     case type_ of
         UserDefinedType ut ->
-            case TypeI.collapsePrimitive ut.package ut.moduleId ut.name (List.map (expandAlias typeAliases) ut.args) of
+            case TypeI.collapsePrimitive ut.package ut.moduleId ut.name (List.map (\arg -> expandAlias typeAliases arg) ut.args) of
                 Just collapsed ->
                     collapsed
 
