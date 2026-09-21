@@ -873,14 +873,23 @@ solveLetDeclarations ctx declarations =
                     referencedNames (bodyOf declNode)
                         |> List.filterMap
                             (\( maybeModuleName, refName ) ->
-                                if maybeModuleName == Nothing then
-                                    Dict.get refName indexOfName
+                                case maybeModuleName of
+                                    Nothing ->
+                                        case Dict.get refName indexOfName of
+                                            Nothing ->
+                                                Nothing
 
-                                else
-                                    Nothing
+                                            Just target ->
+                                                -- Annotated bindings have already been pre-installed.
+                                                if isAnnotatedIndex target then
+                                                    Nothing
+
+                                                else
+                                                    Just target
+
+                                    Just _ ->
+                                        Nothing
                             )
-                        -- Annotated bindings have already been pre-installed.
-                        |> List.filter (\target -> not (isAnnotatedIndex target))
 
         sccs : List (List Int)
         sccs =
