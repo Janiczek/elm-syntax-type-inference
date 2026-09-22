@@ -775,25 +775,20 @@ inferRecordSetters :
     -> StateM ( Dict VarName MonoType, Equations )
 inferRecordSetters ctx fieldSetters =
     fieldSetters
-        |> State.traverse
-            (\fieldSetterNode ->
+        |> State.foldl
+            (\fieldSetterNode ( fields, allEqs ) ->
                 let
                     ( fieldNameNode, fieldExprNode ) =
                         Node.value fieldSetterNode
                 in
                 State.do (inferExpr ctx fieldExprNode) <| \( fieldId, eqs ) ->
                 State.do (State.aliasNodeId (Node.range fieldNameNode) fieldId) <| \() ->
-                State.pure ( ( Node.value fieldNameNode, TypeI.id_ fieldId ), eqs )
-            )
-        |> State.map
-            (List.foldl
-                (\( field, eqs ) ( fields, allEqs ) ->
-                    ( Dict.insert (Tuple.first field) (Tuple.second field) fields
+                State.pure
+                    ( Dict.insert (Node.value fieldNameNode) (TypeI.id_ fieldId) fields
                     , TypeEquation.append allEqs eqs
                     )
-                )
-                ( Dict.empty, TypeEquation.empty )
             )
+            ( Dict.empty, TypeEquation.empty )
 
 
 
@@ -1080,12 +1075,13 @@ inferPattern ctx patternNode =
             -}
             State.do
                 (fields
-                    |> State.traverse
-                        (\fieldNode ->
+                    |> State.foldl
+                        (\fieldNode acc ->
                             State.do (State.idForNode fieldNode) <| \fieldId ->
                             State.do (State.addBinding (Node.value fieldNode) (TypeI.mono <| TypeI.id_ fieldId)) <| \() ->
-                            State.pure ( Node.value fieldNode, TypeI.id_ fieldId )
+                            State.pure (Dict.insert (Node.value fieldNode) (TypeI.id_ fieldId) acc)
                         )
+                        Dict.empty
                 )
             <| \fields_ ->
             State.do State.getNextIdAndTick <| \recordId ->
@@ -1093,7 +1089,7 @@ inferPattern ctx patternNode =
                 [ ( type_
                   , ExtensibleRecord
                         { extensionTypevar = TypeI.id_ recordId
-                        , fields = Dict.fromList fields_
+                        , fields = fields_
                         }
                   , "Record pattern"
                   )

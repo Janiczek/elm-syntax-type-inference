@@ -49,11 +49,26 @@ solveGroup cfg members =
                     members
                 )
              <| \() ->
-             State.do (State.traverse .equations members) <| \eqLists ->
+             State.do
+                 (State.foldl
+                     (\member accAcrossMembers ->
+                         State.map
+                             (\memberEqs ->
+                                 List.foldr
+                                     (\memberEq acc ->
+                                         TypeEquation.dropLabel memberEq :: acc
+                                     )
+                                     accAcrossMembers
+                                     memberEqs
+                             )
+                             member.equations
+                     )
+                     []
+                     members
+                 )
+             <| \eqLists ->
              State.do
                  (eqLists
-                     |> List.concat
-                     |> List.map TypeEquation.dropLabel
                      |> Unify.unifyMany cfg
                  )
              <| \() ->

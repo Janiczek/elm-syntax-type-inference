@@ -221,8 +221,13 @@ register moduleMapping deps =
     in
     deps
         |> Dict.toList
-        |> State.traverse (\( pkgName, pkg ) -> registerPackage moduleMapping1 deps pkgName pkg)
-        |> State.map (\dicts -> ( List.foldl Dict.union Dict.empty dicts, moduleMapping1 ))
+        |> State.foldl
+            (\( pkgName, pkg ) dict ->
+                State.map (\registeredPackage -> Dict.union registeredPackage dict)
+                    (registerPackage moduleMapping1 deps pkgName pkg)
+            )
+            Dict.empty
+        |> State.map (\dict -> ( dict, moduleMapping1 ))
 
 
 registerPackage :
@@ -238,8 +243,12 @@ registerPackage moduleMapping deps pkgName pkg =
             resolverFor moduleMapping deps pkgName
     in
     pkg.modules
-        |> State.traverse (registerModule moduleMapping pkgName resolver)
-        |> State.map (\dicts -> dicts |> List.foldl Dict.union Dict.empty)
+        |> State.foldl
+            (\mod dict ->
+                State.map (\registeredPackage -> Dict.union registeredPackage dict)
+                    (registerModule moduleMapping pkgName resolver mod)
+            )
+            Dict.empty
 
 
 registerModule :
@@ -281,21 +290,20 @@ registerModule moduleMapping pkgName resolver mod =
             State.do (State.traverseUnit (\b -> addBinding b.name b.tipe) mod.binops) <| \() ->
             State.do (State.traverseUnit (\union -> registerUnion pkgName moduleId mod.name resolver union) mod.unions) <| \() ->
             mod.aliases
-                |> State.traverse (\typeAlias -> registerAlias pkgName moduleId mod.name resolver typeAlias)
-                |> State.map
-                    (\maybeTypeAliases ->
-                        maybeTypeAliases
-                            |> List.foldl
-                                (\maybeTypeAlias acc ->
-                                    case maybeTypeAlias of
-                                        Nothing ->
-                                            acc
+                |> State.foldl
+                    (\typeAlias acc ->
+                        State.map
+                            (\maybeRegisteredTypeAlias ->
+                                case maybeRegisteredTypeAlias of
+                                    Nothing ->
+                                        acc
 
-                                        Just ( typeAliasKey, typeAlias ) ->
-                                            Dict.insert typeAliasKey typeAlias acc
-                                )
-                                Dict.empty
+                                    Just ( typeAliasKey, registeredTypeAlias ) ->
+                                        Dict.insert typeAliasKey registeredTypeAlias acc
+                            )
+                            (registerAlias pkgName moduleId mod.name resolver typeAlias)
                     )
+                    Dict.empty
 
 
 registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> StateM ()

@@ -10,6 +10,7 @@ module Elm.TypeInference.State exposing
     , empty
     , error
     , existsInEnv
+    , foldl
     , fromResult
     , generalize
     , generalizeBinding
@@ -175,6 +176,28 @@ andThen userFn stateFn =
 do : StateM a -> (a -> StateM b) -> StateM b
 do m fn =
     andThen fn m
+
+
+{-| Tail-recursive instead of List.foldr (which blew the stack in the past).
+-}
+foldl : (a -> foldState -> StateM foldState) -> foldState -> List a -> StateM foldState
+foldl reduce initialFoldState list =
+    \state -> foldlHelp reduce initialFoldState list state
+
+
+foldlHelp : (a -> foldState -> StateM foldState) -> foldState -> List a -> State -> ( Result Error foldState, State )
+foldlHelp reduce acc list state =
+    case list of
+        [] ->
+            ( Ok acc, state )
+
+        x :: rest ->
+            case reduce x acc state of
+                ( Err err, newState ) ->
+                    ( Err err, newState )
+
+                ( Ok b, newState ) ->
+                    foldlHelp reduce b rest newState
 
 
 {-| Tail-recursive instead of List.foldr (which blew the stack in the past).

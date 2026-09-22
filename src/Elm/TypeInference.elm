@@ -1068,8 +1068,8 @@ gatherTypeAliases ctx file =
             ctx.thisIndex.moduleId
     in
     file.declarations
-        |> State.traverse
-            (\(Node _ declarationNode) ->
+        |> State.foldl
+            (\(Node _ declarationNode) accAcrossDeclarations ->
                 case declarationNode of
                     Declaration.AliasDeclaration typeAlias ->
                         let
@@ -1127,32 +1127,17 @@ gatherTypeAliases ctx file =
                         State.do type_ <| \type__ ->
                         State.do (registerConstructor type__) <| \() ->
                         State.pure <|
-                            Just
-                                ( ( moduleId, "", Node.value typeAlias.name )
-                                , { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
-                                  , type_ = type__
-                                  }
-                                )
+                            Dict.insert
+                                ( moduleId, "", Node.value typeAlias.name )
+                                { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
+                                , type_ = type__
+                                }
+                                accAcrossDeclarations
 
                     _ ->
-                        State.pure Nothing
+                        State.pure accAcrossDeclarations
             )
-        |> State.map (\list -> maybeListToDict list ctx.inheritedAliases)
-
-
-maybeListToDict : List (Maybe ( comparable, v )) -> Dict comparable v -> Dict comparable v
-maybeListToDict list initialDict =
-    List.foldl
-        (\maybe dict ->
-            case maybe of
-                Nothing ->
-                    dict
-
-                Just ( typeAliasKey, typeAlias ) ->
-                    Dict.insert typeAliasKey typeAlias dict
-        )
-        initialDict
-        list
+            ctx.inheritedAliases
 
 
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
