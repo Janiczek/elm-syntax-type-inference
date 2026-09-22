@@ -61,14 +61,14 @@ referencedModules deps =
                 |> Dict.values
                 |> List.ExtraExtra.fastConcatMap .modules
 
-        documented : List String
-        documented =
-            List.foldr (\m acc -> m.name :: acc) [] allModules
-
         referenced : List String
         referenced =
             docsModuleRefs allModules
                 |> List.map Tuple.first
+
+        documented : List String
+        documented =
+            List.foldr (\m acc -> m.name :: acc) [] allModules
     in
     (documented ++ referenced)
         |> List.foldl
