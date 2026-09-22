@@ -10,7 +10,6 @@ module Elm.TypeInference.VarSet exposing
     , namedKeyFrom
     , superTypeTag
     , toList
-    , union
     )
 
 {-| An ordered set of `TypeVar`s, and the `TypeVar` identity it's keyed on.
@@ -109,8 +108,8 @@ insert (( style, super ) as var) s =
             }
 
 
-toList : VarSet -> List TypeVar
-toList s =
+toList : List TypeVar -> List TypeVar
+toList order =
     let
         go : Set GenKey -> Set NamedKey -> List TypeVar -> List TypeVar -> List TypeVar
         go seenGen seenNamed remaining acc =
@@ -144,33 +143,21 @@ toList s =
                             else
                                 go seenGen (Set.insert k seenNamed) rest (var :: acc)
     in
-    go Set.empty Set.empty s.order []
+    go Set.empty Set.empty order []
 
 
-union : VarSet -> VarSet -> VarSet
-union l r =
-    { order = l.order ++ r.order
-    , membersGen = Set.union r.membersGen l.membersGen
-    , membersNamed = Set.union r.membersNamed l.membersNamed
-    }
+diff : List TypeVar -> VarSet -> List TypeVar
+diff order r =
+    List.filter
+        (\( style, super ) ->
+            case style of
+                Generated theId ->
+                    not (Set.member (genKeyFrom theId super) r.membersGen)
 
-
-diff : VarSet -> VarSet -> VarSet
-diff l r =
-    { order =
-        List.filter
-            (\( style, super ) ->
-                case style of
-                    Generated theId ->
-                        not (Set.member (genKeyFrom theId super) r.membersGen)
-
-                    Named name ->
-                        not (Set.member (namedKeyFrom name super) r.membersNamed)
-            )
-            l.order
-    , membersGen = Set.diff l.membersGen r.membersGen
-    , membersNamed = Set.diff l.membersNamed r.membersNamed
-    }
+                Named name ->
+                    not (Set.member (namedKeyFrom name super) r.membersNamed)
+        )
+        order
 
 
 fromList : List TypeVar -> VarSet

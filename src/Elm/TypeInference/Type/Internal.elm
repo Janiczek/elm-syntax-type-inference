@@ -365,21 +365,16 @@ free in the environment) and in `State.generalize` (those above the current
 let-rank).
 
 -}
-monoTypeVars : MonoType -> VarSet
+monoTypeVars : MonoType -> List TypeVar
 monoTypeVars type_ =
-    monoTypeVarsHelp type_ VarSet.empty
+    monoTypeVarsHelp type_ []
 
 
-monoTypeVarsHelp : MonoType -> VarSet -> VarSet
+monoTypeVarsHelp : MonoType -> List TypeVar -> List TypeVar
 monoTypeVarsHelp type_ acc =
-    let
-        inFields : Dict VarName MonoType -> VarSet -> VarSet
-        inFields fields acc_ =
-            Dict.foldr (\_ fieldType -> monoTypeVarsHelp fieldType) acc_ fields
-    in
     case type_ of
         TypeVar typeVar ->
-            VarSet.insert typeVar acc
+            typeVar :: acc
 
         Function { from, to } ->
             acc
@@ -437,6 +432,11 @@ monoTypeVarsHelp type_ acc =
                 |> monoTypeVarsHelp r.uniformsExtension
                 |> inFields r.attributes
                 |> monoTypeVarsHelp r.attributesExtension
+
+
+inFields : Dict VarName MonoType -> List TypeVar -> List TypeVar
+inFields fields acc_ =
+    Dict.foldr (\_ fieldType subAcc -> monoTypeVarsHelp fieldType subAcc) acc_ fields
 
 
 {-|
@@ -499,9 +499,8 @@ normalize ((Forall boundVars monoType) as type_) =
     let
         allVars : List TypeVar
         allVars =
-            VarSet.union
-                (VarSet.fromList boundVars)
-                (monoTypeVars monoType)
+            (VarSet.fromList boundVars).order
+                ++ monoTypeVars monoType
                 |> VarSet.toList
 
         -- eg. `number` and `comparable` get their own slot sequence independent of the `Normal` one

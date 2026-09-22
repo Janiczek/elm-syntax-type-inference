@@ -45,7 +45,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.Node as Node exposing (Node)
+import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.Type as SyntaxType
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
@@ -223,33 +223,31 @@ importClosureHelp edges queue visited =
                 importClosureHelp edges (edges node ++ rest) (Set.insert node visited)
 
 
-inferNodes : List ModuleId -> Project -> Project
+inferNodes : Set ModuleId -> Project -> Project
 inferNodes nodes (Project p) =
     let
-        toPrepare : List ProjectModule
-        toPrepare =
-            SCC.stronglyConnectedComponents nodes (firstPartyImportsOf p.modulesById)
-                |> List.ExtraExtra.fastConcatMap
-                    (\component ->
-                        component
-                            |> List.filterMap
-                                (\id ->
-                                    case Dict.get id p.modulesById of
-                                        Nothing ->
-                                            Nothing
-
-                                        (Just m) as justM ->
-                                            if Dict.member m.index.moduleId p.acc.interfaces then
-                                                Nothing
-
-                                            else
-                                                justM
-                                )
-                    )
-
         newAcc : ProjectAcc
         newAcc =
-            List.foldl (inferOne p.currentPackage p.depEnv p.moduleMapping) p.acc toPrepare
+            SCC.stronglyConnectedComponents (Set.toList nodes) (firstPartyImportsOf p.modulesById)
+                |> List.foldl
+                    (\list acc ->
+                        List.foldl
+                            (\id subAcc ->
+                                if Dict.member id p.acc.interfaces then
+                                    subAcc
+
+                                else
+                                    case Dict.get id p.modulesById of
+                                        Just m ->
+                                            inferOne p.currentPackage p.depEnv p.moduleMapping m subAcc
+
+                                        Nothing ->
+                                            subAcc
+                            )
+                            acc
+                            list
+                    )
+                    p.acc
     in
     Project
         { acc = newAcc
@@ -286,7 +284,7 @@ inferModule moduleName ((Project p) as proj) =
             let
                 (Project newP) =
                     inferNodes
-                        (Set.toList (importClosure (firstPartyImportsOf p.modulesById) m.index.moduleId))
+                        (importClosure (firstPartyImportsOf p.modulesById) m.index.moduleId)
                         proj
             in
             ( case Dict.get m.key newP.acc.tables of
@@ -865,12 +863,8 @@ inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex fi
         ctx =
             moduleCtx currentPackage depEnv moduleMapping importedInterfaces thisIndex
     in
-    (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
+    (State.do (gatherTypeAliases ctx file) <| \outgoingAliases ->
     let
-        outgoingAliases : Dict GlobalKey TypeAlias
-        outgoingAliases =
-            Dict.union ownAliases ctx.inheritedAliases
-
         typeAliases : Dict GlobalKey TypeAlias
         typeAliases =
             Dict.union outgoingAliases ctx.depTypeAliases
@@ -917,20 +911,20 @@ moduleResult ctx file outgoingAliases =
         annotationFor =
             file.declarations
                 |> List.foldl
-                    (\declNode acc ->
-                        case Node.value declNode of
+                    (\(Node declRange decl) acc ->
+                        case decl of
                             Declaration.FunctionDeclaration fn ->
                                 case fn.signature of
                                     Nothing ->
                                         acc
 
-                                    Just sigNode ->
-                                        case Dict.get (RangeLike.fromRange (Node.range declNode)) nodeIds of
+                                    Just (Node _ sigNode) ->
+                                        case Dict.get (RangeLike.fromRange declRange) nodeIds of
                                             Nothing ->
                                                 acc
 
                                             Just declId ->
-                                                case TypeI.fromTypeAnnotation ctx.resolver (Node.value (Node.value sigNode).typeAnnotation) of
+                                                case TypeI.fromTypeAnnotation ctx.resolver (Node.value sigNode.typeAnnotation) of
                                                     Err _ ->
                                                         acc
 
@@ -975,8 +969,8 @@ solveModule ctx typeAliases file =
         topLevelFunctions =
             file.declarations
                 |> List.foldl
-                    (\declNode byName ->
-                        case Node.value declNode of
+                    (\((Node _ decl) as declNode) byName ->
+                        case decl of
                             Declaration.FunctionDeclaration fn ->
                                 Dict.insert (Elm.Syntax.Expression.Extra.functionName fn)
                                     ( declNode, fn )
@@ -1075,8 +1069,8 @@ gatherTypeAliases ctx file =
     in
     file.declarations
         |> State.traverse
-            (\declarationNode ->
-                case Node.value declarationNode of
+            (\(Node _ declarationNode) ->
+                case declarationNode of
                     Declaration.AliasDeclaration typeAlias ->
                         let
                             toError : ErrorDetails -> Error
@@ -1107,12 +1101,8 @@ gatherTypeAliases ctx file =
                                     TypeAnnotation.Record fields ->
                                         fields
                                             |> State.traverse
-                                                (\fieldNode ->
-                                                    case
-                                                        Tuple.second (Node.value fieldNode)
-                                                            |> Node.value
-                                                            |> TypeI.fromTypeAnnotation resolver
-                                                    of
+                                                (\(Node _ ( _, Node _ fieldType )) ->
+                                                    case TypeI.fromTypeAnnotation resolver fieldType of
                                                         Err fromTypeAnnotationError ->
                                                             State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
 
@@ -1147,28 +1137,30 @@ gatherTypeAliases ctx file =
                     _ ->
                         State.pure Nothing
             )
-        |> State.map
-            (\maybeTypeAliases ->
-                maybeTypeAliases
-                    |> List.foldl
-                        (\maybeTypeAlias acc ->
-                            case maybeTypeAlias of
-                                Nothing ->
-                                    acc
+        |> State.map (\list -> maybeListToDict list ctx.inheritedAliases)
 
-                                Just ( typeAliasKey, typeAlias ) ->
-                                    Dict.insert typeAliasKey typeAlias acc
-                        )
-                        Dict.empty
-            )
+
+maybeListToDict : List (Maybe ( comparable, v )) -> Dict comparable v -> Dict comparable v
+maybeListToDict list initialDict =
+    List.foldl
+        (\maybe dict ->
+            case maybe of
+                Nothing ->
+                    dict
+
+                Just ( typeAliasKey, typeAlias ) ->
+                    Dict.insert typeAliasKey typeAlias dict
+        )
+        initialDict
+        list
 
 
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
 registerConstructorsAndPorts ctx file =
     file.declarations
         |> State.traverseUnit
-            (\declNode ->
-                case Node.value declNode of
+            (\(Node _ declNode) ->
+                case declNode of
                     Declaration.CustomTypeDeclaration customType ->
                         registerCustomType ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName customType
 
@@ -1208,23 +1200,19 @@ registerCustomType resolver moduleId moduleName customType =
                 , args =
                     customType.generics
                         |> List.map
-                            (\g ->
+                            (\(Node _ g) ->
                                 TypeVar
-                                    (TypeVar.parse (Node.value g))
+                                    (TypeVar.parse g)
                             )
                 }
     in
     customType.constructors
         |> State.traverseUnit
-            (\ctorNode ->
+            (\(Node _ { arguments, name }) ->
                 let
-                    ctor : SyntaxType.ValueConstructor
-                    ctor =
-                        Node.value ctorNode
-
                     argTypes : Result FromTypeAnnotationError (List MonoType)
                     argTypes =
-                        ctor.arguments
+                        arguments
                             |> Result.Extra.combineMap
                                 (\(Node.Node _ arg) -> TypeI.fromTypeAnnotation resolver arg)
                 in
@@ -1234,15 +1222,11 @@ registerCustomType resolver moduleId moduleName customType =
 
                     Ok args ->
                         let
-                            ctorName : String
-                            ctorName =
-                                Node.value ctor.name
-
                             ctorType : MonoType
                             ctorType =
                                 List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
                         in
-                        State.addGlobalBinding ( moduleId, "", ctorName ) (TypeI.closeOver ctorType)
+                        State.addGlobalBinding ( moduleId, "", Node.value name ) (TypeI.closeOver ctorType)
             )
 
 
