@@ -222,7 +222,7 @@ inferNodes nodes (Project p) =
     let
         newAcc : ProjectAcc
         newAcc =
-            SCC.stronglyConnectedComponents (Set.toList nodes) (firstPartyImportsOf p.modulesById)
+            SCC.stronglyConnectedComponents (Set.toList nodes) (\node -> firstPartyImportsOf p.modulesById node)
                 |> List.foldl
                     (\list acc ->
                         List.foldl
