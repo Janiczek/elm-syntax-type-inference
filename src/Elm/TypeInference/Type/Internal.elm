@@ -1395,23 +1395,18 @@ monoPublicKeyAlphaHelp mono_ state =
 recordKeyAlpha : Dict VarName MonoType -> AlphaState -> ( String, AlphaState )
 recordKeyAlpha fields state =
     let
-        go : List ( VarName, MonoType ) -> AlphaState -> List String -> ( List String, AlphaState )
-        go remaining st acc =
-            case remaining of
-                [] ->
-                    ( List.reverse acc, st )
+        step : VarName -> MonoType -> ( String, AlphaState ) -> ( String, AlphaState )
+        step k v ( acc, st ) =
+            let
+                ( vk, st2 ) =
+                    monoPublicKeyAlphaHelp v st
+            in
+            ( acc ++ (strKey k ++ strKey vk), st2 )
 
-                ( k, v ) :: rest ->
-                    let
-                        ( vk, st2 ) =
-                            monoPublicKeyAlphaHelp v st
-                    in
-                    go rest st2 ((strKey k ++ strKey vk) :: acc)
-
-        ( parts, finalState ) =
-            go (Dict.toList fields) state []
+        ( partsConcatenated, finalState ) =
+            Dict.foldl step ( "", state ) fields
     in
-    ( String.fromInt (Dict.size fields) ++ ";" ++ String.concat parts
+    ( String.fromInt (Dict.size fields) ++ ";" ++ partsConcatenated
     , finalState
     )
 
@@ -1419,23 +1414,23 @@ recordKeyAlpha fields state =
 argsKeyAlpha : List MonoType -> AlphaState -> ( String, AlphaState )
 argsKeyAlpha args state =
     let
-        go : List MonoType -> AlphaState -> List String -> ( List String, AlphaState )
+        go : List MonoType -> AlphaState -> String -> ( String, AlphaState )
         go remaining st acc =
             case remaining of
                 [] ->
-                    ( List.reverse acc, st )
+                    ( acc, st )
 
                 a :: rest ->
                     let
                         ( ak, st2 ) =
                             monoPublicKeyAlphaHelp a st
                     in
-                    go rest st2 (strKey ak :: acc)
+                    go rest st2 (acc ++ strKey ak)
 
-        ( parts, finalState ) =
-            go args state []
+        ( partsConcatenated, finalState ) =
+            go args state ""
     in
-    ( String.fromInt (List.length args) ++ ";" ++ String.concat parts
+    ( String.fromInt (List.length args) ++ ";" ++ partsConcatenated
     , finalState
     )
 
@@ -1572,18 +1567,17 @@ recordKeyOf : Dict VarName MonoType -> String
 recordKeyOf fields =
     String.fromInt (Dict.size fields)
         ++ ";"
-        ++ String.concat
-            (List.map
-                (\( k, v ) -> strKey k ++ strKey (monoPublicKeyNormalized v))
-                (Dict.toList fields)
-            )
+        ++ Dict.foldl
+            (\k v acc -> acc ++ (strKey k ++ strKey (monoPublicKeyNormalized v)))
+            ""
+            fields
 
 
 argsKeyOf : List MonoType -> String
 argsKeyOf args =
     String.fromInt (List.length args)
         ++ ";"
-        ++ String.concat (List.map (\arg -> strKey (monoPublicKeyNormalized arg)) args)
+        ++ List.foldl (\arg acc -> acc ++ strKey (monoPublicKeyNormalized arg)) "" args
 
 
 shaderSlotKey : MonoType -> Dict VarName MonoType -> String
