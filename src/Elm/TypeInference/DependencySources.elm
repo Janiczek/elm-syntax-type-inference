@@ -67,17 +67,16 @@ referencedModules deps =
         allNames : List String
         allNames =
             List.foldr (\m acc -> m.name :: acc) referenced allModules
-    in
-    List.foldl
-        (\name names ->
+
+        addNameIfUnique : String -> List String -> List String
+        addNameIfUnique name names =
             if String.isEmpty name || List.member name names then
                 names
 
             else
                 name :: names
-        )
-        []
-        allNames
+    in
+    List.foldl addNameIfUnique [] allNames
 
 
 {-| Which packages' `docs.json` types use unknown modules, or types that
