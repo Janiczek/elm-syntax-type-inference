@@ -479,7 +479,7 @@ unifyMono : UnifyConfig -> MonoType -> MonoType -> StateM ()
 unifyMono cfg rawT1 rawT2 =
     -- `shallowEqual` is a cheap fast check; `==` calls `_Utils_eq` and short-circuits on `===`
     if shallowEqual rawT1 rawT2 || rawT1 == rawT2 then
-        State.pure ()
+        State.pureUnit
 
     else
         let
@@ -495,7 +495,7 @@ unifyMono cfg rawT1 rawT2 =
 
             noSubstitutionNeeded : StateM ()
             noSubstitutionNeeded =
-                State.pure ()
+                State.pureUnit
 
             typeMismatch : () -> StateM ()
             typeMismatch () =
@@ -903,7 +903,7 @@ Both are already substituted.
 bind : UnifyConfig -> TypeVar -> MonoType -> StateM ()
 bind cfg typeVar type_ =
     if shallowEqual type_ (TypeVar typeVar) then
-        State.pure ()
+        State.pureUnit
 
     else if occursCheck typeVar type_ then
         let

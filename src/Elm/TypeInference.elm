@@ -1122,7 +1122,7 @@ gatherTypeAliases ctx file =
                                                 )
 
                                     _ ->
-                                        State.pure ()
+                                        State.pureUnit
                         in
                         State.do type_ <| \type__ ->
                         State.do (registerConstructor type__) <| \() ->
@@ -1153,7 +1153,7 @@ registerConstructorsAndPorts ctx file =
                         registerPort ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName sig
 
                     _ ->
-                        State.pure ()
+                        State.pureUnit
             )
 
 
@@ -1254,19 +1254,19 @@ registerEffectMagic ctx =
         registerEffectSubscription ctx
 
     else
-        State.pure ()
+        State.pureUnit
 
 
 registerEffectCommand : ModuleCtx -> StateM ()
 registerEffectCommand ctx =
     case ctx.thisIndex.effectCommand of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just myCmdName ->
             case ctx.resolver [] "Cmd" of
                 Err _ ->
-                    State.pure ()
+                    State.pureUnit
 
                 Ok ( cmdPackage, cmdModuleId ) ->
                     let
@@ -1302,12 +1302,12 @@ registerEffectSubscription : ModuleCtx -> StateM ()
 registerEffectSubscription ctx =
     case ctx.thisIndex.effectSubscription of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just mySubName ->
             case ctx.resolver [] "Sub" of
                 Err _ ->
-                    State.pure ()
+                    State.pureUnit
 
                 Ok ( subPackage, subModuleId ) ->
                     let

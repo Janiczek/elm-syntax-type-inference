@@ -389,7 +389,7 @@ registerAlias pkgName moduleId dottedModuleName resolver alias_ =
                     State.addGlobalBinding ( moduleId, pkgName, alias_.name ) (TypeI.closeOver ctorType)
 
                 _ ->
-                    State.pure ()
+                    State.pureUnit
     in
     State.do registerConstructor <| \() ->
     State.pure <|

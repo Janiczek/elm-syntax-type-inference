@@ -240,7 +240,7 @@ aliasSignature : Id -> Maybe (Node Signature) -> StateM ()
 aliasSignature declId maybeSigNode =
     case maybeSigNode of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just sigNode ->
             State.do (State.aliasNodeId (Node.range sigNode) declId) <| \() ->
@@ -963,19 +963,19 @@ solveLetDeclarations ctx declarations =
                             LetFunction fn ->
                                 case fn.signature of
                                     Nothing ->
-                                        State.pure ()
+                                        State.pureUnit
 
                                     Just _ ->
                                         State.do (annotationType ctx fn.signature) <| \maybeMono ->
                                         case maybeMono of
                                             Nothing ->
-                                                State.pure ()
+                                                State.pureUnit
 
                                             Just mono ->
                                                 State.addBinding (functionName fn) (TypeI.closeOver mono)
 
                             LetDestructuring _ _ ->
-                                State.pure ()
+                                State.pureUnit
                     )
     in
     State.do preinstallAnnotated <| \() ->

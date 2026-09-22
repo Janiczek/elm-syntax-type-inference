@@ -80,7 +80,7 @@ solveGroup cfg members =
         (\member ->
             case member.annotation of
                 Just _ ->
-                    State.pure ()
+                    State.pureUnit
 
                 Nothing ->
                     State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
@@ -110,11 +110,11 @@ checkOne : UnifyConfig -> Member -> StateM ()
 checkOne cfg member =
     case member.annotation of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just (Forall boundVars annoMono) ->
             if List.isEmpty boundVars then
-                State.pure ()
+                State.pureUnit
 
             else
                 State.do State.getSubst <| \subst ->
@@ -145,7 +145,7 @@ checkOne cfg member =
                         }
 
                 else
-                    State.pure ()
+                    State.pureUnit
 
 
 {-|

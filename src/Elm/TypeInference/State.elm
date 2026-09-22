@@ -27,6 +27,7 @@ module Elm.TypeInference.State exposing
     , map2
     , modifySubst
     , pure
+    , pureUnit
     , run
     , setIdToCurrentLetRank
     , test_initFull
@@ -100,9 +101,23 @@ type alias StateM a =
     State -> ( Result Error a, State )
 
 
+{-| prefer `pureUnit` over `pure ()`
+-}
 pure : a -> StateM a
 pure a =
     \s -> ( Ok a, s )
+
+
+{-| Equivalent to `pure ()` but more memory efficient
+-}
+pureUnit : StateM ()
+pureUnit =
+    \s -> ( okUnit, s )
+
+
+okUnit : Result error ()
+okUnit =
+    Ok ()
 
 
 error : Error -> StateM a
@@ -654,7 +669,7 @@ generalizeBinding var =
     do get <| \state ->
     case Dict.get var state.lexicalEnv of
         Nothing ->
-            pure ()
+            pureUnit
 
         Just (Forall _ mono) ->
             do (generalize mono) <| \scheme ->
