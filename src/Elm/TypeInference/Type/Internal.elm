@@ -1215,8 +1215,13 @@ monoPublicKeyAlpha mono_ =
                 notExtensibleRecord ->
                     notExtensibleRecord
             )
-            { next = 0, mapping = Dict.empty }
+            alphaStateEmpty
         )
+
+
+alphaStateEmpty : AlphaState
+alphaStateEmpty =
+    { next = 0, mapping = Dict.empty }
 
 
 type alias AlphaState =
