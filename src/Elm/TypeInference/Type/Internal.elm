@@ -553,53 +553,49 @@ normalize ((Forall boundVars monoType) as type_) =
             else
                 slot
 
-        newVars : List TypeVar
-        newVars =
+        ( _, substGen, substNamed ) =
             allVars
                 |> List.foldl
-                    (\(( style, super ) as var) ( nextSlotBySuper, acc ) ->
-                        case style of
-                            Named _ ->
-                                -- Leave it exactly as it is.
-                                ( nextSlotBySuper, var :: acc )
+                    (\(( style, super ) as var) ( nextSlotBySuper, genAcc, namedAcc ) ->
+                        let
+                            ( nextSlotBySuperUpdated, newVar ) =
+                                case style of
+                                    Named _ ->
+                                        -- Leave it exactly as it is.
+                                        ( nextSlotBySuper, var )
 
-                            Generated _ ->
-                                let
-                                    key : Int
-                                    key =
-                                        superTypeTag super
+                                    Generated _ ->
+                                        let
+                                            key : Int
+                                            key =
+                                                superTypeTag super
 
-                                    startSlot : Int
-                                    startSlot =
-                                        Dict.get key nextSlotBySuper |> Maybe.withDefault 0
+                                            startSlot : Int
+                                            startSlot =
+                                                Dict.get key nextSlotBySuper |> Maybe.withDefault 0
 
-                                    slot : Int
-                                    slot =
-                                        nextFreeSlot super startSlot
-                                in
-                                ( Dict.insert key (slot + 1) nextSlotBySuper
-                                , ( Named (nameForSlot super slot), super ) :: acc
-                                )
-                    )
-                    ( Dict.empty, [] )
-                |> (\( _, vars ) -> List.reverse vars)
-
-        ( substGen, substNamed ) =
-            List.map2 Tuple.pair allVars newVars
-                |> List.foldl
-                    (\( ( style, super ), newVar ) ( genAcc, namedAcc ) ->
+                                            slot : Int
+                                            slot =
+                                                nextFreeSlot super startSlot
+                                        in
+                                        ( Dict.insert key (slot + 1) nextSlotBySuper
+                                        , ( Named (nameForSlot super slot), super )
+                                        )
+                        in
                         case style of
                             Generated theId ->
-                                ( Dict.insert (VarSet.genKeyFrom theId super) newVar genAcc
+                                ( nextSlotBySuperUpdated
+                                , Dict.insert (VarSet.genKeyFrom theId super) newVar genAcc
                                 , namedAcc
                                 )
 
                             Named name ->
-                                ( genAcc
+                                ( nextSlotBySuperUpdated
+                                , genAcc
                                 , Dict.insert (VarSet.namedKeyFrom name super) newVar namedAcc
                                 )
                     )
-                    ( Dict.empty, Dict.empty )
+                    ( Dict.empty, Dict.empty, Dict.empty )
     in
     type_
         |> mapVars
