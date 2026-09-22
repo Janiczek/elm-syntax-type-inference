@@ -924,22 +924,23 @@ solveLetDeclarations ctx declarations =
         solveGroup : List Int -> StateM ()
         solveGroup groupIndices =
             let
-                groupDecls : List (Node LetDeclaration)
-                groupDecls =
-                    groupIndices |> List.filterMap (\index -> Dict.get index byIndex)
-
                 ( functions, destructurings ) =
                     List.foldr
-                        (\declNode ( fns, dests ) ->
-                            case Node.value declNode of
-                                LetFunction fn ->
-                                    ( ( declNode, fn ) :: fns, dests )
+                        (\declIndex ( fns, dests ) ->
+                            case Dict.get declIndex byIndex of
+                                Nothing ->
+                                    ( fns, dests )
 
-                                LetDestructuring patternNode exprNode ->
-                                    ( fns, ( declNode, patternNode, exprNode ) :: dests )
+                                Just declNode ->
+                                    case Node.value declNode of
+                                        LetFunction fn ->
+                                            ( ( declNode, fn ) :: fns, dests )
+
+                                        LetDestructuring patternNode exprNode ->
+                                            ( fns, ( declNode, patternNode, exprNode ) :: dests )
                         )
                         ( [], [] )
-                        groupDecls
+                        groupIndices
             in
             State.do
                 (functions
