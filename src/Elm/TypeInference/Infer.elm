@@ -250,7 +250,7 @@ aliasSignature declId maybeSigNode =
 inferFnImplementation : Ctx -> Id -> Expression.FunctionImplementation -> StateM Equations
 inferFnImplementation ctx declId impl =
     State.withScopedEnv <|
-        (State.do (inferMany (inferPattern ctx) impl.arguments) <| \( argIds, argEqs ) ->
+        (State.do (inferMany (\arg -> inferPattern ctx arg) impl.arguments) <| \( argIds, argEqs ) ->
         State.do (inferExpr ctx impl.expression) <| \( bodyId, bodyEqs ) ->
         State.pure <|
             TypeEquation.cons
@@ -614,7 +614,7 @@ inferExpr ctx exprNode =
 
         LambdaExpression { args, expression } ->
             State.withScopedEnv <|
-                (State.do (inferMany (inferPattern ctx) args) <| \( argIds, argEqs ) ->
+                (State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, argEqs ) ->
                 State.do (f expression) <| \( bodyId, bodyEqs ) ->
                 finishEqns <|
                     TypeEquation.append argEqs

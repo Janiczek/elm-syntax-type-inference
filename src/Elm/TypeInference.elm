@@ -284,7 +284,7 @@ inferModule moduleName ((Project p) as proj) =
             let
                 (Project newP) =
                     inferNodes
-                        (importClosure (firstPartyImportsOf p.modulesById) m.index.moduleId)
+                        (importClosure (\modId -> firstPartyImportsOf p.modulesById modId) m.index.moduleId)
                         proj
             in
             ( case Dict.get m.key newP.acc.tables of
