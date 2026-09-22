@@ -449,27 +449,62 @@ sameVar ( style1, super1 ) ( style2, super2 ) =
 
 shallowEqual : MonoType -> MonoType -> Bool
 shallowEqual t1 t2 =
-    case ( t1, t2 ) of
-        ( TypeVar v1, TypeVar v2 ) ->
-            sameVar v1 v2
+    case t1 of
+        TypeVar v1 ->
+            case t2 of
+                TypeVar v2 ->
+                    sameVar v1 v2
 
-        ( Int, Int ) ->
-            True
+                _ ->
+                    False
 
-        ( Float, Float ) ->
-            True
+        Int ->
+            case t2 of
+                Int ->
+                    True
 
-        ( Char, Char ) ->
-            True
+                _ ->
+                    False
 
-        ( String, String ) ->
-            True
+        Float ->
+            case t2 of
+                Float ->
+                    True
 
-        ( Bool, Bool ) ->
-            True
+                _ ->
+                    False
 
-        ( Unit, Unit ) ->
-            True
+        Char ->
+            case t2 of
+                Char ->
+                    True
+
+                _ ->
+                    False
+
+        String ->
+            case t2 of
+                String ->
+                    True
+
+                _ ->
+                    False
+
+        Bool ->
+            case t2 of
+                Bool ->
+                    True
+
+                _ ->
+                    False
+
+        Unit ->
+            case t2 of
+                Unit ->
+                    True
+
+                _ ->
+                    False
 
         _ ->
             False
