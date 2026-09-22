@@ -186,12 +186,21 @@ importClosureHelp edges queue visited =
                 importClosureHelp edges (edges node ++ rest) (Set.insert node visited)
 
 
-inferNodes : List ModuleId -> Project -> Project
+inferNodes : Set ModuleId -> Project -> Project
 inferNodes nodes (Project p) =
     let
         filteredNodes : List ModuleId
         filteredNodes =
-            List.filter (\id -> not (Dict.member id p.acc.interfaces)) nodes
+            Set.foldr
+                (\id acc ->
+                    if Dict.member id p.acc.interfaces then
+                        acc
+
+                    else
+                        id :: acc
+                )
+                []
+                nodes
 
         toPrepare : List ProjectModule
         toPrepare =
@@ -236,7 +245,7 @@ inferModule moduleName ((Project p) as proj) =
             let
                 (Project newP) =
                     inferNodes
-                        (Set.toList (importClosure (firstPartyImportsOf p.byName) m.index.moduleId))
+                        (importClosure (firstPartyImportsOf p.byName) m.index.moduleId)
                         proj
             in
             ( case Dict.get m.key newP.acc.tables of
