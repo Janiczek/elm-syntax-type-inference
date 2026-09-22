@@ -123,8 +123,8 @@ external package moduleId typeName =
 
 
 mono : MonoType -> Type
-mono =
-    Forall []
+mono t =
+    Forall [] t
 
 
 {-| Canonicalize an extensible-record chain:
