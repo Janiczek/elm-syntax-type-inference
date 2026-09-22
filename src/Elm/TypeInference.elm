@@ -205,15 +205,19 @@ inferNodes nodes (Project p) =
         newAcc : ProjectAcc
         newAcc =
             SCC.stronglyConnectedComponents filteredNodes (firstPartyImportsOf p.byName)
-                |> List.concat
                 |> List.foldl
-                    (\id acc ->
-                        case Dict.get id p.byName of
-                            Just m ->
-                                inferOne p.currentPackage p.depEnv p.moduleMapping m acc
+                    (\list acc ->
+                        List.foldl
+                            (\id subAcc ->
+                                case Dict.get id p.byName of
+                                    Just m ->
+                                        inferOne p.currentPackage p.depEnv p.moduleMapping m subAcc
 
-                            Nothing ->
-                                acc
+                                    Nothing ->
+                                        subAcc
+                            )
+                            acc
+                            list
                     )
                     p.acc
     in
