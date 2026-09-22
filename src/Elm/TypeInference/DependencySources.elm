@@ -129,8 +129,8 @@ neededSources deps sources =
                     supplied =
                         suppliedModuleNames package sources
 
-                    unknownModules : List String
-                    unknownModules =
+                    remaining : List String
+                    remaining =
                         docsModuleRefs pkg.modules
                             |> List.foldl
                                 (\m acc ->
@@ -142,10 +142,6 @@ neededSources deps sources =
                                 )
                                 Set.empty
                             |> Set.toList
-
-                    remaining : List String
-                    remaining =
-                        unknownModules
                             |> List.filterMap
                                 (\m ->
                                     if Set.member m supplied then
