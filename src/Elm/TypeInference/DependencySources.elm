@@ -57,30 +57,23 @@ referencedModules deps =
     let
         allModules : List Elm.Docs.Module
         allModules =
-            deps
-                |> Dict.values
-                |> List.ExtraExtra.fastConcatMap .modules
+            Dict.foldr (\_ { modules } acc -> List.append modules acc) [] deps
 
-        documented : List String
-        documented =
-            List.map .name allModules
+        addNameIfUnique : (a -> String) -> a -> List String -> List String
+        addNameIfUnique getName a names =
+            let
+                name : String
+                name =
+                    getName a
+            in
+            if String.isEmpty name || List.member name names then
+                names
 
-        referenced : List String
-        referenced =
-            docsModuleRefs allModules
-                |> List.map Tuple.first
+            else
+                name :: names
     in
-    (documented ++ referenced)
-        |> List.foldl
-            (\name ( seen, acc ) ->
-                if String.isEmpty name || List.member name seen then
-                    ( seen, acc )
-
-                else
-                    ( name :: seen, name :: acc )
-            )
-            ( [], [] )
-        |> Tuple.second
+    List.foldl (addNameIfUnique Tuple.first) [] (docsModuleRefs allModules)
+        |> (\acc -> List.foldl (addNameIfUnique .name) acc allModules)
 
 
 {-| Which packages' `docs.json` types use unknown modules, or types that
@@ -200,10 +193,11 @@ docsModuleRefs modules =
     modules
         |> List.ExtraExtra.fastConcatMap
             (\mod ->
-                List.ExtraExtra.fastConcatMap (\value -> docsTypeRefs value.tipe) mod.values
-                    ++ List.ExtraExtra.fastConcatMap (\binop -> docsTypeRefs binop.tipe) mod.binops
-                    ++ List.ExtraExtra.fastConcatMap (\union -> List.ExtraExtra.fastConcatMap (\( _, payload ) -> List.ExtraExtra.fastConcatMap docsTypeRefs payload) union.tags) mod.unions
-                    ++ List.ExtraExtra.fastConcatMap (\typeAlias -> docsTypeRefs typeAlias.tipe) mod.aliases
+                []
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\value -> docsTypeRefs value.tipe) mod.values
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\binop -> docsTypeRefs binop.tipe) mod.binops
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\union -> List.ExtraExtra.fastConcatMap (\( _, payload ) -> List.ExtraExtra.fastConcatMap docsTypeRefs payload) union.tags) mod.unions
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\typeAlias -> docsTypeRefs typeAlias.tipe) mod.aliases
             )
 
 
