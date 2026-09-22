@@ -651,29 +651,21 @@ mapVarsMono fn type_ =
 -}
 ordToName : Int -> String
 ordToName n =
-    let
-        radix : Int
-        radix =
-            26
+    {- The functions below are stolen from fredcy/elm-parseint and tweaked
+       to work similar to:
 
-        {- The functions below are stolen from fredcy/elm-parseint and tweaked
-           to work similar to:
+       https://en.wikipedia.org/wiki/Bijective_numeration#The_bijective_base-26_system
+    -}
+    if n < 26 then
+        String.fromChar <| charFromLetterIndex n
 
-           https://en.wikipedia.org/wiki/Bijective_numeration#The_bijective_base-26_system
-        -}
-        charFromInt : Int -> Char
-        charFromInt i =
-            Char.fromCode <| i + Char.toCode 'a'
+    else
+        ordToName ((n // 26) - 1) ++ (String.fromChar <| charFromLetterIndex (modBy 26 n))
 
-        go : Int -> String
-        go i =
-            if i < radix then
-                String.fromChar <| charFromInt i
 
-            else
-                go ((i // radix) - 1) ++ (String.fromChar <| charFromInt (modBy radix i))
-    in
-    go n
+charFromLetterIndex : Int -> Char
+charFromLetterIndex i =
+    Char.fromCode <| i + Char.toCode 'a'
 
 
 fromTypeAnnotation : TypeResolver -> TypeAnnotation -> Result FromTypeAnnotationError MonoType
