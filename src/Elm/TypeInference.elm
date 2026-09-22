@@ -502,7 +502,7 @@ inferOne currentPackage depEnv moduleMapping m acc =
     case inferModule_ currentPackage depEnv moduleMapping imported m.index m.file of
         Ok { table, interface } ->
             { tables = Dict.insert m.key table acc.tables
-            , errors = acc.errors
+            , errors = Dict.remove m.key acc.errors
             , interfaces = Dict.insert m.index.moduleId interface acc.interfaces
             }
 
