@@ -96,15 +96,19 @@ neededSources deps sources =
                         dep.modules
                             |> List.foldl
                                 (\mod acc ->
-                                    Dict.update mod.name
-                                        (\existing ->
-                                            Just
-                                                (Set.union
-                                                    (Maybe.withDefault Set.empty existing)
-                                                    (documentedTypeNames mod)
-                                                )
-                                        )
-                                        acc
+                                    let
+                                        value : Set String
+                                        value =
+                                            case Dict.get mod.name acc of
+                                                Just existing ->
+                                                    Set.union
+                                                        (documentedTypeNames mod)
+                                                        existing
+
+                                                Nothing ->
+                                                    documentedTypeNames mod
+                                    in
+                                    Dict.insert mod.name value acc
                                 )
                                 accAcrossDeps
                     )
@@ -114,51 +118,44 @@ neededSources deps sources =
         |> Dict.foldr
             (\package pkg needsSourcesAcc ->
                 let
-                    unknownModules : List String
-                    unknownModules =
-                        docsModuleRefs pkg.modules
-                            |> List.foldl
-                                (\m acc ->
-                                    if isKnownRef docsTypes m then
-                                        acc
-
-                                    else
-                                        Set.insert (Tuple.first m) acc
-                                )
-                                Set.empty
-                            |> Set.toList
-
                     supplied : Set String
                     supplied =
                         suppliedModuleNames package sources
 
-                    remaining : List String
+                    remaining : Set String
                     remaining =
-                        unknownModules
-                            |> List.filterMap
-                                (\m ->
-                                    if Set.member m supplied then
-                                        Nothing
+                        docsModuleRefs pkg.modules
+                            |> List.foldl
+                                (\(( m, _ ) as ref) acc ->
+                                    if isKnownRef docsTypes ref || Set.member m supplied then
+                                        acc
 
                                     else
-                                        Just (ModuleNameExtra.dottedToFilePath m)
+                                        Set.insert m acc
                                 )
+                                Set.empty
                 in
-                case remaining of
-                    [] ->
-                        needsSourcesAcc
+                if Set.isEmpty remaining then
+                    needsSourcesAcc
 
-                    _ :: _ ->
-                        ( package, remaining ) :: needsSourcesAcc
+                else
+                    ( package
+                    , Set.foldr (\m acc -> ModuleNameExtra.dottedToFilePath m :: acc) [] remaining
+                    )
+                        :: needsSourcesAcc
             )
             []
 
 
 suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
 suppliedModuleNames package sources =
-    Dict.get package sources
-        |> Maybe.withDefault []
-        |> List.foldl (\m acc -> Set.insert (fileDottedName m) acc)
+    case Dict.get package sources of
+        Just files ->
+            files
+                |> List.foldl (\m acc -> Set.insert (fileDottedName m) acc)
+                    Set.empty
+
+        Nothing ->
             Set.empty
 
 
