@@ -59,15 +59,6 @@ referencedModules deps =
         allModules =
             Dict.foldr (\_ { modules } acc -> List.append modules acc) [] deps
 
-        referenced : List String
-        referenced =
-            docsModuleRefs allModules
-                |> List.map Tuple.first
-
-        allNames : List String
-        allNames =
-            List.foldr (\m acc -> m.name :: acc) referenced allModules
-
         addNameIfUnique : (a -> String) -> a -> List String -> List String
         addNameIfUnique getName a names =
             let
@@ -81,7 +72,8 @@ referencedModules deps =
             else
                 name :: names
     in
-    List.foldl (addNameIfUnique identity) [] allNames
+    List.foldl (addNameIfUnique Tuple.first) [] (docsModuleRefs allModules)
+        |> (\acc -> List.foldl (addNameIfUnique .name) acc allModules)
 
 
 {-| Which packages' `docs.json` types use unknown modules, or types that
