@@ -641,244 +641,201 @@ unifyMono cfg rawT1 rawT2 =
                 expandAlias cfg.typeAliases rawT2
                     |> collapseNamedShader cfg.typeAliases
         in
-        case ( t1, t2 ) of
-            ( TypeVar v, _ ) ->
+        case t1 of
+            TypeVar v ->
                 bind cfg v t2
 
-            ( _, TypeVar v ) ->
-                bind cfg v t1
+            Int ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( Int, Int ) ->
-                -- no substitution needed
-                State.pureUnit
+                    Int ->
+                        -- no substitution needed
+                        State.pureUnit
 
-            ( Int, _ ) ->
-                typeMismatch cfg t1 t2
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( Float, Float ) ->
-                -- no substitution needed
-                State.pureUnit
+            Float ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( Float, _ ) ->
-                typeMismatch cfg t1 t2
+                    Float ->
+                        -- no substitution needed
+                        State.pureUnit
 
-            ( String, String ) ->
-                -- no substitution needed
-                State.pureUnit
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( String, _ ) ->
-                typeMismatch cfg t1 t2
+            String ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( Char, Char ) ->
-                -- no substitution needed
-                State.pureUnit
+                    String ->
+                        -- no substitution needed
+                        State.pureUnit
 
-            ( Char, _ ) ->
-                typeMismatch cfg t1 t2
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( Bool, Bool ) ->
-                -- no substitution needed
-                State.pureUnit
+            Char ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( Bool, _ ) ->
-                typeMismatch cfg t1 t2
+                    Char ->
+                        -- no substitution needed
+                        State.pureUnit
 
-            ( Unit, Unit ) ->
-                -- no substitution needed
-                State.pureUnit
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( Unit, _ ) ->
-                typeMismatch cfg t1 t2
+            Bool ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( Function a, Function b ) ->
-                unifyMany
-                    cfg
-                    [ ( a.from, b.from )
-                    , ( a.to, b.to )
-                    ]
+                    Bool ->
+                        -- no substitution needed
+                        State.pureUnit
 
-            ( Function _, _ ) ->
-                typeMismatch cfg t1 t2
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( List list1, List list2 ) ->
-                unifyMany cfg [ ( list1, list2 ) ]
+            Unit ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( List _, _ ) ->
-                typeMismatch cfg t1 t2
+                    Unit ->
+                        -- no substitution needed
+                        State.pureUnit
 
-            ( Tuple2 t1e1 t1e2, Tuple2 t2e1 t2e2 ) ->
-                unifyMany
-                    cfg
-                    [ ( t1e1, t2e1 )
-                    , ( t1e2, t2e2 )
-                    ]
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( Tuple2 _ _, _ ) ->
-                typeMismatch cfg t1 t2
+            Function a ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( Tuple3 t1e1 t1e2 t1e3, Tuple3 t2e1 t2e2 t2e3 ) ->
-                unifyMany
-                    cfg
-                    [ ( t1e1, t2e1 )
-                    , ( t1e2, t2e2 )
-                    , ( t1e3, t2e3 )
-                    ]
+                    Function b ->
+                        unifyMany
+                            cfg
+                            [ ( a.from, b.from )
+                            , ( a.to, b.to )
+                            ]
 
-            ( Tuple3 _ _ _, _ ) ->
-                typeMismatch cfg t1 t2
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( Record r1, Record r2 ) ->
-                recordBindings cfg t1 t2 r1.fields r2.fields
+            List list1 ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( Record r, ExtensibleRecord er ) ->
-                unifyRecordVsExtensible cfg t1 t2 r.fields er
+                    List list2 ->
+                        unifyMany cfg [ ( list1, list2 ) ]
 
-            ( Record _, _ ) ->
-                typeMismatch cfg t1 t2
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
-                {- Fields that only one side mentions must be added to the other
-                   side's required fields.
-                   Both sides' extension typevars (the r in { r | ... })
-                   now need to be the same var.
+            Tuple2 t1e1 t1e2 ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-                   ie.
-                   - getX : { row1 | x : Float } -> Float
-                   - getY : { row2 | y : Float } -> Float
-                   - sum r = getX r + getY r
-                   Use them both on the same record and you get
-                   - sum : { commonVar | x : Float, y : Float } -> Float
-                -}
-                let
-                    ( onlyIn1, onlyIn2, sharedEqs ) =
-                        Dict.merge
-                            (\k v ( o1, o2, eqs ) ->
-                                ( Dict.insert k v o1
-                                , o2
-                                , eqs
-                                )
-                            )
-                            (\_ v1 v2 ( o1, o2, eqs ) ->
-                                ( o1
-                                , o2
-                                , ( v1, v2 ) :: eqs
-                                )
-                            )
-                            (\k v ( o1, o2, eqs ) ->
-                                ( o1
-                                , Dict.insert k v o2
-                                , eqs
-                                )
-                            )
-                            r1.fields
-                            r2.fields
-                            ( Dict.empty, Dict.empty, [] )
-                in
-                if Dict.isEmpty onlyIn1 && Dict.isEmpty onlyIn2 then
-                    {- Same field set on both sides -> the `r` in `{r | ...}`
-                       must be the same for both sides.
-                    -}
-                    unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
+                    Tuple2 t2e1 t2e2 ->
+                        unifyMany
+                            cfg
+                            [ ( t1e1, t2e1 )
+                            , ( t1e2, t2e2 )
+                            ]
 
-                else
-                    State.do State.getNextIdAndTick <| \tailId ->
-                    let
-                        tail : MonoType
-                        tail =
-                            TypeI.id_ tailId
-                    in
-                    unifyMany
-                        cfg
-                        (( r1.extensionTypevar
-                         , ExtensibleRecord
-                            { extensionTypevar = tail
-                            , fields = onlyIn2
-                            }
-                         )
-                            :: ( r2.extensionTypevar
-                               , ExtensibleRecord
-                                    { extensionTypevar = tail
-                                    , fields = onlyIn1
-                                    }
-                               )
-                            :: sharedEqs
-                        )
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-            ( ExtensibleRecord er, Record r ) ->
-                unifyRecordVsExtensible cfg t1 t2 r.fields er
+            Tuple3 t1e1 t1e2 t1e3 ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( ExtensibleRecord _, _ ) ->
-                typeMismatch cfg t1 t2
+                    Tuple3 t2e1 t2e2 t2e3 ->
+                        unifyMany
+                            cfg
+                            [ ( t1e1, t2e1 )
+                            , ( t1e2, t2e2 )
+                            , ( t1e3, t2e3 )
+                            ]
 
-            ( UserDefinedType ut1, UserDefinedType ut2 ) ->
-                if
-                    (ut1.package /= ut2.package)
-                        || (ut1.moduleId /= ut2.moduleId)
-                        || (ut1.name /= ut2.name)
-                then
-                    typeMismatch cfg t1 t2
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-                else
-                    case zipArgs ut1.args ut2.args of
-                        Nothing ->
-                            typeMismatch cfg t1 t2
+            Record r1 ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-                        Just eqs ->
-                            unifyMany cfg eqs
+                    Record r2 ->
+                        recordBindings cfg t1 t2 r1.fields r2.fields
 
-            ( UserDefinedType _, _ ) ->
-                typeMismatch cfg t1 t2
+                    ExtensibleRecord er2 ->
+                        unifyRecordVsExtensible cfg t1 t2 r1.fields er2
 
-            ( WebGLShader webgl1, WebGLShader webgl2 ) ->
-                let
-                    {- Unify one of a shader's attribute/uniform/varying sets.
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-                       Shader sets are special: the GLSL literal opens them, and a type
-                       annotation can narrow them down to a closed record. So a closed
-                       side only requires that its fields are present (with matching
-                       types) in the other side; the open side absorbs the difference.
-                       Two closed sides still have to agree on the field set.
-                    -}
-                    webglSet :
-                        { extensionTypevar : MonoType, fields : Dict VarName MonoType }
-                        -> { extensionTypevar : MonoType, fields : Dict VarName MonoType }
-                        -> StateM ()
-                    webglSet set1 set2 =
+            ExtensibleRecord r1 ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
+
+                    ExtensibleRecord r2 ->
+                        {- Fields that only one side mentions must be added to the other
+                           side's required fields.
+                           Both sides' extension typevars (the r in { r | ... })
+                           now need to be the same var.
+
+                           ie.
+                           - getX : { row1 | x : Float } -> Float
+                           - getY : { row2 | y : Float } -> Float
+                           - sum r = getX r + getY r
+                           Use them both on the same record and you get
+                           - sum : { commonVar | x : Float, y : Float } -> Float
+                        -}
                         let
-                            ( only1, only2, sharedEqs ) =
+                            ( onlyIn1, onlyIn2, sharedEqs ) =
                                 Dict.merge
                                     (\k v ( o1, o2, eqs ) ->
-                                        ( Dict.insert k v o1, o2, eqs )
+                                        ( Dict.insert k v o1
+                                        , o2
+                                        , eqs
+                                        )
                                     )
                                     (\_ v1 v2 ( o1, o2, eqs ) ->
-                                        ( o1, o2, ( v1, v2 ) :: eqs )
+                                        ( o1
+                                        , o2
+                                        , ( v1, v2 ) :: eqs
+                                        )
                                     )
                                     (\k v ( o1, o2, eqs ) ->
-                                        ( o1, Dict.insert k v o2, eqs )
+                                        ( o1
+                                        , Dict.insert k v o2
+                                        , eqs
+                                        )
                                     )
-                                    set1.fields
-                                    set2.fields
+                                    r1.fields
+                                    r2.fields
                                     ( Dict.empty, Dict.empty, [] )
-
-                            isClosed : MonoType -> Bool
-                            isClosed extensionTypevar =
-                                case extensionTypevar of
-                                    Record _ ->
-                                        True
-
-                                    _ ->
-                                        False
-
-                            closed1 : Bool
-                            closed1 =
-                                isClosed set1.extensionTypevar
-
-                            closed2 : Bool
-                            closed2 =
-                                isClosed set2.extensionTypevar
                         in
-                        if closed1 && closed2 && not (Dict.isEmpty only1 && Dict.isEmpty only2) then
-                            typeMismatch cfg t1 t2
+                        if Dict.isEmpty onlyIn1 && Dict.isEmpty onlyIn2 then
+                            {- Same field set on both sides -> the `r` in `{r | ...}`
+                               must be the same for both sides.
+                            -}
+                            unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                         else
                             State.do State.getNextIdAndTick <| \tailId ->
@@ -886,59 +843,169 @@ unifyMono cfg rawT1 rawT2 =
                                 tail : MonoType
                                 tail =
                                     TypeI.id_ tailId
-
-                                absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
-                                absorb extensionTypevar fields =
-                                    [ ( extensionTypevar
-                                      , ExtensibleRecord
-                                            { extensionTypevar = tail
-                                            , fields = fields
-                                            }
-                                      )
-                                    ]
                             in
-                            if not closed1 && not closed2 then
-                                unifyMany cfg (absorb set1.extensionTypevar only2 ++ absorb set2.extensionTypevar only1 ++ sharedEqs)
+                            unifyMany
+                                cfg
+                                (( r1.extensionTypevar
+                                 , ExtensibleRecord
+                                    { extensionTypevar = tail
+                                    , fields = onlyIn2
+                                    }
+                                 )
+                                    :: ( r2.extensionTypevar
+                                       , ExtensibleRecord
+                                            { extensionTypevar = tail
+                                            , fields = onlyIn1
+                                            }
+                                       )
+                                    :: sharedEqs
+                                )
 
-                            else if not closed1 then
-                                unifyMany cfg (absorb set1.extensionTypevar only2 ++ sharedEqs)
+                    Record r2 ->
+                        unifyRecordVsExtensible cfg t1 t2 r2.fields r1
 
-                            else if not closed2 then
-                                unifyMany cfg (absorb set2.extensionTypevar only1 ++ sharedEqs)
+                    _ ->
+                        typeMismatch cfg t1 t2
 
-                            else
-                                unifyMany cfg sharedEqs
-                in
-                State.do
-                    (webglSet
-                        { extensionTypevar = webgl1.attributesExtension
-                        , fields = webgl1.attributes
-                        }
-                        { extensionTypevar = webgl2.attributesExtension
-                        , fields = webgl2.attributes
-                        }
-                    )
-                <| \() ->
-                State.do
-                    (webglSet
-                        { extensionTypevar = webgl1.uniformsExtension
-                        , fields = webgl1.uniforms
-                        }
-                        { extensionTypevar = webgl2.uniformsExtension
-                        , fields = webgl2.uniforms
-                        }
-                    )
-                <| \() ->
-                webglSet
-                    { extensionTypevar = webgl1.varyingsExtension
-                    , fields = webgl1.varyings
-                    }
-                    { extensionTypevar = webgl2.varyingsExtension
-                    , fields = webgl2.varyings
-                    }
+            UserDefinedType ut1 ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
 
-            ( WebGLShader _, _ ) ->
-                typeMismatch cfg t1 t2
+                    UserDefinedType ut2 ->
+                        if
+                            (ut1.package /= ut2.package)
+                                || (ut1.moduleId /= ut2.moduleId)
+                                || (ut1.name /= ut2.name)
+                        then
+                            typeMismatch cfg t1 t2
+
+                        else
+                            case zipArgs ut1.args ut2.args of
+                                Nothing ->
+                                    typeMismatch cfg t1 t2
+
+                                Just eqs ->
+                                    unifyMany cfg eqs
+
+                    _ ->
+                        typeMismatch cfg t1 t2
+
+            WebGLShader webgl1 ->
+                case t2 of
+                    TypeVar v ->
+                        bind cfg v t1
+
+                    WebGLShader webgl2 ->
+                        let
+                            {- Unify one of a shader's attribute/uniform/varying sets.
+
+                               Shader sets are special: the GLSL literal opens them, and a type
+                               annotation can narrow them down to a closed record. So a closed
+                               side only requires that its fields are present (with matching
+                               types) in the other side; the open side absorbs the difference.
+                               Two closed sides still have to agree on the field set.
+                            -}
+                            webglSet :
+                                { extensionTypevar : MonoType, fields : Dict VarName MonoType }
+                                -> { extensionTypevar : MonoType, fields : Dict VarName MonoType }
+                                -> StateM ()
+                            webglSet set1 set2 =
+                                let
+                                    ( only1, only2, sharedEqs ) =
+                                        Dict.merge
+                                            (\k v ( o1, o2, eqs ) ->
+                                                ( Dict.insert k v o1, o2, eqs )
+                                            )
+                                            (\_ v1 v2 ( o1, o2, eqs ) ->
+                                                ( o1, o2, ( v1, v2 ) :: eqs )
+                                            )
+                                            (\k v ( o1, o2, eqs ) ->
+                                                ( o1, Dict.insert k v o2, eqs )
+                                            )
+                                            set1.fields
+                                            set2.fields
+                                            ( Dict.empty, Dict.empty, [] )
+
+                                    isClosed : MonoType -> Bool
+                                    isClosed extensionTypevar =
+                                        case extensionTypevar of
+                                            Record _ ->
+                                                True
+
+                                            _ ->
+                                                False
+
+                                    closed1 : Bool
+                                    closed1 =
+                                        isClosed set1.extensionTypevar
+
+                                    closed2 : Bool
+                                    closed2 =
+                                        isClosed set2.extensionTypevar
+                                in
+                                if closed1 && closed2 && not (Dict.isEmpty only1 && Dict.isEmpty only2) then
+                                    typeMismatch cfg t1 t2
+
+                                else
+                                    State.do State.getNextIdAndTick <| \tailId ->
+                                    let
+                                        tail : MonoType
+                                        tail =
+                                            TypeI.id_ tailId
+
+                                        absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
+                                        absorb extensionTypevar fields =
+                                            [ ( extensionTypevar
+                                              , ExtensibleRecord
+                                                    { extensionTypevar = tail
+                                                    , fields = fields
+                                                    }
+                                              )
+                                            ]
+                                    in
+                                    if not closed1 && not closed2 then
+                                        unifyMany cfg (absorb set1.extensionTypevar only2 ++ absorb set2.extensionTypevar only1 ++ sharedEqs)
+
+                                    else if not closed1 then
+                                        unifyMany cfg (absorb set1.extensionTypevar only2 ++ sharedEqs)
+
+                                    else if not closed2 then
+                                        unifyMany cfg (absorb set2.extensionTypevar only1 ++ sharedEqs)
+
+                                    else
+                                        unifyMany cfg sharedEqs
+                        in
+                        State.do
+                            (webglSet
+                                { extensionTypevar = webgl1.attributesExtension
+                                , fields = webgl1.attributes
+                                }
+                                { extensionTypevar = webgl2.attributesExtension
+                                , fields = webgl2.attributes
+                                }
+                            )
+                        <| \() ->
+                        State.do
+                            (webglSet
+                                { extensionTypevar = webgl1.uniformsExtension
+                                , fields = webgl1.uniforms
+                                }
+                                { extensionTypevar = webgl2.uniformsExtension
+                                , fields = webgl2.uniforms
+                                }
+                            )
+                        <| \() ->
+                        webglSet
+                            { extensionTypevar = webgl1.varyingsExtension
+                            , fields = webgl1.varyings
+                            }
+                            { extensionTypevar = webgl2.varyingsExtension
+                            , fields = webgl2.varyings
+                            }
+
+                    _ ->
+                        typeMismatch cfg t1 t2
 
 
 {-| Binds an unbound typeVar root with a given monotype.
