@@ -41,7 +41,7 @@ import Elm.Syntax.Expression.Extra
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.Node as Node exposing (Node)
+import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.Type as SyntaxType
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
@@ -682,20 +682,20 @@ moduleResult ctx file outgoingAliases =
         annotationFor =
             file.declarations
                 |> List.foldl
-                    (\declNode acc ->
-                        case Node.value declNode of
+                    (\(Node declRange decl) acc ->
+                        case decl of
                             Declaration.FunctionDeclaration fn ->
                                 case fn.signature of
                                     Nothing ->
                                         acc
 
-                                    Just sigNode ->
-                                        case Dict.get (RangeLike.fromRange (Node.range declNode)) nodeIds of
+                                    Just (Node _ sigNode) ->
+                                        case Dict.get (RangeLike.fromRange declRange) nodeIds of
                                             Nothing ->
                                                 acc
 
                                             Just declId ->
-                                                case TypeI.fromTypeAnnotation ctx.resolver (Node.value (Node.value sigNode).typeAnnotation) of
+                                                case TypeI.fromTypeAnnotation ctx.resolver (Node.value sigNode.typeAnnotation) of
                                                     Err _ ->
                                                         acc
 
@@ -740,8 +740,8 @@ solveModule ctx typeAliases file =
         topLevelFunctions =
             file.declarations
                 |> List.foldl
-                    (\declNode byName ->
-                        case Node.value declNode of
+                    (\((Node _ decl) as declNode) byName ->
+                        case decl of
                             Declaration.FunctionDeclaration fn ->
                                 Dict.insert (Elm.Syntax.Expression.Extra.functionName fn)
                                     ( declNode, fn )
@@ -840,8 +840,8 @@ gatherTypeAliases ctx file =
     in
     file.declarations
         |> State.traverse
-            (\declarationNode ->
-                case Node.value declarationNode of
+            (\(Node _ declarationNode) ->
+                case declarationNode of
                     Declaration.AliasDeclaration typeAlias ->
                         let
                             toError : ErrorDetails -> Error
@@ -872,12 +872,8 @@ gatherTypeAliases ctx file =
                                     TypeAnnotation.Record fields ->
                                         fields
                                             |> State.traverse
-                                                (\fieldNode ->
-                                                    case
-                                                        Tuple.second (Node.value fieldNode)
-                                                            |> Node.value
-                                                            |> TypeI.fromTypeAnnotation resolver
-                                                    of
+                                                (\(Node _ ( _, Node _ fieldType )) ->
+                                                    case TypeI.fromTypeAnnotation resolver fieldType of
                                                         Err fromTypeAnnotationError ->
                                                             State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
 
@@ -934,8 +930,8 @@ registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
 registerConstructorsAndPorts ctx file =
     file.declarations
         |> State.traverseUnit
-            (\declNode ->
-                case Node.value declNode of
+            (\(Node _ declNode) ->
+                case declNode of
                     Declaration.CustomTypeDeclaration customType ->
                         registerCustomType ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName customType
 
@@ -975,23 +971,19 @@ registerCustomType resolver moduleId moduleName customType =
                 , args =
                     customType.generics
                         |> List.map
-                            (\g ->
+                            (\(Node _ g) ->
                                 TypeVar
-                                    (TypeVar.parse (Node.value g))
+                                    (TypeVar.parse g)
                             )
                 }
     in
     customType.constructors
         |> State.traverseUnit
-            (\ctorNode ->
+            (\(Node _ { arguments, name }) ->
                 let
-                    ctor : SyntaxType.ValueConstructor
-                    ctor =
-                        Node.value ctorNode
-
                     argTypes : Result FromTypeAnnotationError (List MonoType)
                     argTypes =
-                        ctor.arguments
+                        arguments
                             |> Result.Extra.combineMap
                                 (\(Node.Node _ arg) -> TypeI.fromTypeAnnotation resolver arg)
                 in
@@ -1001,15 +993,11 @@ registerCustomType resolver moduleId moduleName customType =
 
                     Ok args ->
                         let
-                            ctorName : String
-                            ctorName =
-                                Node.value ctor.name
-
                             ctorType : MonoType
                             ctorType =
                                 List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
                         in
-                        State.addGlobalBinding ( moduleId, "", ctorName ) (TypeI.closeOver ctorType)
+                        State.addGlobalBinding ( moduleId, "", Node.value name ) (TypeI.closeOver ctorType)
             )
 
 
