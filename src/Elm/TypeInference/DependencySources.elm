@@ -103,20 +103,19 @@ neededSources deps sources =
                         dep.modules
                             |> List.foldl
                                 (\mod acc ->
-                                    Dict.update mod.name
-                                        (\existing ->
-                                            case existing of
-                                                Just existing_ ->
-                                                    Just
-                                                        (Set.union
-                                                            (documentedTypeNames mod)
-                                                            existing_
-                                                        )
+                                    let
+                                        value : Set String
+                                        value =
+                                            case Dict.get mod.name acc of
+                                                Just existing ->
+                                                    Set.union
+                                                        (documentedTypeNames mod)
+                                                        existing
 
                                                 Nothing ->
-                                                    Just (documentedTypeNames mod)
-                                        )
-                                        acc
+                                                    documentedTypeNames mod
+                                    in
+                                    Dict.insert mod.name value acc
                                 )
                                 accAcrossDeps
                     )
