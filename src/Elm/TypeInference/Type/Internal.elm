@@ -1158,8 +1158,12 @@ collectFieldList fields2 acc remaining =
                     Nothing
 
                 Just inferredField ->
-                    collectAnnotationNames annoField inferredField acc
-                        |> Maybe.andThen (\acc1 -> collectFieldList fields2 acc1 rest)
+                    case collectAnnotationNames annoField inferredField acc of
+                        Nothing ->
+                            Nothing
+
+                        Just acc1 ->
+                            collectFieldList fields2 acc1 rest
 
 
 collectAnnotationArgs : List MonoType -> List MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
@@ -1169,8 +1173,12 @@ collectAnnotationArgs annos inferreds acc =
             Just acc
 
         ( a :: restA, b :: restB ) ->
-            collectAnnotationNames a b acc
-                |> Maybe.andThen (collectAnnotationArgs restA restB)
+            case collectAnnotationNames a b acc of
+                Nothing ->
+                    Nothing
+
+                Just acc1 ->
+                    collectAnnotationArgs restA restB acc1
 
         _ ->
             Nothing
