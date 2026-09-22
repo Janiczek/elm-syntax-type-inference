@@ -68,17 +68,16 @@ referencedModules deps =
         allNames =
             List.foldr (\m acc -> m.name :: acc) referenced allModules
     in
-    allNames
-        |> List.foldl
-            (\name ( seen, acc ) ->
-                if String.isEmpty name || List.member name seen then
-                    ( seen, acc )
+    List.foldl
+        (\name names ->
+            if String.isEmpty name || List.member name names then
+                names
 
-                else
-                    ( name :: seen, name :: acc )
-            )
-            ( [], [] )
-        |> Tuple.second
+            else
+                name :: names
+        )
+        []
+        allNames
 
 
 {-| Which packages' `docs.json` types use unknown modules, or types that
