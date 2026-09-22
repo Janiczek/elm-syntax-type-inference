@@ -492,17 +492,12 @@ typeMismatch cfg t1 t2 =
 
 recordBindings : UnifyConfig -> MonoType -> MonoType -> Dict VarName MonoType -> Dict VarName MonoType -> StateM ()
 recordBindings cfg t1 t2 bindings1 bindings2 =
-    -- Dict.size bindings1 /= Dict.size bindings2
-    if Dict.size bindings1 - Dict.size bindings2 /= 0 then
-        typeMismatch cfg t1 t2
+    case zipRecordFields bindings1 bindings2 of
+        Nothing ->
+            typeMismatch cfg t1 t2
 
-    else
-        case zipRecordFields bindings1 bindings2 of
-            Nothing ->
-                typeMismatch cfg t1 t2
-
-            Just eqs ->
-                unifyMany cfg eqs
+        Just eqs ->
+            unifyMany cfg eqs
 
 
 unifyRecordVsExtensible :
