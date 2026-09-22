@@ -27,6 +27,7 @@ import List.ExtraExtra
 import Result.Extra
 import Result.ExtraExtra
 import Set exposing (Set)
+import String.ExtraExtra
 
 
 {-| Precomputed index of `module id -> value/type name -> packages defining it`.
@@ -590,13 +591,8 @@ dependencyModuleDefines moduleMapping (Index index) moduleId varName =
 
 
 couldBeConstructorName : VarName -> Bool
-couldBeConstructorName varName =
-    case String.uncons varName of
-        Just ( firstChar, _ ) ->
-            Char.isUpper firstChar
-
-        Nothing ->
-            False
+couldBeConstructorName =
+    String.ExtraExtra.firstCharIsUpper
 
 
 isRecordAlias : Elm.Docs.Alias -> Bool

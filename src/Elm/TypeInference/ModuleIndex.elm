@@ -34,6 +34,7 @@ import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type exposing (VarName)
 import Set exposing (Set)
 import Set.Extra
+import String.ExtraExtra
 
 
 type alias ModuleIndex =
@@ -566,13 +567,8 @@ importExposesType import_ typeName =
 
 
 couldBeConstructorName : VarName -> Bool
-couldBeConstructorName varName =
-    case String.uncons varName of
-        Just ( firstChar, _ ) ->
-            Char.isUpper firstChar
-
-        Nothing ->
-            False
+couldBeConstructorName =
+    String.ExtraExtra.firstCharIsUpper
 
 
 {-| Alias -> modules imported under it, in import order.
