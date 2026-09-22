@@ -916,20 +916,22 @@ gatherTypeAliases ctx file =
                     _ ->
                         State.pure Nothing
             )
-        |> State.map
-            (\maybeTypeAliases ->
-                maybeTypeAliases
-                    |> List.foldl
-                        (\maybeTypeAlias acc ->
-                            case maybeTypeAlias of
-                                Nothing ->
-                                    acc
+        |> State.map maybeListToDict
 
-                                Just ( typeAliasKey, typeAlias ) ->
-                                    Dict.insert typeAliasKey typeAlias acc
-                        )
-                        Dict.empty
-            )
+
+maybeListToDict : List (Maybe ( comparable, v )) -> Dict comparable v
+maybeListToDict list =
+    List.foldl
+        (\maybe dict ->
+            case maybe of
+                Nothing ->
+                    dict
+
+                Just ( typeAliasKey, typeAlias ) ->
+                    Dict.insert typeAliasKey typeAlias dict
+        )
+        Dict.empty
+        list
 
 
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
