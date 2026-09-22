@@ -499,10 +499,8 @@ normalize ((Forall boundVars monoType) as type_) =
     let
         allVars : List TypeVar
         allVars =
-            VarSet.union
-                (VarSet.fromList boundVars)
-                (monoTypeVars monoType)
-                |> .order
+            (VarSet.fromList boundVars).order
+                ++ (monoTypeVars monoType).order
                 |> VarSet.toList
 
         -- eg. `number` and `comparable` get their own slot sequence independent of the `Normal` one

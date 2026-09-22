@@ -10,7 +10,6 @@ module Elm.TypeInference.VarSet exposing
     , namedKeyFrom
     , superTypeTag
     , toList
-    , union
     )
 
 {-| An ordered set of `TypeVar`s, and the `TypeVar` identity it's keyed on.
@@ -145,14 +144,6 @@ toList order =
                                 go seenGen (Set.insert k seenNamed) rest (var :: acc)
     in
     go Set.empty Set.empty order []
-
-
-union : VarSet -> VarSet -> VarSet
-union l r =
-    { order = l.order ++ r.order
-    , membersGen = Set.union r.membersGen l.membersGen
-    , membersNamed = Set.union r.membersNamed l.membersNamed
-    }
 
 
 diff : VarSet -> VarSet -> List TypeVar
