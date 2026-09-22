@@ -138,7 +138,8 @@ runFrames edges frames acc =
                             let
                                 accAfterPop : Acc comparable
                                 accAfterPop =
-                                    if vLowlink == vIndex then
+                                    -- vLowlink == vIndex
+                                    if vLowlink - vIndex == 0 then
                                         let
                                             ( component, remainingStack ) =
                                                 splitOffComponent frame.node acc.nodeStack

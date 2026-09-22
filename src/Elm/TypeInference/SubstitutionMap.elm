@@ -84,15 +84,15 @@ This sits on the hottest path in the library.
 arraySetGrowing : a -> Int -> a -> Array a -> Array a
 arraySetGrowing default index value array =
     let
-        len : Int
-        len =
-            Array.length array
+        indexMinusLength : Int
+        indexMinusLength =
+            index - Array.length array
     in
-    if index < len then
+    if indexMinusLength < 0 then
         Array.set index value array
 
     else
-        Array.push value (Array.append array (Array.repeat (index - len) default))
+        Array.push value (Array.append array (Array.repeat indexMinusLength default))
 
 
 getSlot : TypeVar -> SubstitutionMap -> Maybe Slot

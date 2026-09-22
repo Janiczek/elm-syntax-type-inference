@@ -592,7 +592,8 @@ unifyMono cfg rawT1 rawT2 =
                                     ( Dict.empty, [], 0 )
                                     recordFields
                         in
-                        if matchedCount /= Dict.size er.fields then
+                        -- matchedCount /= Dict.size er.fields
+                        if matchedCount - Dict.size er.fields /= 0 then
                             typeMismatch ()
 
                         else
