@@ -202,14 +202,11 @@ inferNodes nodes (Project p) =
                 []
                 nodes
 
-        toPrepare : List ProjectModule
-        toPrepare =
-            SCC.stronglyConnectedComponents filteredNodes (firstPartyImportsOf p.byName)
-                |> List.ExtraExtra.fastConcatMap (\component -> List.filterMap (\id -> Dict.get id p.byName) component)
-
         newAcc : ProjectAcc
         newAcc =
-            List.foldl (inferOne p.currentPackage p.depEnv p.moduleMapping) p.acc toPrepare
+            SCC.stronglyConnectedComponents filteredNodes (firstPartyImportsOf p.byName)
+                |> List.ExtraExtra.fastConcatMap (List.filterMap (\id -> Dict.get id p.byName))
+                |> List.foldl (inferOne p.currentPackage p.depEnv p.moduleMapping) p.acc
     in
     Project
         { acc = newAcc
