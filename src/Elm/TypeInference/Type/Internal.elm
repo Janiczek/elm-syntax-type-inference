@@ -641,7 +641,7 @@ mapVarsMono fn type_ =
             TypeVar (fn var)
 
         _ ->
-            recurse (mapVarsMono fn) type_
+            recurse (\child -> child |> mapVarsMono fn) type_
 
 
 {-|
@@ -1007,7 +1007,7 @@ renameToAnnotation annoMono inferredMono =
             Nothing
 
         Just mapping ->
-            Just (mapVarsMono (applyAnnotationNames mapping) inferredMono)
+            Just (mapVarsMono (\var -> var |> applyAnnotationNames mapping) inferredMono)
 
 
 applyAnnotationNames : Dict Int TypeVar -> TypeVar -> TypeVar

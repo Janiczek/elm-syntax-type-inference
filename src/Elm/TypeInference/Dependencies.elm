@@ -342,7 +342,16 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
     union.tags
         |> State.traverseUnit
             (\( ctorName, argTypeStrings ) ->
-                State.do (State.fromResult (Result.mapError toError (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings))) <| \argTypes ->
+                State.do
+                    (State.fromResult
+                        (Result.mapError toError
+                            (Result.Extra.combineMap
+                                (\argDocsType -> fromDocsType resolver argDocsType)
+                                argTypeStrings
+                            )
+                        )
+                    )
+                <| \argTypes ->
                 let
                     ctorType : MonoType
                     ctorType =

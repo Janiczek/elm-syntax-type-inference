@@ -350,7 +350,9 @@ topLevelMember ctx declNode fn =
         ctx
         declNode
         fn
-        (\varName -> State.addGlobalBinding ( ctx.thisModule.moduleId, "", varName ))
+        (\varName varType ->
+            State.addGlobalBinding ( ctx.thisModule.moduleId, "", varName ) varType
+        )
 
 
 {-| A `let..in` function declaration. Adds a binding to lexical `lexicalEnv`

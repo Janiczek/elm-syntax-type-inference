@@ -249,7 +249,7 @@ breakType maxWidth t =
                 ( args, result ) =
                     flattenFunction t
             in
-            (List.map (renderFromPart maxWidth) args
+            (List.map (\arg -> arg |> renderFromPart maxWidth) args
                 ++ [ toMultilineString maxWidth result ]
             )
                 |> String.join "\n-> "
@@ -293,7 +293,7 @@ breakType maxWidth t =
                         ++ "."
                         ++ name
             in
-            (qualifiedName :: List.map (wrappedMultiline maxWidth) arguments)
+            (qualifiedName :: List.map (\arg -> arg |> wrappedMultiline maxWidth) arguments)
                 |> String.join " "
 
         WebGLShader r ->

@@ -437,7 +437,7 @@ addFile file (Project p) =
                         |> Set.foldl
                             (\importId acc ->
                                 Dict.update importId
-                                    (Maybe.map (Set.remove id))
+                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
                                     acc
                             )
                             p.importedBy
@@ -498,7 +498,7 @@ removeFile moduleName ((Project p) as proj) =
     case
         FullModuleName.fromModuleName moduleName
             |> Maybe.andThen (\full -> ModuleIds.getId full p.moduleMapping)
-            |> Maybe.andThen (\id -> Dict.get id p.modulesById |> Maybe.map (Tuple.pair id))
+            |> Maybe.andThen (\id -> Dict.get id p.modulesById |> Maybe.map (\mod -> ( id, mod )))
     of
         Nothing ->
             proj
@@ -515,7 +515,7 @@ removeFile moduleName ((Project p) as proj) =
                         |> List.foldl
                             (\import_ acc ->
                                 Dict.update import_.moduleId
-                                    (Maybe.map (Set.remove id))
+                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
                                     acc
                             )
                             p.importedBy

@@ -1050,23 +1050,23 @@ bind cfg typeVar type_ =
                         if m == super && m == otherSuper then
                             -- Either could be chosen as then parent (linked to),
                             -- but we prefer Generated ids as they can't collide.
-                            State.modifySubst <|
-                                case ( Tuple.first typeVar, Tuple.first otherVar ) of
-                                    ( Named _, Generated _ ) ->
-                                        SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
+                            State.modifySubst <| \subst ->
+                            case ( Tuple.first typeVar, Tuple.first otherVar ) of
+                                ( Named _, Generated _ ) ->
+                                    subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
 
-                                    ( Generated _, Named _ ) ->
-                                        SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
+                                ( Generated _, Named _ ) ->
+                                    subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
 
-                                    _ ->
-                                        SubstitutionMap.union typeVar otherVar
+                                _ ->
+                                    subst |> SubstitutionMap.union typeVar otherVar
 
                         else if m == otherSuper then
                             -- otherVar is more constrained -> it will be the `parent` representative.
-                            State.modifySubst (SubstitutionMap.linkTo { child = typeVar, parent = otherVar })
+                            State.modifySubst (\subst -> subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar })
 
                         else if m == super then
-                            State.modifySubst (SubstitutionMap.linkTo { child = otherVar, parent = typeVar })
+                            State.modifySubst (\subst -> subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar })
 
                         else
                             -- eg. Comparable and Appendable
@@ -1087,7 +1087,7 @@ bind cfg typeVar type_ =
 
             _ ->
                 if accepts cfg.typeAliases super type_ then
-                    State.modifySubst (SubstitutionMap.bindRoot typeVar type_)
+                    State.modifySubst (\subst -> SubstitutionMap.bindRoot typeVar type_ subst)
 
                 else
                     let

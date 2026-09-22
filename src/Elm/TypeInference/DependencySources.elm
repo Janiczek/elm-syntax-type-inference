@@ -59,21 +59,18 @@ referencedModules deps =
         allModules =
             Dict.foldr (\_ { modules } acc -> List.append modules acc) [] deps
 
-        addNameIfUnique : (a -> String) -> a -> List String -> List String
-        addNameIfUnique getName a names =
-            let
-                name : String
-                name =
-                    getName a
-            in
+        addNameIfUnique : String -> List String -> List String
+        addNameIfUnique name names =
             if String.isEmpty name || List.member name names then
                 names
 
             else
                 name :: names
     in
-    List.foldl (addNameIfUnique Tuple.first) [] (docsModuleRefs allModules)
-        |> (\acc -> List.foldl (addNameIfUnique .name) acc allModules)
+    List.foldl (\( name, _ ) acc -> addNameIfUnique name acc) [] (docsModuleRefs allModules)
+        |> (\accWithoutModNames ->
+                List.foldl (\mod acc -> addNameIfUnique mod.name acc) accWithoutModNames allModules
+           )
 
 
 {-| Which packages' `docs.json` types use unknown modules, or types that

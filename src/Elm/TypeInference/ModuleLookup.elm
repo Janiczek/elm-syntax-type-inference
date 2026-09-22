@@ -65,8 +65,8 @@ addModule packageName mod ( Index idx, moduleMapping ) =
             ModuleIds.intern (FullModuleName.fromDotted mod.name) moduleMapping
     in
     ( Index
-        { values = List.foldl (addName moduleId packageName) idx.values (valueNamesOf mod)
-        , types = List.foldl (addName moduleId packageName) idx.types (typeNamesOf mod)
+        { values = List.foldl (\name acc -> addName moduleId packageName name acc) idx.values (valueNamesOf mod)
+        , types = List.foldl (\name acc -> addName moduleId packageName name acc) idx.types (typeNamesOf mod)
         , ctorParents = addCtorParents moduleId mod idx.ctorParents
         , recordAliases = addRecordAliases moduleId mod idx.recordAliases
         }
