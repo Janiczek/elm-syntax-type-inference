@@ -178,8 +178,6 @@ do m fn =
     andThen fn m
 
 
-{-| Tail-recursive instead of List.foldr (which blew the stack in the past).
--}
 foldl : (a -> foldState -> StateM foldState) -> foldState -> List a -> StateM foldState
 foldl reduce initialFoldState list =
     \state -> foldlHelp reduce initialFoldState list state
