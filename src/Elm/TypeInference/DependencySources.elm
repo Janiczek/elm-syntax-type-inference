@@ -133,12 +133,12 @@ neededSources deps sources =
                     remaining =
                         docsModuleRefs pkg.modules
                             |> List.foldl
-                                (\m acc ->
-                                    if isKnownRef docsTypes m then
+                                (\(( m, _ ) as ref) acc ->
+                                    if isKnownRef docsTypes ref then
                                         acc
 
                                     else
-                                        Set.insert (Tuple.first m) acc
+                                        Set.insert m acc
                                 )
                                 Set.empty
                             |> Set.toList
