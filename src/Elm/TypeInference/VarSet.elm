@@ -157,20 +157,24 @@ union l r =
 
 diff : VarSet -> VarSet -> VarSet
 diff l r =
-    { order =
-        List.filter
-            (\( style, super ) ->
-                case style of
-                    Generated theId ->
-                        not (Set.member (genKeyFrom theId super) r.membersGen)
-
-                    Named name ->
-                        not (Set.member (namedKeyFrom name super) r.membersNamed)
-            )
-            l.order
+    { order = diffOrder l r
     , membersGen = Set.diff l.membersGen r.membersGen
     , membersNamed = Set.diff l.membersNamed r.membersNamed
     }
+
+
+diffOrder : VarSet -> VarSet -> List TypeVar
+diffOrder l r =
+    List.filter
+        (\( style, super ) ->
+            case style of
+                Generated theId ->
+                    not (Set.member (genKeyFrom theId super) r.membersGen)
+
+                Named name ->
+                    not (Set.member (namedKeyFrom name super) r.membersNamed)
+        )
+        l.order
 
 
 fromList : List TypeVar -> VarSet
