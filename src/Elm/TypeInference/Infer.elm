@@ -995,10 +995,6 @@ inferPattern ctx patternNode =
         type_ =
             TypeI.id_ patternId
 
-        p : Node Pattern -> StateM Inferred
-        p =
-            inferPattern ctx
-
         finish : List TypeEquation -> StateM Inferred
         finish eqs =
             State.pure ( patternId, TypeEquation.batch eqs )
@@ -1037,7 +1033,7 @@ inferPattern ctx patternNode =
                 impossiblePattern =
                     State.error (toError ctx (ImpossiblePattern patternNode))
             in
-            State.do (inferMany p patterns) <| \( ids, eqs ) ->
+            State.do (inferMany (\part -> inferPattern ctx part) patterns) <| \( ids, eqs ) ->
             case ids of
                 [ id1, id2 ] ->
                     finishEqns <|
@@ -1095,8 +1091,8 @@ inferPattern ctx patternNode =
 
         UnConsPattern p1 p2 ->
             State.do State.getNextIdAndTick <| \listItemId ->
-            State.do (p p1) <| \( id1, eqs1 ) ->
-            State.do (p p2) <| \( id2, eqs2 ) ->
+            State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
+            State.do (inferPattern ctx p2) <| \( id2, eqs2 ) ->
             finishEqns <|
                 TypeEquation.append eqs1
                     (TypeEquation.append eqs2
@@ -1110,7 +1106,7 @@ inferPattern ctx patternNode =
 
         ListPattern patterns ->
             State.do State.getNextIdAndTick <| \listItemId ->
-            State.do (inferMany p patterns) <| \( ids, eqs ) ->
+            State.do (inferMany (\el -> inferPattern ctx el) patterns) <| \( ids, eqs ) ->
             finishEqns <|
                 TypeEquation.append eqs
                     (TypeEquation.append
@@ -1147,7 +1143,7 @@ inferPattern ctx patternNode =
                 Ok (Just ( package, moduleId )) ->
                     State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                     State.do State.getNextIdAndTick <| \resultId ->
-                    State.do (inferMany p args) <| \( argIds, eqs ) ->
+                    State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
                     finishEqns <|
                         TypeEquation.cons
                             ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
@@ -1160,7 +1156,7 @@ inferPattern ctx patternNode =
                     if isKernelVar ctx (FullModuleName.fromModuleName customType.moduleName) customType.name then
                         State.do State.getNextIdAndTick <| \ctorId ->
                         State.do State.getNextIdAndTick <| \resultId ->
-                        State.do (inferMany p args) <| \( argIds, eqs ) ->
+                        State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
                         finishEqns <|
                             TypeEquation.cons
                                 ( TypeI.id_ ctorId, functionType argIds resultId, "NamedPattern: kernel ctor is a fn" )
@@ -1182,7 +1178,7 @@ inferPattern ctx patternNode =
                         <| \( package, moduleId ) ->
                         State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                         State.do State.getNextIdAndTick <| \resultId ->
-                        State.do (inferMany p args) <| \( argIds, eqs ) ->
+                        State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
                         finishEqns <|
                             TypeEquation.cons
                                 ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
@@ -1197,11 +1193,11 @@ inferPattern ctx patternNode =
         AsPattern p1 varNameNode ->
             State.do (State.addBinding (Node.value varNameNode) (TypeI.mono type_)) <| \() ->
             State.do (State.aliasNodeId (Node.range varNameNode) patternId) <| \() ->
-            State.do (p p1) <| \( id1, eqs1 ) ->
+            State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
             finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "AsPattern = inner" ) eqs1
 
         ParenthesizedPattern p1 ->
-            State.do (p p1) <| \( id1, eqs1 ) ->
+            State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
             finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized pattern = inner" ) eqs1
 
 

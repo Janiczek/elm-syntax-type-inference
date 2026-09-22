@@ -1169,13 +1169,6 @@ registerCustomType resolver moduleId moduleName customType =
         typeName =
             Node.value customType.name
 
-        toError : ErrorDetails -> Error
-        toError details =
-            { moduleName = FullModuleName.toModuleName moduleName
-            , declarationNames = [ typeName ]
-            , details = details
-            }
-
         resultType : MonoType
         resultType =
             UserDefinedType
@@ -1203,7 +1196,11 @@ registerCustomType resolver moduleId moduleName customType =
                 in
                 case argTypes of
                     Err fromTypeAnnotationError ->
-                        State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+                        State.error
+                            { moduleName = FullModuleName.toModuleName moduleName
+                            , declarationNames = [ typeName ]
+                            , details = TypeI.fromTypeAnnotationError fromTypeAnnotationError
+                            }
 
                     Ok args ->
                         let
@@ -1217,18 +1214,17 @@ registerCustomType resolver moduleId moduleName customType =
 
 registerPort : TypeResolver -> ModuleId -> FullModuleName -> Signature -> StateM ()
 registerPort resolver moduleId moduleName sig =
-    let
-        toError : ErrorDetails -> Error
-        toError details =
-            { moduleName = FullModuleName.toModuleName moduleName
-            , declarationNames = [ Node.value sig.name ]
-            , details = details
-            }
-    in
     sig.typeAnnotation
         |> Node.value
         |> TypeI.fromTypeAnnotation resolver
-        |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
+        |> Result.mapError
+            (\fromTypeAnnotationError ->
+                State.error
+                    { moduleName = FullModuleName.toModuleName moduleName
+                    , declarationNames = [ Node.value sig.name ]
+                    , details = TypeI.fromTypeAnnotationError fromTypeAnnotationError
+                    }
+            )
         |> Result.map
             (\t ->
                 State.addGlobalBinding
