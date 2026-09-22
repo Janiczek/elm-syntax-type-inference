@@ -153,8 +153,11 @@ empty =
     { byDotted = Dict.fromList predefined
     , byId =
         predefined
-            |> List.map (\( dotted, id ) -> ( id, FullModuleName.fromDotted dotted ))
-            |> Dict.fromList
+            |> List.foldl
+                (\( dotted, id ) acc ->
+                    Dict.insert id (FullModuleName.fromDotted dotted) acc
+                )
+                Dict.empty
     , next = 15
     }
 

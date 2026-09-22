@@ -500,8 +500,8 @@ normalize ((Forall boundVars monoType) as type_) =
         allVars : List TypeVar
         allVars =
             VarSet.union
-                (monoTypeVars monoType)
                 (VarSet.fromList boundVars)
+                (monoTypeVars monoType)
                 |> VarSet.toList
 
         -- eg. `number` and `comparable` get their own slot sequence independent of the `Normal` one
@@ -690,8 +690,8 @@ fromTypeAnnotation resolver typeAnnotation =
             -> Result FromTypeAnnotationError (Dict VarName MonoType)
         recordBindings fields =
             fields
-                |> List.map
-                    (\fieldNode ->
+                |> Result.Extra.foldlWhileOk
+                    (\fieldNode acc ->
                         let
                             ( fieldNameNode, annotationNode ) =
                                 Node.value fieldNode
@@ -701,10 +701,9 @@ fromTypeAnnotation resolver typeAnnotation =
                                 f (Node.value annotationNode)
                         in
                         type_
-                            |> Result.map (\type__ -> ( Node.value fieldNameNode, type__ ))
+                            |> Result.map (\type__ -> Dict.insert (Node.value fieldNameNode) type__ acc)
                     )
-                |> Result.Extra.combine
-                |> Result.map Dict.fromList
+                    Dict.empty
     in
     case typeAnnotation of
         TypeAnnotation.GenericType name ->
@@ -715,8 +714,7 @@ fromTypeAnnotation resolver typeAnnotation =
                 args : Result FromTypeAnnotationError (List MonoType)
                 args =
                     annotations
-                        |> List.map (Node.value >> f)
-                        |> Result.Extra.combine
+                        |> Result.Extra.combineMap (\(Node.Node _ arg) -> f arg)
             in
             -- Resolve names before collapsing primitives: local or imported
             -- types can shadow implicit names such as List, Int, and String.
@@ -731,15 +729,17 @@ fromTypeAnnotation resolver typeAnnotation =
                             |> Result.mapError AmbiguousModuleName
                             |> Result.map
                                 (\( package, moduleId ) ->
-                                    collapsePrimitive package moduleId typeName args_
-                                        |> Maybe.withDefault
-                                            (UserDefinedType
+                                    case collapsePrimitive package moduleId typeName args_ of
+                                        Just collapsed ->
+                                            collapsed
+
+                                        Nothing ->
+                                            UserDefinedType
                                                 { package = package
                                                 , moduleId = moduleId
                                                 , name = typeName
                                                 , args = args_
                                                 }
-                                            )
                                 )
                     )
 

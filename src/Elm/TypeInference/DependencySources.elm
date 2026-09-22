@@ -71,10 +71,9 @@ referencedModules deps =
                 |> List.map Tuple.first
     in
     (documented ++ referenced)
-        |> List.filter (not << String.isEmpty)
         |> List.foldl
             (\name ( seen, acc ) ->
-                if List.member name seen then
+                if String.isEmpty name || List.member name seen then
                     ( seen, acc )
 
                 else
@@ -99,33 +98,41 @@ neededSources deps sources =
         docsTypes : Dict String (Set String)
         docsTypes =
             deps
-                |> Dict.values
-                |> List.ExtraExtra.fastConcatMap .modules
-                |> List.foldl
-                    (\mod acc ->
-                        Dict.update mod.name
-                            (\existing ->
-                                Just
-                                    (Set.union
-                                        (documentedTypeNames mod)
-                                        (Maybe.withDefault Set.empty existing)
-                                    )
-                            )
-                            acc
+                |> Dict.foldl
+                    (\_ dep accAcrossDeps ->
+                        dep.modules
+                            |> List.foldl
+                                (\mod acc ->
+                                    Dict.update mod.name
+                                        (\existing ->
+                                            Just
+                                                (Set.union
+                                                    (Maybe.withDefault Set.empty existing)
+                                                    (documentedTypeNames mod)
+                                                )
+                                        )
+                                        acc
+                                )
+                                accAcrossDeps
                     )
                     Dict.empty
     in
     deps
-        |> Dict.toList
-        |> List.filterMap
-            (\( package, pkg ) ->
+        |> Dict.foldr
+            (\package pkg needsSourcesAcc ->
                 let
                     unknownModules : List String
                     unknownModules =
                         docsModuleRefs pkg.modules
-                            |> List.filter (not << isKnownRef docsTypes)
-                            |> List.map Tuple.first
-                            |> Set.fromList
+                            |> List.foldl
+                                (\m acc ->
+                                    if isKnownRef docsTypes m then
+                                        acc
+
+                                    else
+                                        Set.insert (Tuple.first m) acc
+                                )
+                                Set.empty
                             |> Set.toList
 
                     supplied : Set String
@@ -135,24 +142,31 @@ neededSources deps sources =
                     remaining : List String
                     remaining =
                         unknownModules
-                            |> List.filter (\m -> not (Set.member m supplied))
-                            |> List.map ModuleNameExtra.dottedToFilePath
+                            |> List.filterMap
+                                (\m ->
+                                    if Set.member m supplied then
+                                        Nothing
+
+                                    else
+                                        Just (ModuleNameExtra.dottedToFilePath m)
+                                )
                 in
                 case remaining of
                     [] ->
-                        Nothing
+                        needsSourcesAcc
 
                     _ :: _ ->
-                        Just ( package, remaining )
+                        ( package, remaining ) :: needsSourcesAcc
             )
+            []
 
 
 suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
 suppliedModuleNames package sources =
     Dict.get package sources
         |> Maybe.withDefault []
-        |> List.map fileDottedName
-        |> Set.fromList
+        |> List.foldl (\m acc -> Set.insert (fileDottedName m) acc)
+            Set.empty
 
 
 fileDottedName : File -> String
@@ -165,8 +179,12 @@ fileDottedName file =
 
 documentedTypeNames : Elm.Docs.Module -> Set String
 documentedTypeNames mod =
-    Set.fromList
-        (List.map .name mod.unions ++ List.map .name mod.aliases)
+    List.foldl (\union acc -> Set.insert union.name acc)
+        (List.foldl (\typeAlias acc -> Set.insert typeAlias.name acc)
+            Set.empty
+            mod.aliases
+        )
+        mod.unions
 
 
 isKnownRef : Dict String (Set String) -> ( String, String ) -> Bool
@@ -184,10 +202,10 @@ docsModuleRefs modules =
     modules
         |> List.ExtraExtra.fastConcatMap
             (\mod ->
-                List.ExtraExtra.fastConcatMap (.tipe >> docsTypeRefs) mod.values
-                    ++ List.ExtraExtra.fastConcatMap (.tipe >> docsTypeRefs) mod.binops
-                    ++ List.ExtraExtra.fastConcatMap (\union -> List.ExtraExtra.fastConcatMap (Tuple.second >> List.ExtraExtra.fastConcatMap docsTypeRefs) union.tags) mod.unions
-                    ++ List.ExtraExtra.fastConcatMap (.tipe >> docsTypeRefs) mod.aliases
+                List.ExtraExtra.fastConcatMap (\value -> docsTypeRefs value.tipe) mod.values
+                    ++ List.ExtraExtra.fastConcatMap (\binop -> docsTypeRefs binop.tipe) mod.binops
+                    ++ List.ExtraExtra.fastConcatMap (\union -> List.ExtraExtra.fastConcatMap (\( _, payload ) -> List.ExtraExtra.fastConcatMap docsTypeRefs payload) union.tags) mod.unions
+                    ++ List.ExtraExtra.fastConcatMap (\typeAlias -> docsTypeRefs typeAlias.tipe) mod.aliases
             )
 
 
@@ -219,7 +237,7 @@ docsTypeRefs tipe =
                 ++ List.ExtraExtra.fastConcatMap docsTypeRefs args
 
         Elm.Type.Record fields _ ->
-            List.ExtraExtra.fastConcatMap (Tuple.second >> docsTypeRefs) fields
+            List.ExtraExtra.fastConcatMap (\( _, value ) -> docsTypeRefs value) fields
 
 
 isPrimitiveRef : String -> String -> Bool
@@ -282,10 +300,9 @@ packageAliases moduleMapping deps package files =
                             ( moduleIndex, newModuleMapping ) =
                                 ModuleIndex.fromFile accModuleMapping file
                         in
-                        ( ( moduleIndex.moduleId, moduleIndex ) :: acc, newModuleMapping )
+                        ( Dict.insert moduleIndex.moduleId moduleIndex acc, newModuleMapping )
                     )
-                    ( [], moduleMapping )
-                |> (\( reversed, finalModuleMapping ) -> ( Dict.fromList reversed, finalModuleMapping ))
+                    ( Dict.empty, moduleMapping )
 
         visiblePackages : List PackageName
         visiblePackages =
@@ -299,8 +316,8 @@ packageAliases moduleMapping deps package files =
                 |> Tuple.first
     in
     files
-        |> Result.Extra.combineMap
-            (\file ->
+        |> Result.Extra.foldlWhileOk
+            (\file dictAcrossFiles ->
                 let
                     ( thisModule, _ ) =
                         ModuleIndex.fromFile moduleMapping1 file
@@ -320,33 +337,32 @@ packageAliases moduleMapping deps package files =
                                 )
                 in
                 file.declarations
-                    |> List.filterMap
-                        (\node ->
+                    |> Result.Extra.foldlWhileOk
+                        (\node dict ->
                             case Node.value node of
                                 Declaration.AliasDeclaration alias_ ->
-                                    Just
-                                        (TypeI.fromTypeAnnotation resolver (Node.value alias_.typeAnnotation)
-                                            |> Result.mapError
-                                                (\err ->
-                                                    { moduleName = FullModuleName.toModuleName thisModule.moduleName
-                                                    , declarationNames = [ Node.value alias_.name ]
-                                                    , details = TypeI.fromTypeAnnotationError err
+                                    TypeI.fromTypeAnnotation resolver (Node.value alias_.typeAnnotation)
+                                        |> Result.mapError
+                                            (\err ->
+                                                { moduleName = FullModuleName.toModuleName thisModule.moduleName
+                                                , declarationNames = [ Node.value alias_.name ]
+                                                , details = TypeI.fromTypeAnnotationError err
+                                                }
+                                            )
+                                        |> Result.map
+                                            (\body ->
+                                                Dict.insert
+                                                    ( thisModule.moduleId, package, Node.value alias_.name )
+                                                    { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) alias_.generics
+                                                    , type_ = body
                                                     }
-                                                )
-                                            |> Result.map
-                                                (\body ->
-                                                    ( ( thisModule.moduleId, package, Node.value alias_.name )
-                                                    , { args = List.map (Node.value >> TypeVar.parse) alias_.generics
-                                                      , type_ = body
-                                                      }
-                                                    )
-                                                )
-                                        )
+                                                    dict
+                                            )
 
                                 _ ->
-                                    Nothing
+                                    Ok dict
                         )
-                    |> Result.Extra.combine
-                    |> Result.map Dict.fromList
+                        dictAcrossFiles
             )
-        |> Result.map (\dicts -> ( List.foldl Dict.union Dict.empty dicts, moduleMapping1 ))
+            Dict.empty
+        |> Result.map (\dict -> ( dict, moduleMapping1 ))

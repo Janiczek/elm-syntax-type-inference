@@ -45,7 +45,6 @@ import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations, TypeE
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import List.ExtraExtra
 import Regex exposing (Regex)
-import Result.Extra
 
 
 type alias Ctx =
@@ -97,13 +96,15 @@ inferMany : (a -> StateM Inferred) -> List a -> StateM ( List Id, Equations )
 inferMany f items =
     State.traverse f items
         |> State.map
-            (List.foldr
-                (\( id_, eqs ) ( ids, allEqs ) ->
-                    ( id_ :: ids
-                    , TypeEquation.append eqs allEqs
-                    )
-                )
-                ( [], TypeEquation.empty )
+            (\inferred ->
+                inferred
+                    |> List.foldr
+                        (\( id_, eqs ) ( ids, allEqs ) ->
+                            ( id_ :: ids
+                            , TypeEquation.append eqs allEqs
+                            )
+                        )
+                        ( [], TypeEquation.empty )
             )
 
 
@@ -124,10 +125,15 @@ resolveGlobalVar ctx package moduleId name =
     let
         ( aliasedPackage, aliasedModuleId, aliasedName ) =
             if package == "" then
-                ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
-                    |> Result.withDefault Nothing
-                    |> Maybe.map (\( m, n ) -> ( "", m, n ))
-                    |> Maybe.withDefault ( package, moduleId, name )
+                case
+                    ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
+                        |> Result.withDefault Nothing
+                of
+                    Just ( m, n ) ->
+                        ( "", m, n )
+
+                    Nothing ->
+                        ( package, moduleId, name )
 
             else
                 ( package, moduleId, name )
@@ -177,7 +183,7 @@ isKernelQualifier ctx maybeQualifier =
                 case qualifier of
                     ( single, [] ) ->
                         ModuleIndex.modulesWithAlias ctx.thisModule single
-                            |> List.any (isKernelModuleId ctx)
+                            |> List.any (\mod -> isKernelModuleId ctx mod)
 
                     _ ->
                         False
@@ -264,13 +270,17 @@ annotationType ctx maybeSigNode =
             State.pure Nothing
 
         Just sigNode ->
-            Node.value sigNode
-                |> .typeAnnotation
-                |> Node.value
-                |> TypeI.fromTypeAnnotation (typeResolver ctx)
-                |> Result.mapError (State.error << toError ctx << TypeI.fromTypeAnnotationError)
-                |> Result.map (Just >> State.pure)
-                |> Result.Extra.merge
+            case
+                Node.value sigNode
+                    |> .typeAnnotation
+                    |> Node.value
+                    |> TypeI.fromTypeAnnotation (typeResolver ctx)
+            of
+                Err fromTypeAnnotationError ->
+                    State.error (toError ctx (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+
+                Ok t ->
+                    State.pure (Just t)
 
 
 {-| `declId ≡ annotationType`, if the function is annotated.
@@ -324,10 +334,12 @@ functionMember ctx declNode fn installFor =
         , annotation = Maybe.map TypeI.closeOver maybeAnnotationType
         , install = installFor varName
         , equations =
-            State.map2 TypeEquation.append
+            State.map2
+                (\sigEquations implEquations ->
+                    TypeEquation.toList (TypeEquation.append sigEquations implEquations)
+                )
                 (signatureEquations declId maybeAnnotationType)
                 (inferFnImplementation ctx declId impl)
-                |> State.map TypeEquation.toList
         }
 
 
@@ -567,10 +579,6 @@ inferExpr ctx exprNode =
                 )
             <| \caseInferreds ->
             let
-                caseIds : List ( Id, Id )
-                caseIds =
-                    List.map Tuple.first caseInferreds
-
                 caseEqs : Equations
                 caseEqs =
                     List.foldr
@@ -580,7 +588,7 @@ inferExpr ctx exprNode =
 
                 ( scrutineeEquations, bodyEquations ) =
                     List.foldr
-                        (\( patternId, bodyId ) ( scruts, bodies ) ->
+                        (\( ( patternId, bodyId ), _ ) ( scruts, bodies ) ->
                             ( ( TypeI.id_ scrutineeId
                               , TypeI.id_ patternId
                               , "Case: scrutinee = branch pattern"
@@ -594,7 +602,7 @@ inferExpr ctx exprNode =
                             )
                         )
                         ( [], [] )
-                        caseIds
+                        caseInferreds
             in
             finishEqns <|
                 TypeEquation.append scrutineeEqs
@@ -832,7 +840,12 @@ solveLetDeclarations ctx declarations =
         hasLetAnnotation declNode =
             case Node.value declNode of
                 LetFunction fn ->
-                    fn.signature /= Nothing
+                    case fn.signature of
+                        Just _ ->
+                            True
+
+                        Nothing ->
+                            False
 
                 LetDestructuring _ _ ->
                     False
@@ -862,14 +875,23 @@ solveLetDeclarations ctx declarations =
                     referencedNames (bodyOf declNode)
                         |> List.filterMap
                             (\( maybeModuleName, refName ) ->
-                                if maybeModuleName == Nothing then
-                                    Dict.get refName indexOfName
+                                case maybeModuleName of
+                                    Nothing ->
+                                        case Dict.get refName indexOfName of
+                                            Nothing ->
+                                                Nothing
 
-                                else
-                                    Nothing
+                                            Just target ->
+                                                -- Annotated bindings have already been pre-installed.
+                                                if isAnnotatedIndex target then
+                                                    Nothing
+
+                                                else
+                                                    Just target
+
+                                    Just _ ->
+                                        Nothing
                             )
-                        -- Annotated bindings have already been pre-installed.
-                        |> List.filter (\target -> not (isAnnotatedIndex target))
 
         sccs : List (List Int)
         sccs =
@@ -905,8 +927,7 @@ solveLetDeclarations ctx declarations =
             in
             State.do (State.withDeeperLetRank inferAndUnify) <| \() ->
             boundVars
-                |> State.traverse State.generalizeBinding
-                |> State.map (always ())
+                |> State.traverseUnit State.generalizeBinding
 
         solveGroup : List Int -> StateM ()
         solveGroup groupIndices =
@@ -931,20 +952,19 @@ solveLetDeclarations ctx declarations =
             State.do
                 (functions
                     |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
-                    |> State.andThen (BindingGroup.solveGroup (unifyConfig ctx))
+                    |> State.andThen (\members -> BindingGroup.solveGroup (unifyConfig ctx) members)
                 )
             <| \() ->
             destructurings
-                |> State.traverse
+                |> State.traverseUnit
                     (\( declNode, patternNode, exprNode ) ->
                         inferDestructuring declNode patternNode exprNode
                     )
-                |> State.map (always ())
 
         preinstallAnnotated : StateM ()
         preinstallAnnotated =
             declarations
-                |> State.traverse
+                |> State.traverseUnit
                     (\declNode ->
                         case Node.value declNode of
                             LetFunction fn ->
@@ -964,12 +984,10 @@ solveLetDeclarations ctx declarations =
                             LetDestructuring _ _ ->
                                 State.pure ()
                     )
-                |> State.map (always ())
     in
     State.do preinstallAnnotated <| \() ->
     sccs
-        |> State.traverse solveGroup
-        |> State.map (always ())
+        |> State.traverseUnit solveGroup
 
 
 
@@ -1297,8 +1315,10 @@ glslDeclaration chunk =
                             declarators
                                 |> String.split ","
                                 |> List.filterMap
-                                    (glslDeclaratorName
-                                        >> Maybe.map (\varName -> ( storageQualifier, varName, varType_ ))
+                                    (\declarator ->
+                                        declarator
+                                            |> glslDeclaratorName
+                                            |> Maybe.map (\varName -> ( storageQualifier, varName, varType_ ))
                                     )
 
                 _ ->

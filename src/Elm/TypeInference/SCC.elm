@@ -64,21 +64,22 @@ stronglyConnectedComponents :
     -> List (List comparable)
 stronglyConnectedComponents nodes edges =
     let
-        initAcc : Acc comparable
-        initAcc =
-            { index = Dict.empty
-            , lowlink = Dict.empty
-            , onStack = Set.empty
-            , nodeStack = []
-            , sccs = []
-            , counter = 0
-            }
-
         finalAcc : Acc comparable
         finalAcc =
-            List.foldl (visit edges) initAcc nodes
+            List.foldl (\node acc -> visit edges node acc) initAcc nodes
     in
     List.reverse finalAcc.sccs
+
+
+initAcc : Acc comparable
+initAcc =
+    { index = Dict.empty
+    , lowlink = Dict.empty
+    , onStack = Set.empty
+    , nodeStack = []
+    , sccs = []
+    , counter = 0
+    }
 
 
 type alias Frame comparable =

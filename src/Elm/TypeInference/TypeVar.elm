@@ -42,11 +42,12 @@ toString ( style, super ) =
     let
         prefix : String
         prefix =
-            if super == Normal then
-                ""
+            case super of
+                Normal ->
+                    ""
 
-            else
-                superTypeToString super
+                _ ->
+                    superTypeToString super
     in
     case ( super, style ) of
         ( Normal, Generated theId ) ->
@@ -65,27 +66,36 @@ toString ( style, super ) =
 parse : String -> TypeVar
 parse name =
     let
-        prefixes : List ( String, SuperType )
-        prefixes =
-            [ ( "compappend", CompAppend )
-            , ( "comparable", Comparable )
-            , ( "appendable", Appendable )
-            , ( "number", Number )
-            ]
-    in
-    prefixes
-        |> List.Extra.findMap
-            (\( prefix, super ) ->
-                if String.startsWith prefix name then
-                    Just
-                        ( Named (String.dropLeft (String.length prefix) name)
-                        , super
-                        )
+        maybeConstrained : Maybe ( TypeVarStyle, SuperType )
+        maybeConstrained =
+            typeVariableConstraintPrefixes
+                |> List.Extra.findMap
+                    (\( prefix, super ) ->
+                        if String.startsWith prefix name then
+                            Just
+                                ( Named (String.dropLeft (String.length prefix) name)
+                                , super
+                                )
 
-                else
-                    Nothing
-            )
-        |> Maybe.withDefault ( Named name, Normal )
+                        else
+                            Nothing
+                    )
+    in
+    case maybeConstrained of
+        Just constrained ->
+            constrained
+
+        Nothing ->
+            ( Named name, Normal )
+
+
+typeVariableConstraintPrefixes : List ( String, SuperType )
+typeVariableConstraintPrefixes =
+    [ ( "compappend", CompAppend )
+    , ( "comparable", Comparable )
+    , ( "appendable", Appendable )
+    , ( "number", Number )
+    ]
 
 
 superTypeToString : SuperType -> String

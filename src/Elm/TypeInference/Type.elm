@@ -413,23 +413,22 @@ toTypeAnnotation type_ =
                 (Node.empty (toTypeAnnotation to))
 
         Int ->
-            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Int" )) []
+            typeAnnotationBasicsInt
 
         Float ->
-            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Float" )) []
+            typeAnnotationBasicsFloat
 
         Char ->
-            TypeAnnotation.Typed (Node.empty ( [ "Char" ], "Char" )) []
+            typeAnnotationCharChar
 
         String ->
-            TypeAnnotation.Typed (Node.empty ( [ "String" ], "String" )) []
+            typeAnnotationStringString
 
         Bool ->
-            TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Bool" )) []
+            typeAnnotationBasicsBool
 
         List itemType ->
-            TypeAnnotation.Typed
-                (Node.empty ( [ "List" ], "List" ))
+            TypeAnnotation.Typed listListNameNode
                 [ Node.empty (toTypeAnnotation itemType) ]
 
         Unit ->
@@ -460,30 +459,59 @@ toTypeAnnotation type_ =
         Named { moduleName, name, arguments } ->
             TypeAnnotation.Typed
                 (Node.empty ( moduleName, name ))
-                (List.map (toTypeAnnotation >> Node.empty) arguments)
+                (List.map (\arg -> Node.empty (toTypeAnnotation arg)) arguments)
 
         WebGLShader r ->
             TypeAnnotation.Typed
                 (Node.empty ( [ "WebGL" ], "Shader" ))
-                ([ shaderSlotToTypeAnnotation r.attributesFields r.attributesExtensionTypevar
-                 , shaderSlotToTypeAnnotation r.uniformsFields r.uniformsExtensionTypevar
-                 , shaderSlotToTypeAnnotation r.varyingsFields r.varyingsExtensionTypevar
-                 ]
-                    |> List.map Node.empty
-                )
+                [ Node.empty <| shaderSlotToTypeAnnotation r.attributesFields r.attributesExtensionTypevar
+                , Node.empty <| shaderSlotToTypeAnnotation r.uniformsFields r.uniformsExtensionTypevar
+                , Node.empty <| shaderSlotToTypeAnnotation r.varyingsFields r.varyingsExtensionTypevar
+                ]
+
+
+typeAnnotationBasicsInt : TypeAnnotation
+typeAnnotationBasicsInt =
+    TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Int" )) []
+
+
+typeAnnotationBasicsFloat : TypeAnnotation
+typeAnnotationBasicsFloat =
+    TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Float" )) []
+
+
+typeAnnotationBasicsBool : TypeAnnotation
+typeAnnotationBasicsBool =
+    TypeAnnotation.Typed (Node.empty ( [ "Basics" ], "Bool" )) []
+
+
+typeAnnotationCharChar : TypeAnnotation
+typeAnnotationCharChar =
+    TypeAnnotation.Typed (Node.empty ( [ "Char" ], "Char" )) []
+
+
+typeAnnotationStringString : TypeAnnotation
+typeAnnotationStringString =
+    TypeAnnotation.Typed (Node.empty ( [ "String" ], "String" )) []
+
+
+listListNameNode : Node.Node ( ModuleName, String )
+listListNameNode =
+    Node.empty ( [ "List" ], "List" )
 
 
 recordFieldsToRecordDefinition : Dict String Type -> TypeAnnotation.RecordDefinition
 recordFieldsToRecordDefinition fields =
     fields
-        |> Dict.toList
-        |> List.map
-            (\( fieldName, fieldType ) ->
+        |> Dict.foldr
+            (\fieldName fieldType acc ->
                 Node.empty
                     ( Node.empty fieldName
                     , Node.empty (toTypeAnnotation fieldType)
                     )
+                    :: acc
             )
+            []
 
 
 shaderSlotToType : Dict String Type -> Maybe String -> Type

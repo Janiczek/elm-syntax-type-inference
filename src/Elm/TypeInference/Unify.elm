@@ -1,6 +1,7 @@
 module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 
 import Dict exposing (Dict)
+import Dict.Extra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
@@ -245,7 +246,7 @@ expandDeepChildren fuel typeAliases type_ =
                 { package = r.package
                 , moduleId = r.moduleId
                 , name = r.name
-                , args = List.map (expandAliasDeepHelp fuel typeAliases) r.args
+                , args = List.map (\arg -> expandAliasDeepHelp fuel typeAliases arg) r.args
                 }
 
         TypeI.WebGLShader r ->
@@ -357,7 +358,7 @@ zipAliasArgs params args =
 
         ( param :: restParams, argType :: restArgs ) ->
             zipAliasArgs restParams restArgs
-                |> Maybe.map ((::) ( param, argType ))
+                |> Maybe.map (\restZipped -> ( param, argType ) :: restZipped)
 
         _ ->
             Nothing
@@ -413,7 +414,7 @@ collapseNamedShader : TypeAliases -> MonoType -> MonoType
 collapseNamedShader typeAliases type_ =
     case type_ of
         UserDefinedType ut ->
-            case TypeI.collapsePrimitive ut.package ut.moduleId ut.name (List.map (expandAlias typeAliases) ut.args) of
+            case TypeI.collapsePrimitive ut.package ut.moduleId ut.name (List.map (\arg -> expandAlias typeAliases arg) ut.args) of
                 Just collapsed ->
                     collapsed
 
@@ -958,8 +959,10 @@ bind cfg typeVar type_ =
                                     ( Generated freshId, m )
                             in
                             State.modifySubst
-                                (SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                    >> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                                (\subst ->
+                                    subst
+                                        |> SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                        |> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
                                 )
 
             _ ->
@@ -1176,7 +1179,7 @@ occursCheck typeVar type_ =
     let
         inFields : Dict VarName MonoType -> Bool
         inFields fields =
-            List.any (occursCheck typeVar) (Dict.values fields)
+            Dict.Extra.any (\_ valueType -> occursCheck typeVar valueType) fields
     in
     case type_ of
         TypeVar var ->
@@ -1221,7 +1224,7 @@ occursCheck typeVar type_ =
             occursCheck typeVar r.extensionTypevar || inFields r.fields
 
         UserDefinedType r ->
-            List.any (occursCheck typeVar) r.args
+            List.any (\arg -> occursCheck typeVar arg) r.args
 
         WebGLShader r ->
             occursCheck typeVar r.attributesExtension

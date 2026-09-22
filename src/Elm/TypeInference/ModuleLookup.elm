@@ -157,7 +157,7 @@ addName moduleId packageName name acc =
 ownersOf : NameIndex -> ModuleId -> VarName -> List PackageName
 ownersOf index moduleId name =
     Dict.get moduleId index
-        |> Maybe.andThen (Dict.get name)
+        |> Maybe.andThen (\vars -> Dict.get name vars)
         |> Maybe.withDefault []
 
 
@@ -266,7 +266,7 @@ resolveOperatorFunction moduleMapping modules operatorModuleId operator =
 
                 Just functionName ->
                     moduleOfVar moduleMapping emptyIndex modules operatorModule Nothing functionName
-                        |> Result.map (Maybe.map (\( _, functionModuleId ) -> ( functionModuleId, functionName )))
+                        |> Result.map (\mod -> mod |> Maybe.map (\( _, functionModuleId ) -> ( functionModuleId, functionName )))
 
 
 unqualifiedVarInThisModule :
@@ -291,21 +291,35 @@ unqualifiedVarOutsideThisModule :
     -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
 unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName =
     Result.Extra.combineMap
-        (\import_ -> explicitImportDefinesValue moduleMapping index modules import_ varName)
-        (List.filter (\import_ -> ModuleIndex.importCouldExposeValue import_ varName) thisModule.imports)
+        (\import_ ->
+            if ModuleIndex.importCouldExposeValue import_ varName then
+                explicitImportDefinesValue moduleMapping index modules import_ varName
+
+            else
+                Ok Nothing
+        )
+        thisModule.imports
         |> Result.andThen
-            (\explicitMatches ->
+            (\explicitMaybeMatches ->
                 let
                     home : ModuleId
                     home =
                         ImplicitImports.implicitValueHomeId varName
                 in
                 dependencyModuleDefines moduleMapping index home varName
-                    |> Result.map (Maybe.map (\package -> ( package, home )))
                     |> Result.map
-                        (\implicitMatch ->
-                            List.filterMap identity explicitMatches
-                                ++ List.filterMap identity [ implicitMatch ]
+                        (\maybePackage ->
+                            let
+                                explicitMatches : List ( PackageName, ModuleId )
+                                explicitMatches =
+                                    List.filterMap identity explicitMaybeMatches
+                            in
+                            case maybePackage |> Maybe.map (\package -> ( package, home )) of
+                                Nothing ->
+                                    explicitMatches
+
+                                Just implicitMatch ->
+                                    explicitMatches ++ [ implicitMatch ]
                         )
             )
         |> Result.andThen
@@ -361,12 +375,18 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
 
         ModuleIndex.ExposesAll ->
             dependencyModuleDefines moduleMapping (Index idx) import_.moduleId varName
-                |> Result.map (Maybe.map (\package -> ( package, import_.moduleId )))
+                |> Result.map
+                    (\maybePackage ->
+                        maybePackage |> Maybe.map (\package -> ( package, import_.moduleId ))
+                    )
 
         ModuleIndex.ExposesExplicit e ->
             if Set.member varName e.values then
                 dependencyModuleDefines moduleMapping (Index idx) import_.moduleId varName
-                    |> Result.map (Maybe.map (\package -> ( package, import_.moduleId )))
+                    |> Result.map
+                        (\maybePackage ->
+                            maybePackage |> Maybe.map (\package -> ( package, import_.moduleId ))
+                        )
 
             else if not (couldBeConstructorName varName) then
                 Ok Nothing
@@ -385,7 +405,7 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
                     viaOpenUnion =
                         case
                             Dict.get import_.moduleId idx.ctorParents
-                                |> Maybe.andThen (Dict.get varName)
+                                |> Maybe.andThen (\p -> Dict.get varName p)
                         of
                             Just parent ->
                                 Set.member parent e.openTypes
@@ -395,7 +415,10 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
                 in
                 if viaRecordAlias || viaOpenUnion then
                     dependencyModuleDefines moduleMapping (Index idx) import_.moduleId varName
-                        |> Result.map (Maybe.map (\package -> ( package, import_.moduleId )))
+                        |> Result.map
+                            (\maybePackage ->
+                                maybePackage |> Maybe.map (\package -> ( package, import_.moduleId ))
+                            )
 
                 else
                     Ok Nothing
@@ -488,7 +511,10 @@ qualifiedModuleDefines moduleMapping index modules moduleId varName =
 
         Nothing ->
             dependencyModuleDefines moduleMapping index moduleId varName
-                |> Result.map (Maybe.map (\package -> ( package, moduleId )))
+                |> Result.map
+                    (\maybePackage ->
+                        maybePackage |> Maybe.map (\package -> ( package, moduleId ))
+                    )
 
 
 qualifiedModuleDefinesByName :
@@ -582,9 +608,12 @@ isRecordAlias alias_ =
 
 dependencyModuleDefinesType : Index -> ModuleId -> VarName -> Maybe ( PackageName, ModuleId )
 dependencyModuleDefinesType (Index index) moduleId typeName =
-    ownersOf index.types moduleId typeName
-        |> List.head
-        |> Maybe.map (\packageName -> ( packageName, moduleId ))
+    case ownersOf index.types moduleId typeName of
+        [] ->
+            Nothing
+
+        packageName :: _ ->
+            Just ( packageName, moduleId )
 
 
 implicitTypeModule : ModuleName -> VarName -> Maybe ( PackageName, ModuleId )
@@ -594,7 +623,7 @@ implicitTypeModule qualifier typeName =
 
     else
         ImplicitImports.moduleExposingTypeId typeName
-            |> Maybe.map (Tuple.pair ImplicitImports.elmCorePackage)
+            |> Maybe.map (\id -> ( ImplicitImports.elmCorePackage, id ))
 
 
 {-| A qualifier like `Parser.` can mean two different modules at once:
@@ -761,8 +790,8 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
         |> Result.map
             (\resolved ->
                 case resolved of
-                    Just found ->
-                        Just found
+                    (Just _) as justFound ->
+                        justFound
 
                     Nothing ->
                         implicitTypeModule qualifier typeName
@@ -777,11 +806,11 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                         let
                             defaultId : Result ResolverAmbiguity ModuleId
                             defaultId =
-                                case candidates |> List.head of
-                                    Just head ->
+                                case candidates of
+                                    head :: _ ->
                                         Ok head
 
-                                    Nothing ->
+                                    [] ->
                                         if List.isEmpty qualifier then
                                             Ok thisModule.moduleId
 

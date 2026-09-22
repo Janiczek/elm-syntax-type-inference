@@ -35,7 +35,7 @@ solveGroup cfg members =
     State.do
         (State.withDeeperLetRank
             (State.do
-                (State.traverse
+                (State.traverseUnit
                     (\member ->
                         State.do (State.setIdToCurrentLetRank member.id) <| \() ->
                         case member.annotation of
@@ -48,7 +48,7 @@ solveGroup cfg members =
                     )
                     members
                 )
-             <| \_ ->
+             <| \() ->
              State.do (State.traverse .equations members) <| \eqLists ->
              State.do
                  (eqLists
@@ -61,21 +61,17 @@ solveGroup cfg members =
             )
         )
     <| \() ->
-    State.do
-        (State.traverse
-            (\member ->
-                case member.annotation of
-                    Just _ ->
-                        State.pure ()
+    State.traverseUnit
+        (\member ->
+            case member.annotation of
+                Just _ ->
+                    State.pure ()
 
-                    Nothing ->
-                        State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
-                        member.install scheme
-            )
-            members
+                Nothing ->
+                    State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
+                    member.install scheme
         )
-    <| \_ ->
-    State.pure ()
+        members
 
 
 {-| A declaration body must be at least as general as its annotation.
@@ -92,8 +88,7 @@ general.
 -}
 checkAnnotations : UnifyConfig -> List Member -> StateM ()
 checkAnnotations cfg members =
-    State.traverse (checkOne cfg) members
-        |> State.map (always ())
+    State.traverseUnit (\member -> checkOne cfg member) members
 
 
 checkOne : UnifyConfig -> Member -> StateM ()
