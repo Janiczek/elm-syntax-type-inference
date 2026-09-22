@@ -46,7 +46,7 @@ unifyManyHelp : UnifyConfig -> List ( MonoType, MonoType ) -> State.State -> ( R
 unifyManyHelp cfg eqs state =
     case eqs of
         [] ->
-            ( Ok (), state )
+            ( State.okUnit, state )
 
         ( t1, t2 ) :: rest ->
             let

@@ -26,6 +26,7 @@ module Elm.TypeInference.State exposing
     , map
     , map2
     , modifySubst
+    , okUnit
     , pure
     , pureUnit
     , run
@@ -115,6 +116,8 @@ pureUnit =
     \s -> ( okUnit, s )
 
 
+{-| Prefer over `Ok ()` to not construct new instances of it again and again
+-}
 okUnit : Result error ()
 okUnit =
     Ok ()
@@ -245,7 +248,7 @@ traverseUnitHelp : (a -> StateM ()) -> List a -> State -> ( Result Error (), Sta
 traverseUnitHelp f list state =
     case list of
         [] ->
-            ( Ok (), state )
+            ( okUnit, state )
 
         x :: rest ->
             case f x state of
@@ -263,7 +266,7 @@ get =
 
 modify : (State -> State) -> StateM ()
 modify fn =
-    \state -> ( Ok (), fn state )
+    \state -> ( okUnit, fn state )
 
 
 empty : State
