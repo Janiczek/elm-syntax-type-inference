@@ -390,25 +390,27 @@ inferExpr ctx exprNode =
         UnitExpr ->
             finish [ ( type_, Unit, "Unit" ) ]
 
-        Application [] ->
-            stateErrorImpossibleExpr ctx exprNode
+        Application application ->
+            case application of
+                [] ->
+                    stateErrorImpossibleExpr ctx exprNode
 
-        Application (fnNode :: argNodes) ->
-            State.do State.getNextIdAndTick <| \resultId ->
-            State.do (inferExpr ctx fnNode) <| \( fnId, fnEqs ) ->
-            State.do (inferMany (\arg -> inferExpr ctx arg) argNodes) <| \( argIds, argEqs ) ->
-            finishEqns <|
-                TypeEquation.append fnEqs
-                    (TypeEquation.append argEqs
-                        (TypeEquation.batch
-                            [ ( type_, TypeI.id_ resultId, "Application = its result" )
-                            , ( TypeI.id_ fnId
-                              , functionType argIds resultId
-                              , "Application: first is fn"
-                              )
-                            ]
-                        )
-                    )
+                fnNode :: argNodes ->
+                    State.do State.getNextIdAndTick <| \resultId ->
+                    State.do (inferExpr ctx fnNode) <| \( fnId, fnEqs ) ->
+                    State.do (inferMany (\arg -> inferExpr ctx arg) argNodes) <| \( argIds, argEqs ) ->
+                    finishEqns <|
+                        TypeEquation.append fnEqs
+                            (TypeEquation.append argEqs
+                                (TypeEquation.batch
+                                    [ ( type_, TypeI.id_ resultId, "Application = its result" )
+                                    , ( TypeI.id_ fnId
+                                      , functionType argIds resultId
+                                      , "Application: first is fn"
+                                      )
+                                    ]
+                                )
+                            )
 
         OperatorApplication operator _ e1 e2 ->
             State.do State.getNextIdAndTick <| \resultId ->
