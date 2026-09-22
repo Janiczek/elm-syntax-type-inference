@@ -1138,32 +1138,25 @@ collectAnnotationNames annoMono inferredMono acc =
 
 collectRecordFields : Dict VarName MonoType -> Dict VarName MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
 collectRecordFields fields1 fields2 acc =
-    if Dict.size fields1 /= Dict.size fields2 then
-        Nothing
-
-    else
-        Dict.toList fields1
-            |> collectFieldList fields2 acc
-
-
-collectFieldList : Dict VarName MonoType -> Dict Int TypeVar -> List ( VarName, MonoType ) -> Maybe (Dict Int TypeVar)
-collectFieldList fields2 acc remaining =
-    case remaining of
-        [] ->
-            Just acc
-
-        ( name, annoField ) :: rest ->
-            case Dict.get name fields2 of
+    Dict.merge
+        (\_ _ _ -> Nothing)
+        (\_ annoField inferredField maybeAccAcrossFields ->
+            case maybeAccAcrossFields of
                 Nothing ->
                     Nothing
 
-                Just inferredField ->
-                    case collectAnnotationNames annoField inferredField acc of
+                Just accAcrossFields ->
+                    case collectAnnotationNames annoField inferredField accAcrossFields of
                         Nothing ->
                             Nothing
 
                         Just acc1 ->
-                            collectFieldList fields2 acc1 rest
+                            Just acc1
+        )
+        (\_ _ _ -> Nothing)
+        fields1
+        fields2
+        (Just acc)
 
 
 collectAnnotationArgs : List MonoType -> List MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
