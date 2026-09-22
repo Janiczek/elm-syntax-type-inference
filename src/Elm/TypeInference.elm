@@ -634,12 +634,8 @@ inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex fi
         ctx =
             moduleCtx currentPackage depEnv moduleMapping importedInterfaces thisIndex
     in
-    (State.do (gatherTypeAliases ctx file) <| \ownAliases ->
+    (State.do (gatherTypeAliases ctx file) <| \outgoingAliases ->
     let
-        outgoingAliases : Dict GlobalKey TypeAlias
-        outgoingAliases =
-            Dict.union ownAliases ctx.inheritedAliases
-
         typeAliases : Dict GlobalKey TypeAlias
         typeAliases =
             Dict.union outgoingAliases ctx.depTypeAliases
@@ -916,11 +912,11 @@ gatherTypeAliases ctx file =
                     _ ->
                         State.pure Nothing
             )
-        |> State.map maybeListToDict
+        |> State.map (\list -> maybeListToDict list ctx.inheritedAliases)
 
 
-maybeListToDict : List (Maybe ( comparable, v )) -> Dict comparable v
-maybeListToDict list =
+maybeListToDict : List (Maybe ( comparable, v )) -> Dict comparable v -> Dict comparable v
+maybeListToDict list initialDict =
     List.foldl
         (\maybe dict ->
             case maybe of
@@ -930,7 +926,7 @@ maybeListToDict list =
                 Just ( typeAliasKey, typeAlias ) ->
                     Dict.insert typeAliasKey typeAlias dict
         )
-        Dict.empty
+        initialDict
         list
 
 
