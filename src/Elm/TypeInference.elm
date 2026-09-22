@@ -422,14 +422,14 @@ addFile file (Project p) =
                 oldImportIds =
                     case Dict.get id p.modulesById of
                         Just old ->
-                            Set.fromList (List.map .moduleId old.index.imports)
+                            old.index.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
 
                         Nothing ->
                             Set.empty
 
                 newImportIds : Set ModuleId
                 newImportIds =
-                    Set.fromList (List.map .moduleId newIndex.imports)
+                    newIndex.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
 
                 importedBy1 : Dict ModuleId (Set ModuleId)
                 importedBy1 =
