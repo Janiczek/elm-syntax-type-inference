@@ -383,8 +383,8 @@ setIdLetRank =
 
 
 letRankOf : TypeVar -> SubstitutionMap -> LetRank
-letRankOf var store =
-    case Tuple.first var of
+letRankOf ( var, _ ) store =
+    case var of
         TypeVar.Generated id ->
             Array.get id store.letRanks
                 |> Maybe.withDefault 0
@@ -394,8 +394,8 @@ letRankOf var store =
 
 
 setVarLetRank : TypeVar -> LetRank -> SubstitutionMap -> SubstitutionMap
-setVarLetRank var letRank store =
-    case Tuple.first var of
+setVarLetRank ( var, _ ) letRank store =
+    case var of
         TypeVar.Generated id ->
             { letRanks = arraySetGrowing 0 id letRank store.letRanks
             , slotsGen = store.slotsGen
