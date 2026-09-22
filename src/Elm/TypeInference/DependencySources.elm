@@ -125,6 +125,10 @@ neededSources deps sources =
         |> Dict.foldr
             (\package pkg needsSourcesAcc ->
                 let
+                    supplied : Set String
+                    supplied =
+                        suppliedModuleNames package sources
+
                     unknownModules : List String
                     unknownModules =
                         docsModuleRefs pkg.modules
@@ -138,10 +142,6 @@ neededSources deps sources =
                                 )
                                 Set.empty
                             |> Set.toList
-
-                    supplied : Set String
-                    supplied =
-                        suppliedModuleNames package sources
 
                     remaining : List String
                     remaining =
