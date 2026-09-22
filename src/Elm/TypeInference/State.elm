@@ -209,8 +209,8 @@ foldlHelp reduce acc list state =
 
         x :: rest ->
             case reduce x acc state of
-                ( Err err, newState ) ->
-                    ( Err err, newState )
+                ( (Err _) as err, newState ) ->
+                    ( err, newState )
 
                 ( Ok b, newState ) ->
                     foldlHelp reduce b rest newState
@@ -252,8 +252,8 @@ traverseUnitHelp f list state =
 
         x :: rest ->
             case f x state of
-                ( Err err, newState ) ->
-                    ( Err err, newState )
+                ( (Err _) as err, newState ) ->
+                    ( err, newState )
 
                 ( Ok (), newState ) ->
                     traverseUnitHelp f rest newState
@@ -352,7 +352,7 @@ withDeeperLetRank action =
 setIdToCurrentLetRank : Id -> StateM ()
 setIdToCurrentLetRank id =
     do get <| \state ->
-    modifySubst (SubstitutionMap.setIdLetRank id state.letRank)
+    modifySubst (\subst -> subst |> SubstitutionMap.setIdLetRank id state.letRank)
 
 
 
@@ -402,8 +402,7 @@ aliasNodeId range theId =
 
 getSubst : StateM SubstitutionMap
 getSubst =
-    get
-        |> map .subst
+    \state -> ( Ok state.subst, state )
 
 
 modifySubst : (SubstitutionMap -> SubstitutionMap) -> StateM ()
@@ -424,34 +423,33 @@ modifySubst fn =
 Remember the substitution map advancement (newly discovered ground resolutions,
 or path compression) into the state.
 -}
-substituteMono : MonoType -> StateM MonoType
-substituteMono monoType =
-    \state ->
-        let
-            ( monoType_, _, subst1 ) =
-                SubstitutionMap.substituteMono state.subst monoType
-        in
-        ( Ok monoType_
-        , { nextId = state.nextId
-          , nodeIds = state.nodeIds
-          , lexicalEnv = state.lexicalEnv
-          , globalEnv = state.globalEnv
-          , subst = subst1
-          , letRank = state.letRank
-          }
-        )
+substituteMono : MonoType -> State -> ( MonoType, State )
+substituteMono monoType state =
+    let
+        ( monoType_, _, subst1 ) =
+            SubstitutionMap.substituteMono state.subst monoType
+    in
+    ( monoType_
+    , { nextId = state.nextId
+      , nodeIds = state.nodeIds
+      , lexicalEnv = state.lexicalEnv
+      , globalEnv = state.globalEnv
+      , subst = subst1
+      , letRank = state.letRank
+      }
+    )
 
 
 {-| Same as `substituteMono`, but for a whole `Type` scheme.
 -}
-substitute : Type -> StateM Type
+substitute : Type -> State -> ( Type, State )
 substitute type_ =
     \state ->
         let
             ( type__, subst1 ) =
                 SubstitutionMap.substitute state.subst type_
         in
-        ( Ok type__
+        ( type__
         , { nextId = state.nextId
           , nodeIds = state.nodeIds
           , lexicalEnv = state.lexicalEnv
@@ -466,29 +464,20 @@ substitute type_ =
 -- LEXICAL ENV
 
 
-getLexicalEnv : StateM (Dict VarName Type)
-getLexicalEnv =
-    get
-        |> map .lexicalEnv
-
-
-modifyLexicalEnv : (Dict VarName Type -> Dict VarName Type) -> StateM ()
-modifyLexicalEnv fn =
-    modify
-        (\state ->
-            { nextId = state.nextId
-            , nodeIds = state.nodeIds
-            , lexicalEnv = fn state.lexicalEnv
-            , globalEnv = state.globalEnv
-            , subst = state.subst
-            , letRank = state.letRank
-            }
-        )
+stateAddBinding : VarName -> Type -> State -> State
+stateAddBinding var type_ state =
+    { nextId = state.nextId
+    , nodeIds = state.nodeIds
+    , lexicalEnv = state.lexicalEnv |> Dict.insert var type_
+    , globalEnv = state.globalEnv
+    , subst = state.subst
+    , letRank = state.letRank
+    }
 
 
 addBinding : VarName -> Type -> StateM ()
 addBinding var type_ =
-    modifyLexicalEnv (Dict.insert var type_)
+    modify (\state -> state |> stateAddBinding var type_)
 
 
 {-| Run `action`, then restore `lexicalEnv` back, but update the rest.
@@ -514,8 +503,10 @@ withScopedEnv action =
 
 existsInEnv : VarName -> StateM Bool
 existsInEnv varName =
-    getLexicalEnv
-        |> map (Dict.member varName)
+    \state ->
+        ( Ok (Dict.member varName state.lexicalEnv)
+        , state
+        )
 
 
 {-| Look up a var in lexical env (let..in var, lambda arg, ...), substituting
@@ -523,22 +514,27 @@ all typevars that we can.
 -}
 lookupEnv : FullModuleName -> VarName -> StateM MonoType
 lookupEnv thisModule var =
-    do getLexicalEnv <| \env ->
-    case Dict.get var env of
-        Nothing ->
-            error
-                { moduleName = FullModuleName.toModuleName thisModule
-                , declarationNames = []
-                , details =
-                    VarNotFound
-                        { usedIn = FullModuleName.toModuleName thisModule
-                        , varName = var
-                        }
-                }
+    \state0 ->
+        case Dict.get var state0.lexicalEnv of
+            Nothing ->
+                ( Err
+                    { moduleName = FullModuleName.toModuleName thisModule
+                    , declarationNames = []
+                    , details =
+                        VarNotFound
+                            { usedIn = FullModuleName.toModuleName thisModule
+                            , varName = var
+                            }
+                    }
+                , state0
+                )
 
-        Just type_ ->
-            do (substitute type_) <| \substituted ->
-            instantiate substituted
+            Just type_ ->
+                let
+                    ( substituted, state1 ) =
+                        substitute type_ state0
+                in
+                instantiate substituted state1
 
 
 
@@ -547,8 +543,7 @@ lookupEnv thisModule var =
 
 getGlobalEnv : StateM (Dict GlobalKey Type)
 getGlobalEnv =
-    get
-        |> map .globalEnv
+    \state -> ( Ok state.globalEnv, state )
 
 
 addGlobalBinding : GlobalKey -> Type -> StateM ()
@@ -569,26 +564,28 @@ addGlobalBinding key type_ =
 -}
 lookupGlobalEnv : ModuleIds.Mapping -> PackageName -> ModuleId -> VarName -> StateM MonoType
 lookupGlobalEnv moduleMapping package moduleId var =
-    do getGlobalEnv <| \env ->
-    case Dict.get ( moduleId, package, var ) env of
-        Nothing ->
-            let
-                moduleName : List String
-                moduleName =
-                    moduleIdToModuleName moduleMapping moduleId
-            in
-            error
-                { moduleName = moduleName
-                , declarationNames = []
-                , details =
-                    VarNotFound
-                        { usedIn = moduleName
-                        , varName = var
-                        }
-                }
+    \state ->
+        case Dict.get ( moduleId, package, var ) state.globalEnv of
+            Nothing ->
+                let
+                    moduleName : List String
+                    moduleName =
+                        moduleIdToModuleName moduleMapping moduleId
+                in
+                ( Err
+                    { moduleName = moduleName
+                    , declarationNames = []
+                    , details =
+                        VarNotFound
+                            { usedIn = moduleName
+                            , varName = var
+                            }
+                    }
+                , state
+                )
 
-        Just type_ ->
-            instantiate type_
+            Just type_ ->
+                instantiate type_ state
 
 
 moduleIdToModuleName : ModuleIds.Mapping -> ModuleId -> List String
@@ -649,17 +646,19 @@ instantiate (Forall boundVars monoType) =
 
 generalize : MonoType -> StateM Type
 generalize monoType =
-    do (substituteMono monoType) <| \substitutedMono ->
-    do get <| \state ->
-    let
-        boundIds : List TypeVar
-        boundIds =
-            TypeI.monoTypeVars substitutedMono
-                |> VarSet.toList
-                |> List.filter
-                    (\var -> SubstitutionMap.letRankOf var state.subst > state.letRank)
-    in
-    pure (Forall boundIds substitutedMono)
+    \state0 ->
+        let
+            ( substitutedMono, state1 ) =
+                substituteMono monoType state0
+
+            boundIds : List TypeVar
+            boundIds =
+                TypeI.monoTypeVars substitutedMono
+                    |> VarSet.toList
+                    |> List.filter
+                        (\var -> SubstitutionMap.letRankOf var state1.subst > state1.letRank)
+        in
+        ( Ok (Forall boundIds substitutedMono), state1 )
 
 
 {-| Generalize a lexical binding in place (for `let` destructurings).
@@ -669,11 +668,20 @@ Each name gets its own scheme - they are independent.
 -}
 generalizeBinding : VarName -> StateM ()
 generalizeBinding var =
-    do get <| \state ->
-    case Dict.get var state.lexicalEnv of
-        Nothing ->
-            pureUnit
+    \state0 ->
+        case Dict.get var state0.lexicalEnv of
+            Nothing ->
+                ( okUnit, state0 )
 
-        Just (Forall _ mono) ->
-            do (generalize mono) <| \scheme ->
-            addBinding var scheme
+            Just (Forall _ mono) ->
+                let
+                    ( schemeResult, state1 ) =
+                        generalize mono state0
+                in
+                case schemeResult of
+                    Err err ->
+                        -- impossible
+                        ( Err err, state1 )
+
+                    Ok scheme ->
+                        ( okUnit, stateAddBinding var scheme state1 )
