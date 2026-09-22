@@ -414,11 +414,6 @@ roots.
 -}
 lowerLetRanksTo : LetRank -> MonoType -> SubstitutionMap -> SubstitutionMap
 lowerLetRanksTo targetLetRank type_ store =
-    let
-        inFields : Dict VarName MonoType -> SubstitutionMap -> SubstitutionMap
-        inFields fields acc =
-            Dict.foldl (\_ fieldType inner -> lowerLetRanksTo targetLetRank fieldType inner) acc fields
-    in
     case type_ of
         TypeVar var ->
             if letRankOf var store > targetLetRank then
@@ -465,24 +460,29 @@ lowerLetRanksTo targetLetRank type_ store =
                 |> lowerLetRanksTo targetLetRank t3
 
         Record { fields } ->
-            inFields fields store
+            lowerLetRanksInFieldsTo targetLetRank fields store
 
         ExtensibleRecord r ->
             store
                 |> lowerLetRanksTo targetLetRank r.extensionTypevar
-                |> inFields r.fields
+                |> lowerLetRanksInFieldsTo targetLetRank r.fields
 
         UserDefinedType r ->
-            List.foldl (lowerLetRanksTo targetLetRank) store r.args
+            List.foldl (\arg storeAcc -> lowerLetRanksTo targetLetRank arg storeAcc) store r.args
 
         WebGLShader r ->
             store
-                |> inFields r.attributes
+                |> lowerLetRanksInFieldsTo targetLetRank r.attributes
                 |> lowerLetRanksTo targetLetRank r.attributesExtension
-                |> inFields r.uniforms
+                |> lowerLetRanksInFieldsTo targetLetRank r.uniforms
                 |> lowerLetRanksTo targetLetRank r.uniformsExtension
-                |> inFields r.varyings
+                |> lowerLetRanksInFieldsTo targetLetRank r.varyings
                 |> lowerLetRanksTo targetLetRank r.varyingsExtension
+
+
+lowerLetRanksInFieldsTo : LetRank -> Dict VarName MonoType -> SubstitutionMap -> SubstitutionMap
+lowerLetRanksInFieldsTo targetLetRank fields store =
+    Dict.foldl (\_ fieldType acc -> lowerLetRanksTo targetLetRank fieldType acc) store fields
 
 
 
