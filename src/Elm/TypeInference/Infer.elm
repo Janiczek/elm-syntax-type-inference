@@ -378,10 +378,6 @@ inferExpr ctx exprNode =
         type_ =
             TypeI.id_ exprId
 
-        f : Node Expression -> StateM Inferred
-        f =
-            inferExpr ctx
-
         finish : List TypeEquation -> StateM Inferred
         finish eqs =
             State.pure ( exprId, TypeEquation.batch eqs )
@@ -403,8 +399,8 @@ inferExpr ctx exprNode =
 
         Application (fnNode :: argNodes) ->
             State.do State.getNextIdAndTick <| \resultId ->
-            State.do (f fnNode) <| \( fnId, fnEqs ) ->
-            State.do (inferMany f argNodes) <| \( argIds, argEqs ) ->
+            State.do (inferExpr ctx fnNode) <| \( fnId, fnEqs ) ->
+            State.do (inferMany (\arg -> inferExpr ctx arg) argNodes) <| \( argIds, argEqs ) ->
             finishEqns <|
                 TypeEquation.append fnEqs
                     (TypeEquation.append argEqs
@@ -420,8 +416,8 @@ inferExpr ctx exprNode =
 
         OperatorApplication operator _ e1 e2 ->
             State.do State.getNextIdAndTick <| \resultId ->
-            State.do (f e1) <| \( e1Id, e1Eqs ) ->
-            State.do (f e2) <| \( e2Id, e2Eqs ) ->
+            State.do (inferExpr ctx e1) <| \( e1Id, e1Eqs ) ->
+            State.do (inferExpr ctx e2) <| \( e2Id, e2Eqs ) ->
             State.do (lookupVarOrOperator ctx Nothing operator) <| \operatorType ->
             finishEqns <|
                 TypeEquation.append e1Eqs
@@ -474,9 +470,9 @@ inferExpr ctx exprNode =
                         State.error (toError ctx details)
 
         IfBlock e1 e2 e3 ->
-            State.do (f e1) <| \( id1, eqs1 ) ->
-            State.do (f e2) <| \( id2, eqs2 ) ->
-            State.do (f e3) <| \( id3, eqs3 ) ->
+            State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
+            State.do (inferExpr ctx e2) <| \( id2, eqs2 ) ->
+            State.do (inferExpr ctx e3) <| \( id3, eqs3 ) ->
             finishEqns <|
                 TypeEquation.append eqs1
                     (TypeEquation.append eqs2
@@ -510,7 +506,7 @@ inferExpr ctx exprNode =
 
         Negation e1 ->
             State.do State.getNextIdAndTick <| \numberId ->
-            State.do (f e1) <| \( id1, eqs1 ) ->
+            State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
             finishEqns <|
                 TypeEquation.cons
                     ( type_, TypeI.id_ id1, "Negation = inner" )
@@ -526,7 +522,7 @@ inferExpr ctx exprNode =
             finish [ ( type_, Char, "Char" ) ]
 
         TupledExpression exprNodes ->
-            State.do (inferMany f exprNodes) <| \( ids, eqs ) ->
+            State.do (inferMany (\part -> inferExpr ctx part) exprNodes) <| \( ids, eqs ) ->
             case ids of
                 [ id1, id2 ] ->
                     finishEqns <|
@@ -552,13 +548,13 @@ inferExpr ctx exprNode =
                     impossibleExpr
 
         ParenthesizedExpression e1 ->
-            State.do (f e1) <| \( id1, eqs1 ) ->
+            State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
             finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized = inner" ) eqs1
 
         LetExpression { declarations, expression } ->
             State.withScopedEnv <|
                 (State.do (solveLetDeclarations ctx declarations) <| \() ->
-                State.do (f expression) <| \( bodyId, bodyEqs ) ->
+                State.do (inferExpr ctx expression) <| \( bodyId, bodyEqs ) ->
                 finishEqns <|
                     TypeEquation.cons
                         ( type_, TypeI.id_ bodyId, "Let = its body" )
@@ -566,13 +562,13 @@ inferExpr ctx exprNode =
                 )
 
         CaseExpression { expression, cases } ->
-            State.do (f expression) <| \( scrutineeId, scrutineeEqs ) ->
+            State.do (inferExpr ctx expression) <| \( scrutineeId, scrutineeEqs ) ->
             State.do
                 (State.traverse
                     (\( patternNode, bodyNode ) ->
                         State.withScopedEnv <|
                             (State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
-                            State.do (f bodyNode) <| \( bodyId, bodyEqs ) ->
+                            State.do (inferExpr ctx bodyNode) <| \( bodyId, bodyEqs ) ->
                             State.pure ( ( patternId, bodyId ), TypeEquation.append patternEqs bodyEqs )
                             )
                     )
@@ -617,7 +613,7 @@ inferExpr ctx exprNode =
         LambdaExpression { args, expression } ->
             State.withScopedEnv <|
                 (State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, argEqs ) ->
-                State.do (f expression) <| \( bodyId, bodyEqs ) ->
+                State.do (inferExpr ctx expression) <| \( bodyId, bodyEqs ) ->
                 finishEqns <|
                     TypeEquation.append argEqs
                         (TypeEquation.append bodyEqs
@@ -642,7 +638,7 @@ inferExpr ctx exprNode =
                     )
 
         ListExpr exprNodes ->
-            State.do (inferMany f exprNodes) <| \( ids, eqs ) ->
+            State.do (inferMany (\el -> inferExpr ctx el) exprNodes) <| \( ids, eqs ) ->
             State.do State.getNextIdAndTick <| \listItemId ->
             finishEqns <|
                 TypeEquation.append eqs
@@ -664,7 +660,7 @@ inferExpr ctx exprNode =
                     )
 
         RecordAccess recordNode fieldNameNode ->
-            State.do (f recordNode) <| \( recordNodeId, recordEqs ) ->
+            State.do (inferExpr ctx recordNode) <| \( recordNodeId, recordEqs ) ->
             State.do State.getNextIdAndTick <| \extensibleRecordId ->
             State.do State.getNextIdAndTick <| \resultId ->
             -- The field-name node has the field's type, which is the type of
