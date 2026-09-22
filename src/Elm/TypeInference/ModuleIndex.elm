@@ -346,9 +346,12 @@ exposedValues exposing_ decls =
                                         acc
 
                                     Just _ ->
-                                        Dict.get exposedType.name decls.unionConstructors
-                                            |> Maybe.withDefault []
-                                            |> List.foldl Set.insert acc
+                                        case Dict.get exposedType.name decls.unionConstructors of
+                                            Nothing ->
+                                                acc
+
+                                            Just variantNames ->
+                                                variantNames |> List.foldl Set.insert acc
                     )
                     Set.empty
 
