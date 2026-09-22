@@ -100,9 +100,9 @@ project currentPackage depEnv files =
         (DependencyEnv dep) =
             depEnv
 
-        ( modules, moduleMapping, missingModuleName ) =
+        ( modulesReversed, missingModuleName, moduleMapping ) =
             List.foldl
-                (\file ( acc, accModuleMapping, accMissing ) ->
+                (\file ( acc, accMissingModuleName, accModuleMapping ) ->
                     let
                         key : ModuleName
                         key =
@@ -110,7 +110,7 @@ project currentPackage depEnv files =
                     in
                     case FullModuleName.fromModuleName key of
                         Nothing ->
-                            ( acc, accModuleMapping, True )
+                            ( acc, True, accModuleMapping )
 
                         Just _ ->
                             let
@@ -118,18 +118,12 @@ project currentPackage depEnv files =
                                     ModuleIndex.fromFile accModuleMapping file
                             in
                             ( { key = key, index = index, file = file } :: acc
+                            , accMissingModuleName
                             , newModuleMapping
-                            , accMissing
                             )
                 )
-                ( [], dep.moduleMapping, False )
+                ( [], False, dep.moduleMapping )
                 files
-                |> (\( reversed, finalModuleMapping, missing ) ->
-                        ( List.reverse reversed
-                        , finalModuleMapping
-                        , missing
-                        )
-                   )
     in
     if missingModuleName then
         Err
@@ -142,14 +136,14 @@ project currentPackage depEnv files =
         let
             modulesById : Dict ModuleId ProjectModule
             modulesById =
-                modules
+                modulesReversed
                     |> List.foldl
                         (\m acc -> Dict.insert m.index.moduleId m acc)
                         Dict.empty
 
             importedBy : Dict ModuleId (Set ModuleId)
             importedBy =
-                modules
+                modulesReversed
                     |> List.foldl (\m acc -> addReverseEdges m.index acc) Dict.empty
         in
         Ok
