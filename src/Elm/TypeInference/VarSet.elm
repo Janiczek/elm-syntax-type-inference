@@ -110,40 +110,40 @@ insert (( style, super ) as var) s =
 
 toList : List TypeVar -> List TypeVar
 toList order =
-    let
-        go : Set GenKey -> Set NamedKey -> List TypeVar -> List TypeVar -> List TypeVar
-        go seenGen seenNamed remaining acc =
-            case remaining of
-                [] ->
-                    List.reverse acc
+    toListHelp Set.empty Set.empty order []
 
-                (( style, super ) as var) :: rest ->
-                    case style of
-                        Generated theId ->
-                            let
-                                k : GenKey
-                                k =
-                                    genKeyFrom theId super
-                            in
-                            if Set.member k seenGen then
-                                go seenGen seenNamed rest acc
 
-                            else
-                                go (Set.insert k seenGen) seenNamed rest (var :: acc)
+toListHelp : Set GenKey -> Set NamedKey -> List TypeVar -> List TypeVar -> List TypeVar
+toListHelp seenGen seenNamed remaining acc =
+    case remaining of
+        [] ->
+            List.reverse acc
 
-                        Named name ->
-                            let
-                                k : NamedKey
-                                k =
-                                    namedKeyFrom name super
-                            in
-                            if Set.member k seenNamed then
-                                go seenGen seenNamed rest acc
+        (( style, super ) as var) :: rest ->
+            case style of
+                Generated theId ->
+                    let
+                        k : GenKey
+                        k =
+                            genKeyFrom theId super
+                    in
+                    if Set.member k seenGen then
+                        toListHelp seenGen seenNamed rest acc
 
-                            else
-                                go seenGen (Set.insert k seenNamed) rest (var :: acc)
-    in
-    go Set.empty Set.empty order []
+                    else
+                        toListHelp (Set.insert k seenGen) seenNamed rest (var :: acc)
+
+                Named name ->
+                    let
+                        k : NamedKey
+                        k =
+                            namedKeyFrom name super
+                    in
+                    if Set.member k seenNamed then
+                        toListHelp seenGen seenNamed rest acc
+
+                    else
+                        toListHelp seenGen (Set.insert k seenNamed) rest (var :: acc)
 
 
 diff : List TypeVar -> VarSet -> List TypeVar

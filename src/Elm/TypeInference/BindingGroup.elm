@@ -191,24 +191,6 @@ slotTooGeneral :
     -> { extensionTypevar : MonoType, fields : Dict String MonoType }
     -> Bool
 slotTooGeneral annoSlot finalSlot =
-    let
-        collapsedFields : { extensionTypevar : MonoType, fields : Dict String MonoType } -> Dict String MonoType
-        collapsedFields slot =
-            case
-                TypeI.collapseExtensible
-                    { extensionTypevar = slot.extensionTypevar
-                    , fields = slot.fields
-                    }
-            of
-                ExtensibleRecord r ->
-                    r.fields
-
-                Record r ->
-                    r.fields
-
-                _ ->
-                    Dict.empty
-    in
     case annoSlot.extensionTypevar of
         TypeVar _ ->
             if Dict.isEmpty annoSlot.fields then
@@ -219,3 +201,21 @@ slotTooGeneral annoSlot finalSlot =
 
         _ ->
             not (Dict.isEmpty (Dict.diff annoSlot.fields (collapsedFields finalSlot)))
+
+
+collapsedFields : { extensionTypevar : MonoType, fields : Dict String MonoType } -> Dict String MonoType
+collapsedFields slot =
+    case
+        TypeI.collapseExtensible
+            { extensionTypevar = slot.extensionTypevar
+            , fields = slot.fields
+            }
+    of
+        ExtensibleRecord r ->
+            r.fields
+
+        Record r ->
+            r.fields
+
+        _ ->
+            Dict.empty
