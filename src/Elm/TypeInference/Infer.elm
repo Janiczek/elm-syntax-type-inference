@@ -385,17 +385,13 @@ inferExpr ctx exprNode =
         finishEqns : Equations -> StateM Inferred
         finishEqns eqs =
             State.pure ( exprId, eqs )
-
-        impossibleExpr : StateM Inferred
-        impossibleExpr =
-            State.error (toError ctx (ImpossibleExpr exprNode))
     in
     case Node.value exprNode of
         UnitExpr ->
             finish [ ( type_, Unit, "Unit" ) ]
 
         Application [] ->
-            impossibleExpr
+            stateErrorImpossibleExpr ctx exprNode
 
         Application (fnNode :: argNodes) ->
             State.do State.getNextIdAndTick <| \resultId ->
@@ -491,7 +487,7 @@ inferExpr ctx exprNode =
             finish [ ( type_, operatorType, "Prefix operator: is a fn" ) ]
 
         Operator _ ->
-            impossibleExpr
+            stateErrorImpossibleExpr ctx exprNode
 
         Integer _ ->
             State.do State.getNextIdAndTick <| \numberId ->
@@ -545,7 +541,7 @@ inferExpr ctx exprNode =
                             )
 
                 _ ->
-                    impossibleExpr
+                    stateErrorImpossibleExpr ctx exprNode
 
         ParenthesizedExpression e1 ->
             State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
@@ -764,6 +760,11 @@ inferExpr ctx exprNode =
                   , "GLSLExpression: is a shader"
                   )
                 ]
+
+
+stateErrorImpossibleExpr : Ctx -> Node Expression -> StateM Inferred
+stateErrorImpossibleExpr ctx exprNode =
+    State.error (toError ctx (ImpossibleExpr exprNode))
 
 
 inferRecordSetters :
