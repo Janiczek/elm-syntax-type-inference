@@ -57,9 +57,7 @@ referencedModules deps =
     let
         allModules : List Elm.Docs.Module
         allModules =
-            deps
-                |> Dict.values
-                |> List.ExtraExtra.fastConcatMap .modules
+            Dict.foldr (\_ { modules } acc -> List.append modules acc) [] deps
 
         referenced : List String
         referenced =
