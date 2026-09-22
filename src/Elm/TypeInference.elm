@@ -539,7 +539,7 @@ inferOne currentPackage depEnv moduleMapping m acc =
             }
 
         Err err ->
-            { tables = acc.tables
+            { tables = Dict.remove m.key acc.tables
             , errors = Dict.insert m.key err acc.errors
             , interfaces =
                 Dict.insert m.index.moduleId
