@@ -7,6 +7,7 @@ module Elm.Syntax.ModuleName.Extra exposing
     )
 
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import String.ExtraExtra
 
 
 {-|
@@ -60,13 +61,8 @@ dottedToFilePath dotted =
 
 -}
 isSegment : String -> Bool
-isSegment segment =
-    case String.toList segment of
-        first :: _ ->
-            Char.isUpper first
-
-        [] ->
-            False
+isSegment =
+    String.ExtraExtra.firstCharIsUpper
 
 
 {-|

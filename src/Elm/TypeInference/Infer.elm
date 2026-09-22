@@ -43,7 +43,6 @@ import Elm.TypeInference.Type.Internal as TypeI
         )
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations, TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
-import List.ExtraExtra
 import Regex exposing (Regex)
 
 
@@ -241,7 +240,7 @@ aliasSignature : Id -> Maybe (Node Signature) -> StateM ()
 aliasSignature declId maybeSigNode =
     case maybeSigNode of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just sigNode ->
             State.do (State.aliasNodeId (Node.range sigNode) declId) <| \() ->
@@ -251,7 +250,7 @@ aliasSignature declId maybeSigNode =
 inferFnImplementation : Ctx -> Id -> Expression.FunctionImplementation -> StateM Equations
 inferFnImplementation ctx declId impl =
     State.withScopedEnv <|
-        (State.do (inferMany (inferPattern ctx) impl.arguments) <| \( argIds, argEqs ) ->
+        (State.do (inferMany (\arg -> inferPattern ctx arg) impl.arguments) <| \( argIds, argEqs ) ->
         State.do (inferExpr ctx impl.expression) <| \( bodyId, bodyEqs ) ->
         State.pure <|
             TypeEquation.cons
@@ -351,7 +350,9 @@ topLevelMember ctx declNode fn =
         ctx
         declNode
         fn
-        (\varName -> State.addGlobalBinding ( ctx.thisModule.moduleId, "", varName ))
+        (\varName varType ->
+            State.addGlobalBinding ( ctx.thisModule.moduleId, "", varName ) varType
+        )
 
 
 {-| A `let..in` function declaration. Adds a binding to lexical `lexicalEnv`
@@ -377,10 +378,6 @@ inferExpr ctx exprNode =
         type_ =
             TypeI.id_ exprId
 
-        f : Node Expression -> StateM Inferred
-        f =
-            inferExpr ctx
-
         finish : List TypeEquation -> StateM Inferred
         finish eqs =
             State.pure ( exprId, TypeEquation.batch eqs )
@@ -388,39 +385,37 @@ inferExpr ctx exprNode =
         finishEqns : Equations -> StateM Inferred
         finishEqns eqs =
             State.pure ( exprId, eqs )
-
-        impossibleExpr : StateM Inferred
-        impossibleExpr =
-            State.error (toError ctx (ImpossibleExpr exprNode))
     in
     case Node.value exprNode of
         UnitExpr ->
             finish [ ( type_, Unit, "Unit" ) ]
 
-        Application [] ->
-            impossibleExpr
+        Application application ->
+            case application of
+                [] ->
+                    stateErrorImpossibleExpr ctx exprNode
 
-        Application (fnNode :: argNodes) ->
-            State.do State.getNextIdAndTick <| \resultId ->
-            State.do (f fnNode) <| \( fnId, fnEqs ) ->
-            State.do (inferMany f argNodes) <| \( argIds, argEqs ) ->
-            finishEqns <|
-                TypeEquation.append fnEqs
-                    (TypeEquation.append argEqs
-                        (TypeEquation.batch
-                            [ ( type_, TypeI.id_ resultId, "Application = its result" )
-                            , ( TypeI.id_ fnId
-                              , functionType argIds resultId
-                              , "Application: first is fn"
-                              )
-                            ]
-                        )
-                    )
+                fnNode :: argNodes ->
+                    State.do State.getNextIdAndTick <| \resultId ->
+                    State.do (inferExpr ctx fnNode) <| \( fnId, fnEqs ) ->
+                    State.do (inferMany (\arg -> inferExpr ctx arg) argNodes) <| \( argIds, argEqs ) ->
+                    finishEqns <|
+                        TypeEquation.append fnEqs
+                            (TypeEquation.append argEqs
+                                (TypeEquation.batch
+                                    [ ( type_, TypeI.id_ resultId, "Application = its result" )
+                                    , ( TypeI.id_ fnId
+                                      , functionType argIds resultId
+                                      , "Application: first is fn"
+                                      )
+                                    ]
+                                )
+                            )
 
         OperatorApplication operator _ e1 e2 ->
             State.do State.getNextIdAndTick <| \resultId ->
-            State.do (f e1) <| \( e1Id, e1Eqs ) ->
-            State.do (f e2) <| \( e2Id, e2Eqs ) ->
+            State.do (inferExpr ctx e1) <| \( e1Id, e1Eqs ) ->
+            State.do (inferExpr ctx e2) <| \( e2Id, e2Eqs ) ->
             State.do (lookupVarOrOperator ctx Nothing operator) <| \operatorType ->
             finishEqns <|
                 TypeEquation.append e1Eqs
@@ -473,9 +468,9 @@ inferExpr ctx exprNode =
                         State.error (toError ctx details)
 
         IfBlock e1 e2 e3 ->
-            State.do (f e1) <| \( id1, eqs1 ) ->
-            State.do (f e2) <| \( id2, eqs2 ) ->
-            State.do (f e3) <| \( id3, eqs3 ) ->
+            State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
+            State.do (inferExpr ctx e2) <| \( id2, eqs2 ) ->
+            State.do (inferExpr ctx e3) <| \( id3, eqs3 ) ->
             finishEqns <|
                 TypeEquation.append eqs1
                     (TypeEquation.append eqs2
@@ -494,7 +489,7 @@ inferExpr ctx exprNode =
             finish [ ( type_, operatorType, "Prefix operator: is a fn" ) ]
 
         Operator _ ->
-            impossibleExpr
+            stateErrorImpossibleExpr ctx exprNode
 
         Integer _ ->
             State.do State.getNextIdAndTick <| \numberId ->
@@ -509,7 +504,7 @@ inferExpr ctx exprNode =
 
         Negation e1 ->
             State.do State.getNextIdAndTick <| \numberId ->
-            State.do (f e1) <| \( id1, eqs1 ) ->
+            State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
             finishEqns <|
                 TypeEquation.cons
                     ( type_, TypeI.id_ id1, "Negation = inner" )
@@ -525,7 +520,7 @@ inferExpr ctx exprNode =
             finish [ ( type_, Char, "Char" ) ]
 
         TupledExpression exprNodes ->
-            State.do (inferMany f exprNodes) <| \( ids, eqs ) ->
+            State.do (inferMany (\part -> inferExpr ctx part) exprNodes) <| \( ids, eqs ) ->
             case ids of
                 [ id1, id2 ] ->
                     finishEqns <|
@@ -548,16 +543,16 @@ inferExpr ctx exprNode =
                             )
 
                 _ ->
-                    impossibleExpr
+                    stateErrorImpossibleExpr ctx exprNode
 
         ParenthesizedExpression e1 ->
-            State.do (f e1) <| \( id1, eqs1 ) ->
+            State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
             finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized = inner" ) eqs1
 
         LetExpression { declarations, expression } ->
             State.withScopedEnv <|
                 (State.do (solveLetDeclarations ctx declarations) <| \() ->
-                State.do (f expression) <| \( bodyId, bodyEqs ) ->
+                State.do (inferExpr ctx expression) <| \( bodyId, bodyEqs ) ->
                 finishEqns <|
                     TypeEquation.cons
                         ( type_, TypeI.id_ bodyId, "Let = its body" )
@@ -565,13 +560,13 @@ inferExpr ctx exprNode =
                 )
 
         CaseExpression { expression, cases } ->
-            State.do (f expression) <| \( scrutineeId, scrutineeEqs ) ->
+            State.do (inferExpr ctx expression) <| \( scrutineeId, scrutineeEqs ) ->
             State.do
                 (State.traverse
                     (\( patternNode, bodyNode ) ->
                         State.withScopedEnv <|
                             (State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
-                            State.do (f bodyNode) <| \( bodyId, bodyEqs ) ->
+                            State.do (inferExpr ctx bodyNode) <| \( bodyId, bodyEqs ) ->
                             State.pure ( ( patternId, bodyId ), TypeEquation.append patternEqs bodyEqs )
                             )
                     )
@@ -615,8 +610,8 @@ inferExpr ctx exprNode =
 
         LambdaExpression { args, expression } ->
             State.withScopedEnv <|
-                (State.do (inferMany (inferPattern ctx) args) <| \( argIds, argEqs ) ->
-                State.do (f expression) <| \( bodyId, bodyEqs ) ->
+                (State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, argEqs ) ->
+                State.do (inferExpr ctx expression) <| \( bodyId, bodyEqs ) ->
                 finishEqns <|
                     TypeEquation.append argEqs
                         (TypeEquation.append bodyEqs
@@ -641,7 +636,7 @@ inferExpr ctx exprNode =
                     )
 
         ListExpr exprNodes ->
-            State.do (inferMany f exprNodes) <| \( ids, eqs ) ->
+            State.do (inferMany (\el -> inferExpr ctx el) exprNodes) <| \( ids, eqs ) ->
             State.do State.getNextIdAndTick <| \listItemId ->
             finishEqns <|
                 TypeEquation.append eqs
@@ -663,7 +658,7 @@ inferExpr ctx exprNode =
                     )
 
         RecordAccess recordNode fieldNameNode ->
-            State.do (f recordNode) <| \( recordNodeId, recordEqs ) ->
+            State.do (inferExpr ctx recordNode) <| \( recordNodeId, recordEqs ) ->
             State.do State.getNextIdAndTick <| \extensibleRecordId ->
             State.do State.getNextIdAndTick <| \resultId ->
             -- The field-name node has the field's type, which is the type of
@@ -769,31 +764,31 @@ inferExpr ctx exprNode =
                 ]
 
 
+stateErrorImpossibleExpr : Ctx -> Node Expression -> StateM Inferred
+stateErrorImpossibleExpr ctx exprNode =
+    State.error (toError ctx (ImpossibleExpr exprNode))
+
+
 inferRecordSetters :
     Ctx
     -> List (Node Expression.RecordSetter)
     -> StateM ( Dict VarName MonoType, Equations )
 inferRecordSetters ctx fieldSetters =
     fieldSetters
-        |> State.traverse
-            (\fieldSetterNode ->
+        |> State.foldl
+            (\fieldSetterNode ( fields, allEqs ) ->
                 let
                     ( fieldNameNode, fieldExprNode ) =
                         Node.value fieldSetterNode
                 in
                 State.do (inferExpr ctx fieldExprNode) <| \( fieldId, eqs ) ->
                 State.do (State.aliasNodeId (Node.range fieldNameNode) fieldId) <| \() ->
-                State.pure ( ( Node.value fieldNameNode, TypeI.id_ fieldId ), eqs )
-            )
-        |> State.map
-            (List.foldl
-                (\( field, eqs ) ( fields, allEqs ) ->
-                    ( Dict.insert (Tuple.first field) (Tuple.second field) fields
+                State.pure
+                    ( Dict.insert (Node.value fieldNameNode) (TypeI.id_ fieldId) fields
                     , TypeEquation.append allEqs eqs
                     )
-                )
-                ( Dict.empty, TypeEquation.empty )
             )
+            ( Dict.empty, TypeEquation.empty )
 
 
 
@@ -817,24 +812,22 @@ solveLetDeclarations ctx declarations =
         byIndex =
             Dict.fromList indexed
 
-        boundNames : Node LetDeclaration -> List VarName
-        boundNames declNode =
-            case Node.value declNode of
-                LetFunction fn ->
-                    [ functionName fn ]
-
-                LetDestructuring patternNode _ ->
-                    Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
-
         -- name -> index of the declaration binding it
         indexOfName : Dict VarName Int
         indexOfName =
             indexed
-                |> List.ExtraExtra.fastConcatMap
-                    (\( index, declNode ) ->
-                        boundNames declNode |> List.map (\name -> ( name, index ))
+                |> List.foldl
+                    (\( index, declNode ) accAcrossDecls ->
+                        case Node.value declNode of
+                            LetFunction fn ->
+                                Dict.insert (functionName fn) index accAcrossDecls
+
+                            LetDestructuring patternNode _ ->
+                                Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
+                                    |> List.foldl (\name acc -> Dict.insert name index acc)
+                                        accAcrossDecls
                     )
-                |> Dict.fromList
+                    Dict.empty
 
         hasLetAnnotation : Node LetDeclaration -> Bool
         hasLetAnnotation declNode =
@@ -932,22 +925,23 @@ solveLetDeclarations ctx declarations =
         solveGroup : List Int -> StateM ()
         solveGroup groupIndices =
             let
-                groupDecls : List (Node LetDeclaration)
-                groupDecls =
-                    groupIndices |> List.filterMap (\index -> Dict.get index byIndex)
-
                 ( functions, destructurings ) =
                     List.foldr
-                        (\declNode ( fns, dests ) ->
-                            case Node.value declNode of
-                                LetFunction fn ->
-                                    ( ( declNode, fn ) :: fns, dests )
+                        (\declIndex ( fns, dests ) ->
+                            case Dict.get declIndex byIndex of
+                                Nothing ->
+                                    ( fns, dests )
 
-                                LetDestructuring patternNode exprNode ->
-                                    ( fns, ( declNode, patternNode, exprNode ) :: dests )
+                                Just declNode ->
+                                    case Node.value declNode of
+                                        LetFunction fn ->
+                                            ( ( declNode, fn ) :: fns, dests )
+
+                                        LetDestructuring patternNode exprNode ->
+                                            ( fns, ( declNode, patternNode, exprNode ) :: dests )
                         )
                         ( [], [] )
-                        groupDecls
+                        groupIndices
             in
             State.do
                 (functions
@@ -970,19 +964,19 @@ solveLetDeclarations ctx declarations =
                             LetFunction fn ->
                                 case fn.signature of
                                     Nothing ->
-                                        State.pure ()
+                                        State.pureUnit
 
                                     Just _ ->
                                         State.do (annotationType ctx fn.signature) <| \maybeMono ->
                                         case maybeMono of
                                             Nothing ->
-                                                State.pure ()
+                                                State.pureUnit
 
                                             Just mono ->
                                                 State.addBinding (functionName fn) (TypeI.closeOver mono)
 
                             LetDestructuring _ _ ->
-                                State.pure ()
+                                State.pureUnit
                     )
     in
     State.do preinstallAnnotated <| \() ->
@@ -1001,10 +995,6 @@ inferPattern ctx patternNode =
         type_ : MonoType
         type_ =
             TypeI.id_ patternId
-
-        p : Node Pattern -> StateM Inferred
-        p =
-            inferPattern ctx
 
         finish : List TypeEquation -> StateM Inferred
         finish eqs =
@@ -1044,7 +1034,7 @@ inferPattern ctx patternNode =
                 impossiblePattern =
                     State.error (toError ctx (ImpossiblePattern patternNode))
             in
-            State.do (inferMany p patterns) <| \( ids, eqs ) ->
+            State.do (inferMany (\part -> inferPattern ctx part) patterns) <| \( ids, eqs ) ->
             case ids of
                 [ id1, id2 ] ->
                     finishEqns <|
@@ -1080,12 +1070,13 @@ inferPattern ctx patternNode =
             -}
             State.do
                 (fields
-                    |> State.traverse
-                        (\fieldNode ->
+                    |> State.foldl
+                        (\fieldNode acc ->
                             State.do (State.idForNode fieldNode) <| \fieldId ->
                             State.do (State.addBinding (Node.value fieldNode) (TypeI.mono <| TypeI.id_ fieldId)) <| \() ->
-                            State.pure ( Node.value fieldNode, TypeI.id_ fieldId )
+                            State.pure (Dict.insert (Node.value fieldNode) (TypeI.id_ fieldId) acc)
                         )
+                        Dict.empty
                 )
             <| \fields_ ->
             State.do State.getNextIdAndTick <| \recordId ->
@@ -1093,7 +1084,7 @@ inferPattern ctx patternNode =
                 [ ( type_
                   , ExtensibleRecord
                         { extensionTypevar = TypeI.id_ recordId
-                        , fields = Dict.fromList fields_
+                        , fields = fields_
                         }
                   , "Record pattern"
                   )
@@ -1101,8 +1092,8 @@ inferPattern ctx patternNode =
 
         UnConsPattern p1 p2 ->
             State.do State.getNextIdAndTick <| \listItemId ->
-            State.do (p p1) <| \( id1, eqs1 ) ->
-            State.do (p p2) <| \( id2, eqs2 ) ->
+            State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
+            State.do (inferPattern ctx p2) <| \( id2, eqs2 ) ->
             finishEqns <|
                 TypeEquation.append eqs1
                     (TypeEquation.append eqs2
@@ -1116,7 +1107,7 @@ inferPattern ctx patternNode =
 
         ListPattern patterns ->
             State.do State.getNextIdAndTick <| \listItemId ->
-            State.do (inferMany p patterns) <| \( ids, eqs ) ->
+            State.do (inferMany (\el -> inferPattern ctx el) patterns) <| \( ids, eqs ) ->
             finishEqns <|
                 TypeEquation.append eqs
                     (TypeEquation.append
@@ -1153,7 +1144,7 @@ inferPattern ctx patternNode =
                 Ok (Just ( package, moduleId )) ->
                     State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                     State.do State.getNextIdAndTick <| \resultId ->
-                    State.do (inferMany p args) <| \( argIds, eqs ) ->
+                    State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
                     finishEqns <|
                         TypeEquation.cons
                             ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
@@ -1166,7 +1157,7 @@ inferPattern ctx patternNode =
                     if isKernelVar ctx (FullModuleName.fromModuleName customType.moduleName) customType.name then
                         State.do State.getNextIdAndTick <| \ctorId ->
                         State.do State.getNextIdAndTick <| \resultId ->
-                        State.do (inferMany p args) <| \( argIds, eqs ) ->
+                        State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
                         finishEqns <|
                             TypeEquation.cons
                                 ( TypeI.id_ ctorId, functionType argIds resultId, "NamedPattern: kernel ctor is a fn" )
@@ -1188,7 +1179,7 @@ inferPattern ctx patternNode =
                         <| \( package, moduleId ) ->
                         State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                         State.do State.getNextIdAndTick <| \resultId ->
-                        State.do (inferMany p args) <| \( argIds, eqs ) ->
+                        State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
                         finishEqns <|
                             TypeEquation.cons
                                 ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
@@ -1203,11 +1194,11 @@ inferPattern ctx patternNode =
         AsPattern p1 varNameNode ->
             State.do (State.addBinding (Node.value varNameNode) (TypeI.mono type_)) <| \() ->
             State.do (State.aliasNodeId (Node.range varNameNode) patternId) <| \() ->
-            State.do (p p1) <| \( id1, eqs1 ) ->
+            State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
             finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "AsPattern = inner" ) eqs1
 
         ParenthesizedPattern p1 ->
-            State.do (p p1) <| \( id1, eqs1 ) ->
+            State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
             finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized pattern = inner" ) eqs1
 
 

@@ -84,15 +84,15 @@ This sits on the hottest path in the library.
 arraySetGrowing : a -> Int -> a -> Array a -> Array a
 arraySetGrowing default index value array =
     let
-        len : Int
-        len =
-            Array.length array
+        indexMinusLength : Int
+        indexMinusLength =
+            index - Array.length array
     in
-    if index < len then
+    if indexMinusLength < 0 then
         Array.set index value array
 
     else
-        Array.push value (Array.append array (Array.repeat (index - len) default))
+        Array.push value (Array.append array (Array.repeat indexMinusLength default))
 
 
 getSlot : TypeVar -> SubstitutionMap -> Maybe Slot
@@ -414,11 +414,6 @@ roots.
 -}
 lowerLetRanksTo : LetRank -> MonoType -> SubstitutionMap -> SubstitutionMap
 lowerLetRanksTo targetLetRank type_ store =
-    let
-        inFields : Dict VarName MonoType -> SubstitutionMap -> SubstitutionMap
-        inFields fields acc =
-            Dict.foldl (\_ fieldType inner -> lowerLetRanksTo targetLetRank fieldType inner) acc fields
-    in
     case type_ of
         TypeVar var ->
             if letRankOf var store > targetLetRank then
@@ -465,24 +460,29 @@ lowerLetRanksTo targetLetRank type_ store =
                 |> lowerLetRanksTo targetLetRank t3
 
         Record { fields } ->
-            inFields fields store
+            lowerLetRanksInFieldsTo targetLetRank fields store
 
         ExtensibleRecord r ->
             store
                 |> lowerLetRanksTo targetLetRank r.extensionTypevar
-                |> inFields r.fields
+                |> lowerLetRanksInFieldsTo targetLetRank r.fields
 
         UserDefinedType r ->
-            List.foldl (lowerLetRanksTo targetLetRank) store r.args
+            List.foldl (\arg storeAcc -> lowerLetRanksTo targetLetRank arg storeAcc) store r.args
 
         WebGLShader r ->
             store
-                |> inFields r.attributes
+                |> lowerLetRanksInFieldsTo targetLetRank r.attributes
                 |> lowerLetRanksTo targetLetRank r.attributesExtension
-                |> inFields r.uniforms
+                |> lowerLetRanksInFieldsTo targetLetRank r.uniforms
                 |> lowerLetRanksTo targetLetRank r.uniformsExtension
-                |> inFields r.varyings
+                |> lowerLetRanksInFieldsTo targetLetRank r.varyings
                 |> lowerLetRanksTo targetLetRank r.varyingsExtension
+
+
+lowerLetRanksInFieldsTo : LetRank -> Dict VarName MonoType -> SubstitutionMap -> SubstitutionMap
+lowerLetRanksInFieldsTo targetLetRank fields store =
+    Dict.foldl (\_ fieldType acc -> lowerLetRanksTo targetLetRank fieldType acc) store fields
 
 
 
@@ -706,11 +706,9 @@ substituteMono store monoType =
             in
             if needsCollapse then
                 ( TypeI.collapseExtensible
-                    (ExtensibleRecord
-                        { extensionTypevar = extensionTypevar_
-                        , fields = fields_
-                        }
-                    )
+                    { extensionTypevar = extensionTypevar_
+                    , fields = fields_
+                    }
                 , Bitwise.or flags changedFlag
                 , s2
                 )

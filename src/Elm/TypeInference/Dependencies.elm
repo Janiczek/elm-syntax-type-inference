@@ -69,10 +69,13 @@ resolverFor moduleMapping deps selfPackage =
         ownersByModule =
             searchOrder
                 |> List.foldl
-                    (\pkgName acc ->
+                    (\pkgName accAcrossPks ->
                         Dict.get pkgName deps
-                            |> Maybe.map (\pkg -> List.foldl (addModule pkgName) acc pkg.modules)
-                            |> Maybe.withDefault acc
+                            |> Maybe.map
+                                (\pkg ->
+                                    List.foldl (\mod acc -> addModule pkgName mod acc) accAcrossPks pkg.modules
+                                )
+                            |> Maybe.withDefault accAcrossPks
                     )
                     Dict.empty
 
@@ -221,8 +224,13 @@ register moduleMapping deps =
     in
     deps
         |> Dict.toList
-        |> State.traverse (\( pkgName, pkg ) -> registerPackage moduleMapping1 deps pkgName pkg)
-        |> State.map (\dicts -> ( List.foldl Dict.union Dict.empty dicts, moduleMapping1 ))
+        |> State.foldl
+            (\( pkgName, pkg ) dict ->
+                State.map (\registeredPackage -> Dict.union registeredPackage dict)
+                    (registerPackage moduleMapping1 deps pkgName pkg)
+            )
+            Dict.empty
+        |> State.map (\dict -> ( dict, moduleMapping1 ))
 
 
 registerPackage :
@@ -238,8 +246,12 @@ registerPackage moduleMapping deps pkgName pkg =
             resolverFor moduleMapping deps pkgName
     in
     pkg.modules
-        |> State.traverse (registerModule moduleMapping pkgName resolver)
-        |> State.map (\dicts -> dicts |> List.foldl Dict.union Dict.empty)
+        |> State.foldl
+            (\mod dict ->
+                State.map (\registeredPackage -> Dict.union registeredPackage dict)
+                    (registerModule moduleMapping pkgName resolver mod)
+            )
+            Dict.empty
 
 
 registerModule :
@@ -277,25 +289,24 @@ registerModule moduleMapping pkgName resolver mod =
                     State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <| \monoType ->
                     State.addGlobalBinding ( moduleId, pkgName, name ) (TypeI.closeOver monoType)
             in
-            State.do (State.traverse (\v -> addBinding v.name v.tipe) mod.values) <| \_ ->
-            State.do (State.traverse (\b -> addBinding b.name b.tipe) mod.binops) <| \_ ->
-            State.do (State.traverse (\union -> registerUnion pkgName moduleId mod.name resolver union) mod.unions) <| \_ ->
+            State.do (State.traverseUnit (\v -> addBinding v.name v.tipe) mod.values) <| \() ->
+            State.do (State.traverseUnit (\b -> addBinding b.name b.tipe) mod.binops) <| \() ->
+            State.do (State.traverseUnit (\union -> registerUnion pkgName moduleId mod.name resolver union) mod.unions) <| \() ->
             mod.aliases
-                |> State.traverse (\typeAlias -> registerAlias pkgName moduleId mod.name resolver typeAlias)
-                |> State.map
-                    (\maybeTypeAliases ->
-                        maybeTypeAliases
-                            |> List.foldl
-                                (\maybeTypeAlias acc ->
-                                    case maybeTypeAlias of
-                                        Nothing ->
-                                            acc
+                |> State.foldl
+                    (\typeAlias acc ->
+                        State.map
+                            (\maybeRegisteredTypeAlias ->
+                                case maybeRegisteredTypeAlias of
+                                    Nothing ->
+                                        acc
 
-                                        Just ( typeAliasKey, typeAlias ) ->
-                                            Dict.insert typeAliasKey typeAlias acc
-                                )
-                                Dict.empty
+                                    Just ( typeAliasKey, registeredTypeAlias ) ->
+                                        Dict.insert typeAliasKey registeredTypeAlias acc
+                            )
+                            (registerAlias pkgName moduleId mod.name resolver typeAlias)
                     )
+                    Dict.empty
 
 
 registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> StateM ()
@@ -331,7 +342,16 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
     union.tags
         |> State.traverseUnit
             (\( ctorName, argTypeStrings ) ->
-                State.do (State.fromResult (Result.mapError toError (Result.Extra.combineMap (fromDocsType resolver) argTypeStrings))) <| \argTypes ->
+                State.do
+                    (State.fromResult
+                        (Result.mapError toError
+                            (Result.Extra.combineMap
+                                (\argDocsType -> fromDocsType resolver argDocsType)
+                                argTypeStrings
+                            )
+                        )
+                    )
+                <| \argTypes ->
                 let
                     ctorType : MonoType
                     ctorType =
@@ -378,7 +398,7 @@ registerAlias pkgName moduleId dottedModuleName resolver alias_ =
                     State.addGlobalBinding ( moduleId, pkgName, alias_.name ) (TypeI.closeOver ctorType)
 
                 _ ->
-                    State.pure ()
+                    State.pureUnit
     in
     State.do registerConstructor <| \() ->
     State.pure <|

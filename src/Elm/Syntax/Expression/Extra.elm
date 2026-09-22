@@ -34,15 +34,6 @@ create a dependency on outer declaration of the same name.
 -}
 referencedNamesIn : Set VarName -> Expression -> List ( Maybe ModuleName, VarName )
 referencedNamesIn bound expression =
-    let
-        e : Node Expression -> List ( Maybe ModuleName, VarName )
-        e node =
-            referencedNamesIn bound (Node.value node)
-
-        many : List (Node Expression) -> List ( Maybe ModuleName, VarName )
-        many nodes =
-            List.ExtraExtra.fastConcatMap e nodes
-    in
     case expression of
         FunctionOrValue moduleName varName ->
             if List.isEmpty moduleName && Set.member varName bound then
@@ -62,22 +53,26 @@ referencedNamesIn bound expression =
             [ ( Nothing, operator ) ]
 
         OperatorApplication operator _ e1 e2 ->
-            ( Nothing, operator ) :: e e1 ++ e e2
+            ( Nothing, operator )
+                :: referencedNamesIn bound (Node.value e1)
+                ++ referencedNamesIn bound (Node.value e2)
 
         Application nodes ->
-            many nodes
+            List.ExtraExtra.fastConcatMap (\(Node.Node _ p) -> referencedNamesIn bound p) nodes
 
         IfBlock e1 e2 e3 ->
-            many [ e1, e2, e3 ]
+            referencedNamesIn bound (Node.value e1)
+                ++ referencedNamesIn bound (Node.value e2)
+                ++ referencedNamesIn bound (Node.value e3)
 
         Negation e1 ->
-            e e1
+            referencedNamesIn bound (Node.value e1)
 
         TupledExpression nodes ->
-            many nodes
+            List.ExtraExtra.fastConcatMap (\(Node.Node _ p) -> referencedNamesIn bound p) nodes
 
         ParenthesizedExpression e1 ->
-            e e1
+            referencedNamesIn bound (Node.value e1)
 
         LetExpression letBlock ->
             let
@@ -91,8 +86,9 @@ referencedNamesIn bound expression =
                                         Set.insert (functionName fn) acc
 
                                     LetDestructuring patternNode _ ->
-                                        Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
-                                            |> List.foldl Set.insert acc
+                                        Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet
+                                            (Node.value patternNode)
+                                            acc
                             )
                             bound
 
@@ -106,8 +102,7 @@ referencedNamesIn bound expression =
                                     (Node.value fn.declaration).arguments
                                         |> List.foldl
                                             (\(Node.Node _ arg) acc ->
-                                                Elm.Syntax.Pattern.Extra.varNames arg
-                                                    |> List.foldl Set.insert acc
+                                                Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet arg acc
                                             )
                                             nestedBound
                             in
@@ -119,13 +114,11 @@ referencedNamesIn bound expression =
             List.ExtraExtra.fastConcatMap declRefs letBlock.declarations ++ referencedNamesIn nestedBound (Node.value letBlock.expression)
 
         CaseExpression caseBlock ->
-            e caseBlock.expression
+            referencedNamesIn bound (Node.value caseBlock.expression)
                 ++ List.ExtraExtra.fastConcatMap
                     (\( pattern, body ) ->
                         referencedNamesIn
-                            (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern)
-                                |> List.foldl Set.insert bound
-                            )
+                            (Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet (Node.value pattern) bound)
                             (Node.value body)
                     )
                     caseBlock.cases
@@ -137,28 +130,27 @@ referencedNamesIn bound expression =
                     lambda.args
                         |> List.foldl
                             (\(Node.Node _ param) acc ->
-                                Elm.Syntax.Pattern.Extra.varNames param
-                                    |> List.foldl Set.insert acc
+                                Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet param acc
                             )
                             bound
             in
             referencedNamesIn boundIncludingArgumentNames (Node.value lambda.expression)
 
         RecordExpr setters ->
-            setters |> List.ExtraExtra.fastConcatMap (\(Node.Node _ ( _, value )) -> e value)
+            setters |> List.ExtraExtra.fastConcatMap (\(Node.Node _ ( _, Node.Node _ value )) -> referencedNamesIn bound value)
 
         ListExpr nodes ->
-            many nodes
+            List.ExtraExtra.fastConcatMap (\(Node.Node _ el) -> referencedNamesIn bound el) nodes
 
         RecordAccess recordNode _ ->
-            e recordNode
+            referencedNamesIn bound (Node.value recordNode)
 
         RecordAccessFunction _ ->
             []
 
         RecordUpdateExpression recordVarNode setters ->
             ( Nothing, Node.value recordVarNode )
-                :: (setters |> List.ExtraExtra.fastConcatMap (\(Node.Node _ ( _, value )) -> e value))
+                :: (setters |> List.ExtraExtra.fastConcatMap (\(Node.Node _ ( _, Node.Node _ value )) -> referencedNamesIn bound value))
 
         GLSLExpression _ ->
             []

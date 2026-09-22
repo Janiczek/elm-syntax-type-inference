@@ -49,11 +49,26 @@ solveGroup cfg members =
                     members
                 )
              <| \() ->
-             State.do (State.traverse .equations members) <| \eqLists ->
+             State.do
+                 (State.foldl
+                     (\member accAcrossMembers ->
+                         State.map
+                             (\memberEqs ->
+                                 List.foldr
+                                     (\memberEq acc ->
+                                         TypeEquation.dropLabel memberEq :: acc
+                                     )
+                                     accAcrossMembers
+                                     memberEqs
+                             )
+                             member.equations
+                     )
+                     []
+                     members
+                 )
+             <| \eqLists ->
              State.do
                  (eqLists
-                     |> List.concat
-                     |> List.map TypeEquation.dropLabel
                      |> Unify.unifyMany cfg
                  )
              <| \() ->
@@ -65,7 +80,7 @@ solveGroup cfg members =
         (\member ->
             case member.annotation of
                 Just _ ->
-                    State.pure ()
+                    State.pureUnit
 
                 Nothing ->
                     State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
@@ -95,11 +110,11 @@ checkOne : UnifyConfig -> Member -> StateM ()
 checkOne cfg member =
     case member.annotation of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just (Forall boundVars annoMono) ->
             if List.isEmpty boundVars then
-                State.pure ()
+                State.pureUnit
 
             else
                 State.do State.getSubst <| \subst ->
@@ -130,7 +145,7 @@ checkOne cfg member =
                         }
 
                 else
-                    State.pure ()
+                    State.pureUnit
 
 
 {-|
@@ -176,26 +191,6 @@ slotTooGeneral :
     -> { extensionTypevar : MonoType, fields : Dict String MonoType }
     -> Bool
 slotTooGeneral annoSlot finalSlot =
-    let
-        collapsedFields : { extensionTypevar : MonoType, fields : Dict String MonoType } -> Dict String MonoType
-        collapsedFields slot =
-            case
-                TypeI.collapseExtensible
-                    (ExtensibleRecord
-                        { extensionTypevar = slot.extensionTypevar
-                        , fields = slot.fields
-                        }
-                    )
-            of
-                ExtensibleRecord r ->
-                    r.fields
-
-                Record r ->
-                    r.fields
-
-                _ ->
-                    Dict.empty
-    in
     case annoSlot.extensionTypevar of
         TypeVar _ ->
             if Dict.isEmpty annoSlot.fields then
@@ -206,3 +201,21 @@ slotTooGeneral annoSlot finalSlot =
 
         _ ->
             not (Dict.isEmpty (Dict.diff annoSlot.fields (collapsedFields finalSlot)))
+
+
+collapsedFields : { extensionTypevar : MonoType, fields : Dict String MonoType } -> Dict String MonoType
+collapsedFields slot =
+    case
+        TypeI.collapseExtensible
+            { extensionTypevar = slot.extensionTypevar
+            , fields = slot.fields
+            }
+    of
+        ExtensibleRecord r ->
+            r.fields
+
+        Record r ->
+            r.fields
+
+        _ ->
+            Dict.empty

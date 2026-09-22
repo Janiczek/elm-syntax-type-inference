@@ -34,6 +34,7 @@ import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type exposing (VarName)
 import Set exposing (Set)
 import Set.Extra
+import String.ExtraExtra
 
 
 type alias ModuleIndex =
@@ -121,19 +122,21 @@ fromFile moduleMapping file =
       , dottedModuleName = FullModuleName.toString moduleName
       , declaredValues =
             decls.values
-                |> (case effectCommand of
-                        Just _ ->
-                            Set.insert effectCommandVar
+                |> (\values ->
+                        case effectCommand of
+                            Just _ ->
+                                Set.insert effectCommandVar values
 
-                        Nothing ->
-                            identity
+                            Nothing ->
+                                values
                    )
-                |> (case effectSubscription of
-                        Just _ ->
-                            Set.insert effectSubscriptionVar
+                |> (\values ->
+                        case effectSubscription of
+                            Just _ ->
+                                Set.insert effectSubscriptionVar values
 
-                        Nothing ->
-                            identity
+                            Nothing ->
+                                values
                    )
       , declaredTypes = decls.types
       , exposedValues = exposedValues exposing_ decls
@@ -302,7 +305,7 @@ addDeclaration decl acc =
             }
 
         Destructuring pattern _ ->
-            { values = List.foldl Set.insert acc.values (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern))
+            { values = Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet (Node.value pattern) acc.values
             , types = acc.types
             , unionConstructors = acc.unionConstructors
             , recordAliases = acc.recordAliases
@@ -346,9 +349,12 @@ exposedValues exposing_ decls =
                                         acc
 
                                     Just _ ->
-                                        Dict.get exposedType.name decls.unionConstructors
-                                            |> Maybe.withDefault []
-                                            |> List.foldl Set.insert acc
+                                        case Dict.get exposedType.name decls.unionConstructors of
+                                            Nothing ->
+                                                acc
+
+                                            Just variantNames ->
+                                                variantNames |> List.foldl Set.insert acc
                     )
                     Set.empty
 
@@ -563,13 +569,8 @@ importExposesType import_ typeName =
 
 
 couldBeConstructorName : VarName -> Bool
-couldBeConstructorName varName =
-    case String.uncons varName of
-        Just ( firstChar, _ ) ->
-            Char.isUpper firstChar
-
-        Nothing ->
-            False
+couldBeConstructorName =
+    String.ExtraExtra.firstCharIsUpper
 
 
 {-| Alias -> modules imported under it, in import order.

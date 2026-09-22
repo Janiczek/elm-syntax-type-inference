@@ -100,9 +100,9 @@ project currentPackage depEnv files =
         (DependencyEnv dep) =
             depEnv
 
-        ( modules, moduleMapping, missingModuleName ) =
+        ( modulesReversed, missingModuleName, moduleMapping ) =
             List.foldl
-                (\file ( acc, accModuleMapping, accMissing ) ->
+                (\file ( acc, accMissingModuleName, accModuleMapping ) ->
                     let
                         key : ModuleName
                         key =
@@ -110,7 +110,7 @@ project currentPackage depEnv files =
                     in
                     case FullModuleName.fromModuleName key of
                         Nothing ->
-                            ( acc, accModuleMapping, True )
+                            ( acc, True, accModuleMapping )
 
                         Just _ ->
                             let
@@ -118,18 +118,12 @@ project currentPackage depEnv files =
                                     ModuleIndex.fromFile accModuleMapping file
                             in
                             ( { key = key, index = index, file = file } :: acc
+                            , accMissingModuleName
                             , newModuleMapping
-                            , accMissing
                             )
                 )
-                ( [], dep.moduleMapping, False )
+                ( [], False, dep.moduleMapping )
                 files
-                |> (\( reversed, finalModuleMapping, missing ) ->
-                        ( List.reverse reversed
-                        , finalModuleMapping
-                        , missing
-                        )
-                   )
     in
     if missingModuleName then
         Err
@@ -142,14 +136,14 @@ project currentPackage depEnv files =
         let
             modulesById : Dict ModuleId ProjectModule
             modulesById =
-                modules
+                modulesReversed
                     |> List.foldl
                         (\m acc -> Dict.insert m.index.moduleId m acc)
                         Dict.empty
 
             importedBy : Dict ModuleId (Set ModuleId)
             importedBy =
-                modules
+                modulesReversed
                     |> List.foldl (\m acc -> addReverseEdges m.index acc) Dict.empty
         in
         Ok
@@ -228,7 +222,7 @@ inferNodes nodes (Project p) =
     let
         newAcc : ProjectAcc
         newAcc =
-            SCC.stronglyConnectedComponents (Set.toList nodes) (firstPartyImportsOf p.modulesById)
+            SCC.stronglyConnectedComponents (Set.toList nodes) (\node -> firstPartyImportsOf p.modulesById node)
                 |> List.foldl
                     (\list acc ->
                         List.foldl
@@ -284,7 +278,7 @@ inferModule moduleName ((Project p) as proj) =
             let
                 (Project newP) =
                     inferNodes
-                        (importClosure (firstPartyImportsOf p.modulesById) m.index.moduleId)
+                        (importClosure (\modId -> firstPartyImportsOf p.modulesById modId) m.index.moduleId)
                         proj
             in
             ( case Dict.get m.key newP.acc.tables of
@@ -443,7 +437,7 @@ addFile file (Project p) =
                         |> Set.foldl
                             (\importId acc ->
                                 Dict.update importId
-                                    (Maybe.map (Set.remove id))
+                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
                                     acc
                             )
                             p.importedBy
@@ -504,7 +498,7 @@ removeFile moduleName ((Project p) as proj) =
     case
         FullModuleName.fromModuleName moduleName
             |> Maybe.andThen (\full -> ModuleIds.getId full p.moduleMapping)
-            |> Maybe.andThen (\id -> Dict.get id p.modulesById |> Maybe.map (Tuple.pair id))
+            |> Maybe.andThen (\id -> Dict.get id p.modulesById |> Maybe.map (\mod -> ( id, mod )))
     of
         Nothing ->
             proj
@@ -521,7 +515,7 @@ removeFile moduleName ((Project p) as proj) =
                         |> List.foldl
                             (\import_ acc ->
                                 Dict.update import_.moduleId
-                                    (Maybe.map (Set.remove id))
+                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
                                     acc
                             )
                             p.importedBy
@@ -1068,8 +1062,8 @@ gatherTypeAliases ctx file =
             ctx.thisIndex.moduleId
     in
     file.declarations
-        |> State.traverse
-            (\(Node _ declarationNode) ->
+        |> State.foldl
+            (\(Node _ declarationNode) accAcrossDeclarations ->
                 case declarationNode of
                     Declaration.AliasDeclaration typeAlias ->
                         let
@@ -1122,37 +1116,22 @@ gatherTypeAliases ctx file =
                                                 )
 
                                     _ ->
-                                        State.pure ()
+                                        State.pureUnit
                         in
                         State.do type_ <| \type__ ->
                         State.do (registerConstructor type__) <| \() ->
                         State.pure <|
-                            Just
-                                ( ( moduleId, "", Node.value typeAlias.name )
-                                , { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
-                                  , type_ = type__
-                                  }
-                                )
+                            Dict.insert
+                                ( moduleId, "", Node.value typeAlias.name )
+                                { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
+                                , type_ = type__
+                                }
+                                accAcrossDeclarations
 
                     _ ->
-                        State.pure Nothing
+                        State.pure accAcrossDeclarations
             )
-        |> State.map (\list -> maybeListToDict list ctx.inheritedAliases)
-
-
-maybeListToDict : List (Maybe ( comparable, v )) -> Dict comparable v -> Dict comparable v
-maybeListToDict list initialDict =
-    List.foldl
-        (\maybe dict ->
-            case maybe of
-                Nothing ->
-                    dict
-
-                Just ( typeAliasKey, typeAlias ) ->
-                    Dict.insert typeAliasKey typeAlias dict
-        )
-        initialDict
-        list
+            ctx.inheritedAliases
 
 
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
@@ -1168,7 +1147,7 @@ registerConstructorsAndPorts ctx file =
                         registerPort ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName sig
 
                     _ ->
-                        State.pure ()
+                        State.pureUnit
             )
 
 
@@ -1183,13 +1162,6 @@ registerCustomType resolver moduleId moduleName customType =
         typeName : String
         typeName =
             Node.value customType.name
-
-        toError : ErrorDetails -> Error
-        toError details =
-            { moduleName = FullModuleName.toModuleName moduleName
-            , declarationNames = [ typeName ]
-            , details = details
-            }
 
         resultType : MonoType
         resultType =
@@ -1218,7 +1190,11 @@ registerCustomType resolver moduleId moduleName customType =
                 in
                 case argTypes of
                     Err fromTypeAnnotationError ->
-                        State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+                        State.error
+                            { moduleName = FullModuleName.toModuleName moduleName
+                            , declarationNames = [ typeName ]
+                            , details = TypeI.fromTypeAnnotationError fromTypeAnnotationError
+                            }
 
                     Ok args ->
                         let
@@ -1232,18 +1208,17 @@ registerCustomType resolver moduleId moduleName customType =
 
 registerPort : TypeResolver -> ModuleId -> FullModuleName -> Signature -> StateM ()
 registerPort resolver moduleId moduleName sig =
-    let
-        toError : ErrorDetails -> Error
-        toError details =
-            { moduleName = FullModuleName.toModuleName moduleName
-            , declarationNames = [ Node.value sig.name ]
-            , details = details
-            }
-    in
     sig.typeAnnotation
         |> Node.value
         |> TypeI.fromTypeAnnotation resolver
-        |> Result.mapError (State.error << toError << TypeI.fromTypeAnnotationError)
+        |> Result.mapError
+            (\fromTypeAnnotationError ->
+                State.error
+                    { moduleName = FullModuleName.toModuleName moduleName
+                    , declarationNames = [ Node.value sig.name ]
+                    , details = TypeI.fromTypeAnnotationError fromTypeAnnotationError
+                    }
+            )
         |> Result.map
             (\t ->
                 State.addGlobalBinding
@@ -1273,19 +1248,19 @@ registerEffectMagic ctx =
         registerEffectSubscription ctx
 
     else
-        State.pure ()
+        State.pureUnit
 
 
 registerEffectCommand : ModuleCtx -> StateM ()
 registerEffectCommand ctx =
     case ctx.thisIndex.effectCommand of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just myCmdName ->
             case ctx.resolver [] "Cmd" of
                 Err _ ->
-                    State.pure ()
+                    State.pureUnit
 
                 Ok ( cmdPackage, cmdModuleId ) ->
                     let
@@ -1321,12 +1296,12 @@ registerEffectSubscription : ModuleCtx -> StateM ()
 registerEffectSubscription ctx =
     case ctx.thisIndex.effectSubscription of
         Nothing ->
-            State.pure ()
+            State.pureUnit
 
         Just mySubName ->
             case ctx.resolver [] "Sub" of
                 Err _ ->
-                    State.pure ()
+                    State.pureUnit
 
                 Ok ( subPackage, subModuleId ) ->
                     let

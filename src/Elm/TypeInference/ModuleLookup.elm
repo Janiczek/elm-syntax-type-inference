@@ -27,6 +27,7 @@ import List.ExtraExtra
 import Result.Extra
 import Result.ExtraExtra
 import Set exposing (Set)
+import String.ExtraExtra
 
 
 {-| Precomputed index of `module id -> value/type name -> packages defining it`.
@@ -64,8 +65,8 @@ addModule packageName mod ( Index idx, moduleMapping ) =
             ModuleIds.intern (FullModuleName.fromDotted mod.name) moduleMapping
     in
     ( Index
-        { values = List.foldl (addName moduleId packageName) idx.values (valueNamesOf mod)
-        , types = List.foldl (addName moduleId packageName) idx.types (typeNamesOf mod)
+        { values = List.foldl (\name acc -> addName moduleId packageName name acc) idx.values (valueNamesOf mod)
+        , types = List.foldl (\name acc -> addName moduleId packageName name acc) idx.types (typeNamesOf mod)
         , ctorParents = addCtorParents moduleId mod idx.ctorParents
         , recordAliases = addRecordAliases moduleId mod idx.recordAliases
         }
@@ -438,15 +439,18 @@ qualifiedVar moduleMapping index modules thisModule qualifier varName =
             let
                 aliasCandidates : List ModuleId
                 aliasCandidates =
+                    let
+                        singleModulesWithAlias : List ModuleId
+                        singleModulesWithAlias =
+                            ModuleIndex.modulesWithAlias thisModule single
+                    in
                     dedupeModuleIds
-                        (ModuleIndex.modulesWithAlias thisModule single
-                            ++ (case ImplicitImports.unaliasModuleId single of
-                                    Just m ->
-                                        [ m ]
+                        (case ImplicitImports.unaliasModuleId single of
+                            Just m ->
+                                singleModulesWithAlias ++ [ m ]
 
-                                    Nothing ->
-                                        []
-                               )
+                            Nothing ->
+                                singleModulesWithAlias
                         )
             in
             Result.Extra.combineMap
@@ -587,13 +591,8 @@ dependencyModuleDefines moduleMapping (Index index) moduleId varName =
 
 
 couldBeConstructorName : VarName -> Bool
-couldBeConstructorName varName =
-    case String.uncons varName of
-        Just ( firstChar, _ ) ->
-            Char.isUpper firstChar
-
-        Nothing ->
-            False
+couldBeConstructorName =
+    String.ExtraExtra.firstCharIsUpper
 
 
 isRecordAlias : Elm.Docs.Alias -> Bool
