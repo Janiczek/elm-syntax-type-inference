@@ -156,9 +156,13 @@ neededSources deps sources =
 
 suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
 suppliedModuleNames package sources =
-    Dict.get package sources
-        |> Maybe.withDefault []
-        |> List.foldl (\m acc -> Set.insert (fileDottedName m) acc)
+    case Dict.get package sources of
+        Just files ->
+            files
+                |> List.foldl (\m acc -> Set.insert (fileDottedName m) acc)
+                    Set.empty
+
+        Nothing ->
             Set.empty
 
 
