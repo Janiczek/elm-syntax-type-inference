@@ -438,15 +438,18 @@ qualifiedVar moduleMapping index modules thisModule qualifier varName =
             let
                 aliasCandidates : List ModuleId
                 aliasCandidates =
+                    let
+                        singleModulesWithAlias : List ModuleId
+                        singleModulesWithAlias =
+                            ModuleIndex.modulesWithAlias thisModule single
+                    in
                     dedupeModuleIds
-                        (ModuleIndex.modulesWithAlias thisModule single
-                            ++ (case ImplicitImports.unaliasModuleId single of
-                                    Just m ->
-                                        [ m ]
+                        (case ImplicitImports.unaliasModuleId single of
+                            Just m ->
+                                singleModulesWithAlias ++ [ m ]
 
-                                    Nothing ->
-                                        []
-                               )
+                            Nothing ->
+                                singleModulesWithAlias
                         )
             in
             Result.Extra.combineMap
