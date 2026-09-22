@@ -502,7 +502,7 @@ normalize ((Forall boundVars monoType) as type_) =
     let
         allVars : List TypeVar
         allVars =
-            (VarSet.fromList boundVars).order
+            List.reverse boundVars
                 ++ monoTypeVars monoType
                 |> VarSet.toList
 
