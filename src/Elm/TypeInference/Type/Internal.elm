@@ -417,11 +417,11 @@ monoTypeVarsHelp type_ acc =
                 |> monoTypeVarsHelp t1
 
         Record { fields } ->
-            inFields fields acc
+            monoTypeVarsInFieldsHelp fields acc
 
         ExtensibleRecord r ->
             acc
-                |> inFields r.fields
+                |> monoTypeVarsInFieldsHelp r.fields
                 |> monoTypeVarsHelp r.extensionTypevar
 
         UserDefinedType r ->
@@ -429,17 +429,17 @@ monoTypeVarsHelp type_ acc =
 
         WebGLShader r ->
             acc
-                |> inFields r.varyings
+                |> monoTypeVarsInFieldsHelp r.varyings
                 |> monoTypeVarsHelp r.varyingsExtension
-                |> inFields r.uniforms
+                |> monoTypeVarsInFieldsHelp r.uniforms
                 |> monoTypeVarsHelp r.uniformsExtension
-                |> inFields r.attributes
+                |> monoTypeVarsInFieldsHelp r.attributes
                 |> monoTypeVarsHelp r.attributesExtension
 
 
-inFields : Dict VarName MonoType -> List TypeVar -> List TypeVar
-inFields fields acc_ =
-    Dict.foldr (\_ fieldType subAcc -> monoTypeVarsHelp fieldType subAcc) acc_ fields
+monoTypeVarsInFieldsHelp : Dict VarName MonoType -> List TypeVar -> List TypeVar
+monoTypeVarsInFieldsHelp fields acc_ =
+    Dict.foldr (\_ fieldType accAcrossFields -> monoTypeVarsHelp fieldType accAcrossFields) acc_ fields
 
 
 {-|
