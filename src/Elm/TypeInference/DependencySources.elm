@@ -66,11 +66,11 @@ referencedModules deps =
             docsModuleRefs allModules
                 |> List.map Tuple.first
 
-        documented : List String
-        documented =
-            List.foldr (\m acc -> m.name :: acc) [] allModules
+        allNames : List String
+        allNames =
+            List.foldr (\m acc -> m.name :: acc) referenced allModules
     in
-    (documented ++ referenced)
+    allNames
         |> List.foldl
             (\name ( seen, acc ) ->
                 if String.isEmpty name || List.member name seen then
