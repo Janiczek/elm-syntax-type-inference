@@ -1,4 +1,4 @@
-module List.ExtraExtra exposing (fastConcatMap)
+module List.ExtraExtra exposing (fastConcatMap, fastConcatMapWithInitial)
 
 {-| -}
 
@@ -11,4 +11,9 @@ module List.ExtraExtra exposing (fastConcatMap)
 -}
 fastConcatMap : (a -> List b) -> List a -> List b
 fastConcatMap fn list =
-    List.foldr (\item acc -> fn item ++ acc) [] list
+    fastConcatMapWithInitial fn list []
+
+
+fastConcatMapWithInitial : (a -> List b) -> List a -> List b -> List b
+fastConcatMapWithInitial fn list initial =
+    List.foldr (\item acc -> fn item ++ acc) initial list

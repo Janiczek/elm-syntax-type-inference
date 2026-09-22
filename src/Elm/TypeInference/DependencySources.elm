@@ -202,10 +202,11 @@ docsModuleRefs modules =
     modules
         |> List.ExtraExtra.fastConcatMap
             (\mod ->
-                List.ExtraExtra.fastConcatMap (\value -> docsTypeRefs value.tipe) mod.values
-                    ++ List.ExtraExtra.fastConcatMap (\binop -> docsTypeRefs binop.tipe) mod.binops
-                    ++ List.ExtraExtra.fastConcatMap (\union -> List.ExtraExtra.fastConcatMap (\( _, payload ) -> List.ExtraExtra.fastConcatMap docsTypeRefs payload) union.tags) mod.unions
-                    ++ List.ExtraExtra.fastConcatMap (\typeAlias -> docsTypeRefs typeAlias.tipe) mod.aliases
+                []
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\value -> docsTypeRefs value.tipe) mod.values
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\binop -> docsTypeRefs binop.tipe) mod.binops
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\union -> List.ExtraExtra.fastConcatMap (\( _, payload ) -> List.ExtraExtra.fastConcatMap docsTypeRefs payload) union.tags) mod.unions
+                    |> List.ExtraExtra.fastConcatMapWithInitial (\typeAlias -> docsTypeRefs typeAlias.tipe) mod.aliases
             )
 
 
