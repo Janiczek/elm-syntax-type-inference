@@ -302,7 +302,7 @@ addDeclaration decl acc =
             }
 
         Destructuring pattern _ ->
-            { values = List.foldl Set.insert acc.values (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern))
+            { values = Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet (Node.value pattern) acc.values
             , types = acc.types
             , unionConstructors = acc.unionConstructors
             , recordAliases = acc.recordAliases

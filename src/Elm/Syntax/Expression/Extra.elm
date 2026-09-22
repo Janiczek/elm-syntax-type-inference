@@ -91,8 +91,9 @@ referencedNamesIn bound expression =
                                         Set.insert (functionName fn) acc
 
                                     LetDestructuring patternNode _ ->
-                                        Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
-                                            |> List.foldl Set.insert acc
+                                        Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet
+                                            (Node.value patternNode)
+                                            acc
                             )
                             bound
 
@@ -106,8 +107,7 @@ referencedNamesIn bound expression =
                                     (Node.value fn.declaration).arguments
                                         |> List.foldl
                                             (\(Node.Node _ arg) acc ->
-                                                Elm.Syntax.Pattern.Extra.varNames arg
-                                                    |> List.foldl Set.insert acc
+                                                Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet arg acc
                                             )
                                             nestedBound
                             in
@@ -123,9 +123,7 @@ referencedNamesIn bound expression =
                 ++ List.ExtraExtra.fastConcatMap
                     (\( pattern, body ) ->
                         referencedNamesIn
-                            (Elm.Syntax.Pattern.Extra.varNames (Node.value pattern)
-                                |> List.foldl Set.insert bound
-                            )
+                            (Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet (Node.value pattern) bound)
                             (Node.value body)
                     )
                     caseBlock.cases
@@ -137,8 +135,7 @@ referencedNamesIn bound expression =
                     lambda.args
                         |> List.foldl
                             (\(Node.Node _ param) acc ->
-                                Elm.Syntax.Pattern.Extra.varNames param
-                                    |> List.foldl Set.insert acc
+                                Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet param acc
                             )
                             bound
             in
