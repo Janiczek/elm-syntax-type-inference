@@ -475,6 +475,122 @@ shallowEqual t1 t2 =
             False
 
 
+typeMismatch : UnifyConfig -> MonoType -> MonoType -> StateM ()
+typeMismatch cfg t1 t2 =
+    let
+        ( pubT1, pubT2 ) =
+            TypeI.toPublicPair cfg.moduleMapping
+                (expandAliasDeep cfg.typeAliases t1)
+                (expandAliasDeep cfg.typeAliases t2)
+    in
+    State.error
+        { moduleName = FullModuleName.toModuleName cfg.moduleName
+        , declarationNames = cfg.declarationNames
+        , details = TypeMismatch pubT1 pubT2
+        }
+
+
+recordBindings : UnifyConfig -> MonoType -> MonoType -> Dict VarName MonoType -> Dict VarName MonoType -> StateM ()
+recordBindings cfg t1 t2 bindings1 bindings2 =
+    -- Dict.size bindings1 /= Dict.size bindings2
+    if Dict.size bindings1 - Dict.size bindings2 /= 0 then
+        typeMismatch cfg t1 t2
+
+    else
+        case zipRecordFields bindings1 bindings2 of
+            Nothing ->
+                typeMismatch cfg t1 t2
+
+            Just eqs ->
+                unifyMany cfg eqs
+
+
+unifyRecordVsExtensible :
+    UnifyConfig
+    -> MonoType
+    -> MonoType
+    -> Dict VarName MonoType
+    ->
+        { extensionTypevar : MonoType
+        , fields : Dict VarName MonoType
+        }
+    -> StateM ()
+unifyRecordVsExtensible cfg t1 t2 recordFields er =
+    case expandAlias cfg.typeAliases er.extensionTypevar of
+        Record extFields ->
+            let
+                ( _, _, overlapEqs ) =
+                    Dict.merge
+                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                        (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
+                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                        extFields.fields
+                        er.fields
+                        ( Dict.empty, Dict.empty, [] )
+
+                combined : Dict VarName MonoType
+                combined =
+                    Dict.union er.fields extFields.fields
+            in
+            State.do (unifyMany cfg overlapEqs) <| \() ->
+            recordBindings cfg t1 t2 combined recordFields
+
+        ExtensibleRecord extEr ->
+            let
+                ( _, _, overlapEqs ) =
+                    Dict.merge
+                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                        (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
+                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                        extEr.fields
+                        er.fields
+                        ( Dict.empty, Dict.empty, [] )
+
+                merged : Dict VarName MonoType
+                merged =
+                    Dict.union er.fields extEr.fields
+            in
+            State.do (unifyMany cfg overlapEqs) <| \() ->
+            unifyRecordVsExtensible cfg
+                t1
+                t2
+                recordFields
+                { extensionTypevar = extEr.extensionTypevar
+                , fields = merged
+                }
+
+        _ ->
+            let
+                ( residual, matchedEqs, matchedCount ) =
+                    Dict.foldl
+                        (\k v ( res, eqs, n ) ->
+                            case Dict.get k er.fields of
+                                Just ev ->
+                                    ( res
+                                    , ( v, ev ) :: eqs
+                                    , n + 1
+                                    )
+
+                                Nothing ->
+                                    ( Dict.insert k v res
+                                    , eqs
+                                    , n
+                                    )
+                        )
+                        ( Dict.empty, [], 0 )
+                        recordFields
+            in
+            -- matchedCount /= Dict.size er.fields
+            if matchedCount - Dict.size er.fields /= 0 then
+                typeMismatch cfg t1 t2
+
+            else
+                unifyMany cfg
+                    (( er.extensionTypevar, Record { fields = residual } )
+                        :: matchedEqs
+                    )
+
+
 unifyMono : UnifyConfig -> MonoType -> MonoType -> StateM ()
 unifyMono cfg rawT1 rawT2 =
     -- `shallowEqual` is a cheap fast check; `==` calls `_Utils_eq` and short-circuits on `===`
@@ -492,116 +608,6 @@ unifyMono cfg rawT1 rawT2 =
             t2 =
                 expandAlias cfg.typeAliases rawT2
                     |> collapseNamedShader cfg.typeAliases
-
-            noSubstitutionNeeded : StateM ()
-            noSubstitutionNeeded =
-                State.pureUnit
-
-            typeMismatch : () -> StateM ()
-            typeMismatch () =
-                let
-                    ( pubT1, pubT2 ) =
-                        TypeI.toPublicPair cfg.moduleMapping
-                            (expandAliasDeep cfg.typeAliases t1)
-                            (expandAliasDeep cfg.typeAliases t2)
-                in
-                State.error
-                    { moduleName = FullModuleName.toModuleName cfg.moduleName
-                    , declarationNames = cfg.declarationNames
-                    , details = TypeMismatch pubT1 pubT2
-                    }
-
-            recordBindings : Dict VarName MonoType -> Dict VarName MonoType -> StateM ()
-            recordBindings bindings1 bindings2 =
-                if Dict.size bindings1 /= Dict.size bindings2 then
-                    typeMismatch ()
-
-                else
-                    case zipRecordFields bindings1 bindings2 of
-                        Nothing ->
-                            typeMismatch ()
-
-                        Just eqs ->
-                            unifyMany cfg eqs
-
-            recordVsExtensible :
-                Dict VarName MonoType
-                ->
-                    { extensionTypevar : MonoType
-                    , fields : Dict VarName MonoType
-                    }
-                -> StateM ()
-            recordVsExtensible recordFields er =
-                case expandAlias cfg.typeAliases er.extensionTypevar of
-                    Record extFields ->
-                        let
-                            ( _, _, overlapEqs ) =
-                                Dict.merge
-                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
-                                    (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
-                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
-                                    extFields.fields
-                                    er.fields
-                                    ( Dict.empty, Dict.empty, [] )
-
-                            combined : Dict VarName MonoType
-                            combined =
-                                Dict.union er.fields extFields.fields
-                        in
-                        State.do (unifyMany cfg overlapEqs) <| \() ->
-                        recordBindings combined recordFields
-
-                    ExtensibleRecord extEr ->
-                        let
-                            ( _, _, overlapEqs ) =
-                                Dict.merge
-                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
-                                    (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
-                                    (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
-                                    extEr.fields
-                                    er.fields
-                                    ( Dict.empty, Dict.empty, [] )
-
-                            merged : Dict VarName MonoType
-                            merged =
-                                Dict.union er.fields extEr.fields
-                        in
-                        State.do (unifyMany cfg overlapEqs) <| \() ->
-                        recordVsExtensible recordFields
-                            { extensionTypevar = extEr.extensionTypevar
-                            , fields = merged
-                            }
-
-                    _ ->
-                        let
-                            ( residual, matchedEqs, matchedCount ) =
-                                Dict.foldl
-                                    (\k v ( res, eqs, n ) ->
-                                        case Dict.get k er.fields of
-                                            Just ev ->
-                                                ( res
-                                                , ( v, ev ) :: eqs
-                                                , n + 1
-                                                )
-
-                                            Nothing ->
-                                                ( Dict.insert k v res
-                                                , eqs
-                                                , n
-                                                )
-                                    )
-                                    ( Dict.empty, [], 0 )
-                                    recordFields
-                        in
-                        -- matchedCount /= Dict.size er.fields
-                        if matchedCount - Dict.size er.fields /= 0 then
-                            typeMismatch ()
-
-                        else
-                            unifyMany cfg
-                                (( er.extensionTypevar, Record { fields = residual } )
-                                    :: matchedEqs
-                                )
         in
         case ( t1, t2 ) of
             ( TypeVar v, _ ) ->
@@ -611,40 +617,46 @@ unifyMono cfg rawT1 rawT2 =
                 bind cfg v t1
 
             ( Int, Int ) ->
-                noSubstitutionNeeded
+                -- no substitution needed
+                State.pureUnit
 
             ( Int, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Float, Float ) ->
-                noSubstitutionNeeded
+                -- no substitution needed
+                State.pureUnit
 
             ( Float, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( String, String ) ->
-                noSubstitutionNeeded
+                -- no substitution needed
+                State.pureUnit
 
             ( String, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Char, Char ) ->
-                noSubstitutionNeeded
+                -- no substitution needed
+                State.pureUnit
 
             ( Char, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Bool, Bool ) ->
-                noSubstitutionNeeded
+                -- no substitution needed
+                State.pureUnit
 
             ( Bool, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Unit, Unit ) ->
-                noSubstitutionNeeded
+                -- no substitution needed
+                State.pureUnit
 
             ( Unit, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Function a, Function b ) ->
                 unifyMany
@@ -654,13 +666,13 @@ unifyMono cfg rawT1 rawT2 =
                     ]
 
             ( Function _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( List list1, List list2 ) ->
                 unifyMany cfg [ ( list1, list2 ) ]
 
             ( List _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Tuple2 t1e1 t1e2, Tuple2 t2e1 t2e2 ) ->
                 unifyMany
@@ -670,7 +682,7 @@ unifyMono cfg rawT1 rawT2 =
                     ]
 
             ( Tuple2 _ _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Tuple3 t1e1 t1e2 t1e3, Tuple3 t2e1 t2e2 t2e3 ) ->
                 unifyMany
@@ -681,16 +693,16 @@ unifyMono cfg rawT1 rawT2 =
                     ]
 
             ( Tuple3 _ _ _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( Record r1, Record r2 ) ->
-                recordBindings r1.fields r2.fields
+                recordBindings cfg t1 t2 r1.fields r2.fields
 
             ( Record r, ExtensibleRecord er ) ->
-                recordVsExtensible r.fields er
+                unifyRecordVsExtensible cfg t1 t2 r.fields er
 
             ( Record _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
                 {- Fields that only one side mentions must be added to the other
@@ -761,10 +773,10 @@ unifyMono cfg rawT1 rawT2 =
                         )
 
             ( ExtensibleRecord er, Record r ) ->
-                recordVsExtensible r.fields er
+                unifyRecordVsExtensible cfg t1 t2 r.fields er
 
             ( ExtensibleRecord _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( UserDefinedType ut1, UserDefinedType ut2 ) ->
                 if
@@ -772,18 +784,18 @@ unifyMono cfg rawT1 rawT2 =
                         || (ut1.moduleId /= ut2.moduleId)
                         || (ut1.name /= ut2.name)
                 then
-                    typeMismatch ()
+                    typeMismatch cfg t1 t2
 
                 else
                     case zipArgs ut1.args ut2.args of
                         Nothing ->
-                            typeMismatch ()
+                            typeMismatch cfg t1 t2
 
                         Just eqs ->
                             unifyMany cfg eqs
 
             ( UserDefinedType _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
             ( WebGLShader webgl1, WebGLShader webgl2 ) ->
                 let
@@ -834,7 +846,7 @@ unifyMono cfg rawT1 rawT2 =
                                 isClosed set2.extensionTypevar
                         in
                         if closed1 && closed2 && not (Dict.isEmpty only1 && Dict.isEmpty only2) then
-                            typeMismatch ()
+                            typeMismatch cfg t1 t2
 
                         else
                             State.do State.getNextIdAndTick <| \tailId ->
@@ -894,7 +906,7 @@ unifyMono cfg rawT1 rawT2 =
                     }
 
             ( WebGLShader _, _ ) ->
-                typeMismatch ()
+                typeMismatch cfg t1 t2
 
 
 {-| Binds an unbound typeVar root with a given monotype.
