@@ -43,7 +43,6 @@ import Elm.TypeInference.Type.Internal as TypeI
         )
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations, TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
-import List.ExtraExtra
 import Regex exposing (Regex)
 
 
@@ -812,24 +811,22 @@ solveLetDeclarations ctx declarations =
         byIndex =
             Dict.fromList indexed
 
-        boundNames : Node LetDeclaration -> List VarName
-        boundNames declNode =
-            case Node.value declNode of
-                LetFunction fn ->
-                    [ functionName fn ]
-
-                LetDestructuring patternNode _ ->
-                    Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
-
         -- name -> index of the declaration binding it
         indexOfName : Dict VarName Int
         indexOfName =
             indexed
-                |> List.ExtraExtra.fastConcatMap
-                    (\( index, declNode ) ->
-                        boundNames declNode |> List.map (\name -> ( name, index ))
+                |> List.foldl
+                    (\( index, declNode ) accAcrossDecls ->
+                        case Node.value declNode of
+                            LetFunction fn ->
+                                Dict.insert (functionName fn) index accAcrossDecls
+
+                            LetDestructuring patternNode _ ->
+                                Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
+                                    |> List.foldl (\name acc -> Dict.insert name index acc)
+                                        accAcrossDecls
                     )
-                |> Dict.fromList
+                    Dict.empty
 
         hasLetAnnotation : Node LetDeclaration -> Bool
         hasLetAnnotation declNode =
