@@ -140,7 +140,6 @@ project currentPackage depEnv files =
                 , byName = byName
                 , acc =
                     { tables = Dict.empty
-                    , errors = Dict.empty
                     , interfaces = Dict.empty
                     }
                 }
@@ -231,20 +230,15 @@ inferModule moduleName ((Project p) as proj) =
                         proj
             in
             ( case Dict.get m.key newP.acc.tables of
-                Just table ->
-                    Ok table
+                Just result ->
+                    result
 
                 Nothing ->
-                    case Dict.get m.key newP.acc.errors of
-                        Just err ->
-                            Err err
-
-                        Nothing ->
-                            Err
-                                { moduleName = moduleName
-                                , declarationNames = []
-                                , details = ModuleNotFound
-                                }
+                    Err
+                        { moduleName = moduleName
+                        , declarationNames = []
+                        , details = ModuleNotFound
+                        }
             , Project newP
             )
 
@@ -476,8 +470,7 @@ type alias ProjectModule =
 
 
 type alias ProjectAcc =
-    { tables : Dict ModuleName TypeLookupTable
-    , errors : Dict ModuleName Error
+    { tables : Dict ModuleName (Result Error TypeLookupTable)
     , interfaces : Dict ModuleId ModuleInterface
     }
 
@@ -501,14 +494,12 @@ inferOne currentPackage depEnv moduleMapping m acc =
     in
     case inferModule_ currentPackage depEnv moduleMapping imported m.index m.file of
         Ok { table, interface } ->
-            { tables = Dict.insert m.key table acc.tables
-            , errors = Dict.remove m.key acc.errors
+            { tables = Dict.insert m.key (Ok table) acc.tables
             , interfaces = Dict.insert m.index.moduleId interface acc.interfaces
             }
 
         Err err ->
-            { tables = Dict.remove m.key acc.tables
-            , errors = Dict.insert m.key err acc.errors
+            { tables = Dict.insert m.key (Err err) acc.tables
             , interfaces =
                 Dict.insert m.index.moduleId
                     { moduleIndex = m.index
