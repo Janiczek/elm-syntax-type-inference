@@ -196,19 +196,7 @@ inferNodes nodes (Project p) =
         toPrepare : List ProjectModule
         toPrepare =
             SCC.stronglyConnectedComponents filteredNodes (firstPartyImportsOf p.byName)
-                |> List.ExtraExtra.fastConcatMap
-                    (\component ->
-                        component
-                            |> List.filterMap
-                                (\id ->
-                                    case Dict.get id p.byName of
-                                        Nothing ->
-                                            Nothing
-
-                                        (Just m) as justM ->
-                                            justM
-                                )
-                    )
+                |> List.ExtraExtra.fastConcatMap (\component -> List.filterMap (\id -> Dict.get id p.byName) component)
 
         newAcc : ProjectAcc
         newAcc =
