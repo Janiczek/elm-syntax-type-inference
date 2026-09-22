@@ -501,21 +501,21 @@ inferOne currentPackage depEnv moduleMapping m acc =
     in
     case inferModule_ currentPackage depEnv moduleMapping imported m.index m.file of
         Ok { table, interface } ->
-            { acc
-                | tables = Dict.insert m.key table acc.tables
-                , interfaces = Dict.insert m.index.moduleId interface acc.interfaces
+            { tables = Dict.insert m.key table acc.tables
+            , errors = acc.errors
+            , interfaces = Dict.insert m.index.moduleId interface acc.interfaces
             }
 
         Err err ->
-            { acc
-                | errors = Dict.insert m.key err acc.errors
-                , interfaces =
-                    Dict.insert m.index.moduleId
-                        { moduleIndex = m.index
-                        , values = Dict.empty
-                        , typeAliases = Dict.empty
-                        }
-                        acc.interfaces
+            { tables = acc.tables
+            , errors = Dict.insert m.key err acc.errors
+            , interfaces =
+                Dict.insert m.index.moduleId
+                    { moduleIndex = m.index
+                    , values = Dict.empty
+                    , typeAliases = Dict.empty
+                    }
+                    acc.interfaces
             }
 
 
