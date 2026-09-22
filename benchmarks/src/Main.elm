@@ -1,4 +1,3 @@
-
 module Main exposing (main)
 
 import Benchmark exposing (Benchmark, describe)
@@ -8,7 +7,7 @@ import Benchmark.Runner.Alternative as BenchmarkRunner
 
 main : BenchmarkRunner.Program
 main =
-    describe "for core-extra"
+    describe "for Janiczek/elm-syntax-type-inference"
         [ rank "String.ExtraExtra.firstCharIsUpper"
             (\f -> exampleStringList |> List.foldl (\exampleString _ -> f exampleString) False)
             [ ( "String.uncons", firstCharIsUpperUncons )
@@ -20,13 +19,48 @@ main =
             , ( "String.left char-width (reused) >> String.any", firstCharIsUpperLeftAnyReuseSlice )
             , ( "String.left char-width (try 1 first, reused) >> String.any", firstCharIsUpperLeftAnyShortcutReuseSlice )
             ]
+        , rank "Elm.Syntax.ModuleName.Extra.splitLastDot"
+            (\f -> exampleModuleNames |> List.foldl (\exampleModuleName _ -> f exampleModuleName) ( "", "" ))
+            [ ( "String.split, List.reverse twice", splitLastDotSplitListReverseTwice )
+            , ( "String.indexes, last Maybe, String.left/dropLeft", splitLastDotIndexesLastMaybeLeftDropLeft )
+            , ( "String.indexes, non-empty last, String.left/dropLeft", splitLastDotIndexesNonEmptyLastLeftDropLeft )
+            , ( "String.indexes, drop before last, String.left/dropLeft", splitLastDotIndexesDropBeforeLastLeftDropLeft )
+            , ( "String.foldl find . string, String.left/dropLeft", splitLastDotFoldrFindStringLeftDropLeft )
+            , ( "String.foldl find . code, String.left/dropLeft", splitLastDotFoldrFindCodeLeftDropLeft )
+            ]
+        , rank "Elm.Syntax.ModuleName.Extra.dottedToFilePath"
+            (\f -> exampleModuleNames |> List.foldl (\example _ -> f example) "")
+            [ ( "split, join", dottedToFilePathSplitJoin )
+            , ( "replace", dottedToFilePathReplace )
+            ]
+            rank
+            "Elm.Syntax.FullModuleName.toString"
+            (\f -> exampleFullModuleNames |> List.foldl (\example _ -> f example) "")
+            [ ( "join", fullModuleNameToStringJoin )
+            , ( "++ join", fullModuleNameToStringAppendJoin )
+            ]
         ]
         |> BenchmarkRunner.program
 
 
 exampleStringList : List String
 exampleStringList =
-    [ "Dict", "size", "List", "length", "identity", "", "", "VeryLongModuleNameYouWouldNotBelieveHowLongItIs", "NonEmpty", "map", "foldl", "foldr", "", "Internal", "CompanyName", "view", "update", "subscriptions"]
+    [ "Dict", "size", "List", "length", "identity", "", "", "VeryLongModuleNameYouWouldNotBelieveHowLongItIs", "NonEmpty", "map", "foldl", "foldr", "", "Internal", "CompanyName", "view", "update", "subscriptions" ]
+
+
+exampleModuleNames : List String
+exampleModuleNames =
+    [ "Dict.Dict", "List.List", "TypeAliasWithoutRecordConstructorFunction", "Expect.VeryLongModuleNameYouWouldNotBelieveHowLongItIs", "VeryLongModuleNameYouWouldNotBelieveHowLongItIs.Test", "List.NonEmpty.NonEmpty", "Internal", "CompanyName", "App", "Mode", "Balance.Balanced", "Elm.Syntax.Expression.Expression", "List.ExtraExtra", "Elm.TypeInference.FullModuleName.FullModuleName" ]
+
+
+exampleModuleNameSegments : List (List String)
+exampleModuleNameSegments =
+    exampleModuleNames |> List.map (\moduleName -> moduleName |> String.split ".")
+
+
+exampleFullModuleNames : List ( String, List String )
+exampleFullModuleNames =
+    exampleModuleNames |> List.map (\moduleName -> ( "Example", moduleName |> String.split "." ))
 
 
 firstCharIsUpperUncons : String -> Bool
@@ -71,11 +105,11 @@ firstCharIsUpperSliceToList str =
 
 firstCharIsUpperSliceAny : String -> Bool
 firstCharIsUpperSliceAny str =
-    String.any Char.isUpper 
+    String.any Char.isUpper
         (String.slice 0
-            (if String.any charIsUtf8Surrogate (String.slice 0 1 str) then   
-                2 
-            
+            (if String.any charIsUtf8Surrogate (String.slice 0 1 str) then
+                2
+
              else
                 1
             )
@@ -85,11 +119,11 @@ firstCharIsUpperSliceAny str =
 
 firstCharIsUpperLeftAny : String -> Bool
 firstCharIsUpperLeftAny str =
-    String.any Char.isUpper 
+    String.any Char.isUpper
         (String.left
-            (if String.any charIsUtf8Surrogate (String.left 1 str) then   
-                2 
-            
+            (if String.any charIsUtf8Surrogate (String.left 1 str) then
+                2
+
              else
                 1
             )
@@ -105,9 +139,9 @@ firstCharIsUpperLeftAnyReuseSlice str =
             String.left 1 str
     in
     String.any Char.isUpper
-        (if String.any charIsUtf8Surrogate firstCodeUnit then   
+        (if String.any charIsUtf8Surrogate firstCodeUnit then
             String.left 2 str
-        
+
          else
             firstCodeUnit
         )
@@ -121,8 +155,8 @@ firstCharIsUpperLeftAnyShortcutReuseSlice str =
             String.left 1 str
     in
     String.any Char.isUpper firstCodeUnit
-        || ((String.any charIsUtf8Surrogate firstCodeUnit)   
-                && (String.any Char.isUpper (String.left 2 str))
+        || (String.any charIsUtf8Surrogate firstCodeUnit
+                && String.any Char.isUpper (String.left 2 str)
            )
 
 
@@ -141,3 +175,163 @@ leading to NaN being returned.
 charIsUtf8Surrogate : Char -> Bool
 charIsUtf8Surrogate char =
     Basics.isNaN (Basics.toFloat (Char.toCode char))
+
+
+splitLastDotSplitListReverseTwice : String -> ( String, String )
+splitLastDotSplitListReverseTwice qualifiedName =
+    case List.reverse (String.split "." qualifiedName) of
+        [] ->
+            ( "", qualifiedName )
+
+        [ single ] ->
+            ( "", single )
+
+        last :: rest ->
+            ( String.join "." (List.reverse rest), last )
+
+
+splitLastDotIndexesLastMaybeLeftDropLeft : String -> ( String, String )
+splitLastDotIndexesLastMaybeLeftDropLeft qualifiedName =
+    case listLast (String.indexes "." qualifiedName) of
+        Nothing ->
+            ( "", qualifiedName )
+
+        Just lastDotIndex ->
+            ( String.left lastDotIndex qualifiedName, String.dropLeft (lastDotIndex + 1) qualifiedName )
+
+
+listLast : List a -> Maybe a
+listLast list =
+    case list of
+        [] ->
+            Nothing
+
+        [ onlyElement ] ->
+            Just onlyElement
+
+        _ :: tail ->
+            listLast tail
+
+
+splitLastDotIndexesNonEmptyLastLeftDropLeft : String -> ( String, String )
+splitLastDotIndexesNonEmptyLastLeftDropLeft qualifiedName =
+    case String.indexes "." qualifiedName of
+        [] ->
+            ( "", qualifiedName )
+
+        dotIndex0 :: dotIndex1Up ->
+            let
+                lastDotIndex : Int
+                lastDotIndex =
+                    listNonEmptyLast dotIndex0 dotIndex1Up
+            in
+            ( String.left lastDotIndex qualifiedName, String.dropLeft (lastDotIndex + 1) qualifiedName )
+
+
+listNonEmptyLast : a -> List a -> a
+listNonEmptyLast el0 el1Up =
+    case el1Up of
+        [] ->
+            el0
+
+        el1 :: el2Up ->
+            listNonEmptyLast el1 el2Up
+
+
+splitLastDotIndexesDropBeforeLastLeftDropLeft : String -> ( String, String )
+splitLastDotIndexesDropBeforeLastLeftDropLeft qualifiedName =
+    case listDropBeforeLast (String.indexes "." qualifiedName) of
+        [] ->
+            ( "", qualifiedName )
+
+        lastDotIndex :: _ ->
+            ( String.left lastDotIndex qualifiedName, String.dropLeft (lastDotIndex + 1) qualifiedName )
+
+
+listDropBeforeLast : List a -> List a
+listDropBeforeLast list =
+    case list of
+        _ :: ((_ :: _) as tail) ->
+            listDropBeforeLast tail
+
+        -- [] | [ _ ]
+        _ ->
+            list
+
+
+splitLastDotFoldrFindStringLeftDropLeft : String -> ( String, String )
+splitLastDotFoldrFindStringLeftDropLeft qualifiedName =
+    case
+        String.foldr
+            (\c acc ->
+                case acc of
+                    (Ok _) as ok ->
+                        ok
+
+                    Err i ->
+                        if String.fromChar c == "." then
+                            Ok i
+
+                        else
+                            Err (i - 1)
+            )
+            (Err (String.length qualifiedName - 1))
+            qualifiedName
+    of
+        Err _ ->
+            ( "", qualifiedName )
+
+        Ok lastDotIndex ->
+            ( String.left lastDotIndex qualifiedName, String.right (lastDotIndex + 1) qualifiedName )
+
+
+splitLastDotFoldrFindCodeLeftDropLeft : String -> ( String, String )
+splitLastDotFoldrFindCodeLeftDropLeft qualifiedName =
+    case
+        String.foldr
+            (\c acc ->
+                case acc of
+                    (Ok _) as ok ->
+                        ok
+
+                    Err i ->
+                        -- == '.'
+                        if Char.toCode c == 46 then
+                            Ok i
+
+                        else
+                            Err (i - 1)
+            )
+            (Err (String.length qualifiedName - 1))
+            qualifiedName
+    of
+        Err _ ->
+            ( "", qualifiedName )
+
+        Ok lastDotIndex ->
+            ( String.left lastDotIndex qualifiedName, String.right (lastDotIndex + 1) qualifiedName )
+
+
+dottedToFilePathSplitJoin : String -> String
+dottedToFilePathSplitJoin dotted =
+    "src/" ++ String.join "/" (String.split "." dotted) ++ ".elm"
+
+
+dottedToFilePathReplace : String -> String
+dottedToFilePathReplace dotted =
+    "src/" ++ String.replace "." "/" dotted ++ ".elm"
+
+
+fullModuleNameToStringJoin : ( String, List String ) -> String
+fullModuleNameToStringJoin ( fullModuleNameSegment0, fullModuleNameSegment1Up ) =
+    String.join "." (fullModuleNameSegment0 :: fullModuleNameSegment1Up)
+
+
+fullModuleNameToStringAppendJoin : ( String, List String ) -> String
+fullModuleNameToStringAppendJoin ( fullModuleNameSegment0, fullModuleNameSegment1Up ) =
+    case fullModuleNameSegment1Up of
+        [] ->
+            fullModuleNameSegment0
+
+        _ ->
+            fullModuleNameSegment0 ++ "." ++ String.join "." fullModuleNameSegment1Up

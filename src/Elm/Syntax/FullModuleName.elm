@@ -45,9 +45,17 @@ fromString string =
 -}
 fromModuleName_ : ModuleName -> FullModuleName
 fromModuleName_ moduleName =
-    moduleName
-        |> fromModuleName
-        |> Maybe.withDefault (fromString "<BUG> The file didn't have a proper module name")
+    case moduleName of
+        [] ->
+            errorFullModuleName
+
+        moduleNameSegmentHead :: moduleNameSegmentTail ->
+            ( moduleNameSegmentHead, moduleNameSegmentTail )
+
+
+errorFullModuleName : FullModuleName
+errorFullModuleName =
+    fromString "<BUG> The file didn't have a proper module name"
 
 
 {-|
@@ -76,5 +84,10 @@ toModuleName fullModuleName =
 
 -}
 toString : FullModuleName -> String
-toString fullModuleName =
-    ModuleNameExtra.toString (toModuleName fullModuleName)
+toString ( fullModuleNameSegment0, fullModuleNameSegment1Up ) =
+    case fullModuleNameSegment1Up of
+        [] ->
+            fullModuleNameSegment0
+
+        _ ->
+            fullModuleNameSegment0 ++ "." ++ String.join "." fullModuleNameSegment1Up
