@@ -853,19 +853,14 @@ toPublicPair moduleMapping t1 t2 =
 
 toPublicTypeNormalized : ModuleIds.Mapping -> MonoType -> Public.Type
 toPublicTypeNormalized moduleMapping mono_ =
-    let
-        f : MonoType -> Public.Type
-        f =
-            toPublicType moduleMapping { alreadyNormalized = True }
-    in
     case mono_ of
         TypeVar typeVar ->
             Public.TypeVar (TypeVar.toString typeVar)
 
         Function { from, to } ->
             Public.Function
-                { from = f from
-                , to = f to
+                { from = toPublicType moduleMapping { alreadyNormalized = True } from
+                , to = toPublicType moduleMapping { alreadyNormalized = True } to
                 }
 
         Int ->
@@ -884,24 +879,24 @@ toPublicTypeNormalized moduleMapping mono_ =
             Public.Bool
 
         List ts ->
-            Public.List (f ts)
+            Public.List (toPublicType moduleMapping { alreadyNormalized = True } ts)
 
         Unit ->
             Public.Unit
 
         Tuple2 t1 t2 ->
             Public.Tuple2
-                (f t1)
-                (f t2)
+                (toPublicType moduleMapping { alreadyNormalized = True } t1)
+                (toPublicType moduleMapping { alreadyNormalized = True } t2)
 
         Tuple3 t1 t2 t3 ->
             Public.Tuple3
-                (f t1)
-                (f t2)
-                (f t3)
+                (toPublicType moduleMapping { alreadyNormalized = True } t1)
+                (toPublicType moduleMapping { alreadyNormalized = True } t2)
+                (toPublicType moduleMapping { alreadyNormalized = True } t3)
 
         Record { fields } ->
-            Public.Record { fields = Dict.map (\_ v -> f v) fields }
+            Public.Record { fields = Dict.map (\_ v -> toPublicType moduleMapping { alreadyNormalized = True } v) fields }
 
         ExtensibleRecord extensibleRecordUncollapsed ->
             case collapseExtensible extensibleRecordUncollapsed of
@@ -919,7 +914,7 @@ toPublicTypeNormalized moduleMapping mono_ =
                                     -- library, as they don't have access to MonoType
                                     -- constructors.
                                     "<elm-syntax-type-inference bug: non-var as extensible record base>"
-                        , fields = fields |> Dict.map (\_ v -> f v)
+                        , fields = fields |> Dict.map (\_ v -> toPublicType moduleMapping { alreadyNormalized = True } v)
                         }
 
                 collapsed ->
@@ -930,19 +925,19 @@ toPublicTypeNormalized moduleMapping mono_ =
                 { package = r.package
                 , moduleName = moduleIdToModuleName moduleMapping r.moduleId
                 , name = r.name
-                , arguments = List.map f r.args
+                , arguments = List.map (\arg -> toPublicType moduleMapping { alreadyNormalized = True } arg) r.args
                 }
 
         WebGLShader r ->
             let
                 ( attributesFields, attributesExtensionTypevar ) =
-                    shaderSlotToPublic f r.attributesExtension r.attributes
+                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.attributesExtension r.attributes
 
                 ( uniformsFields, uniformsExtensionTypevar ) =
-                    shaderSlotToPublic f r.uniformsExtension r.uniforms
+                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.uniformsExtension r.uniforms
 
                 ( varyingsFields, varyingsExtensionTypevar ) =
-                    shaderSlotToPublic f r.varyingsExtension r.varyings
+                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.varyingsExtension r.varyings
             in
             Public.WebGLShader
                 { attributesFields = attributesFields
