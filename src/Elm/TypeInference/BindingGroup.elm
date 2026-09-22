@@ -118,7 +118,7 @@ checkOne cfg member =
                         , details = TypeMismatch pubAnno pubFinal
                         }
 
-                else if List.isEmpty (VarSet.toList (TypeI.monoTypeVars finalMono).order) then
+                else if List.isEmpty (VarSet.toList (TypeI.monoTypeVars finalMono)) then
                     let
                         ( pubAnno, pubFinal ) =
                             TypeI.toPublicPair cfg.moduleMapping annoMono finalMono

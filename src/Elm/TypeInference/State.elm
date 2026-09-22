@@ -616,7 +616,6 @@ generalize monoType =
         boundIds : List TypeVar
         boundIds =
             TypeI.monoTypeVars substitutedMono
-                |> .order
                 |> VarSet.toList
                 |> List.filter
                     (\var -> SubstitutionMap.letRankOf var state.subst > state.letRank)
