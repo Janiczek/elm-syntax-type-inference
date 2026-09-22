@@ -134,7 +134,7 @@ neededSources deps sources =
                         docsModuleRefs pkg.modules
                             |> List.foldl
                                 (\(( m, _ ) as ref) acc ->
-                                    if isKnownRef docsTypes ref then
+                                    if isKnownRef docsTypes ref || Set.member m supplied then
                                         acc
 
                                     else
@@ -142,14 +142,7 @@ neededSources deps sources =
                                 )
                                 Set.empty
                             |> Set.toList
-                            |> List.filterMap
-                                (\m ->
-                                    if Set.member m supplied then
-                                        Nothing
-
-                                    else
-                                        Just (ModuleNameExtra.dottedToFilePath m)
-                                )
+                            |> List.map ModuleNameExtra.dottedToFilePath
                 in
                 case remaining of
                     [] ->
