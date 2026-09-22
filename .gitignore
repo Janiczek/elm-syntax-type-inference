@@ -5,3 +5,4 @@ e2e/tests/
 !e2e/tests/extensible-record-infinite-type
 !e2e/tests/histogram-force-comparable
 !e2e/tests/set-import-resolution
+benchmarks/index.html
