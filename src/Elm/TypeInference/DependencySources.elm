@@ -63,7 +63,7 @@ referencedModules deps =
 
         documented : List String
         documented =
-            List.map .name allModules
+            List.foldr (\m acc -> m.name :: acc) [] allModules
 
         referenced : List String
         referenced =
