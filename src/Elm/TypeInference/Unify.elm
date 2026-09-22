@@ -519,14 +519,15 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
     case expandAlias cfg.typeAliases er.extensionTypevar of
         Record extFields ->
             let
-                ( _, _, overlapEqs ) =
+                overlapEqs : List ( MonoType, MonoType )
+                overlapEqs =
                     Dict.merge
-                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
-                        (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
-                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                        (\_ _ eqs -> eqs)
+                        (\_ v1 v2 eqs -> ( v1, v2 ) :: eqs)
+                        (\_ _ eqs -> eqs)
                         extFields.fields
                         er.fields
-                        ( Dict.empty, Dict.empty, [] )
+                        []
 
                 combined : Dict VarName MonoType
                 combined =
@@ -537,14 +538,15 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
 
         ExtensibleRecord extEr ->
             let
-                ( _, _, overlapEqs ) =
+                overlapEqs : List ( MonoType, MonoType )
+                overlapEqs =
                     Dict.merge
-                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
-                        (\_ v1 v2 ( o1, o2, eqs ) -> ( o1, o2, ( v1, v2 ) :: eqs ))
-                        (\_ _ ( o1, o2, eqs ) -> ( o1, o2, eqs ))
+                        (\_ _ eqs -> eqs)
+                        (\_ v1 v2 eqs -> ( v1, v2 ) :: eqs)
+                        (\_ _ eqs -> eqs)
                         extEr.fields
                         er.fields
-                        ( Dict.empty, Dict.empty, [] )
+                        []
 
                 merged : Dict VarName MonoType
                 merged =
