@@ -105,11 +105,16 @@ neededSources deps sources =
                                 (\mod acc ->
                                     Dict.update mod.name
                                         (\existing ->
-                                            Just
-                                                (Set.union
-                                                    (Maybe.withDefault Set.empty existing)
-                                                    (documentedTypeNames mod)
-                                                )
+                                            case existing of
+                                                Just existing_ ->
+                                                    Just
+                                                        (Set.union
+                                                            (documentedTypeNames mod)
+                                                            existing_
+                                                        )
+
+                                                Nothing ->
+                                                    Just (documentedTypeNames mod)
                                         )
                                         acc
                                 )
