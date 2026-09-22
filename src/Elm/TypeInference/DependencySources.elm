@@ -231,24 +231,29 @@ docsTypeRefs tipe =
 
 isPrimitiveRef : String -> String -> Bool
 isPrimitiveRef moduleName typeName =
-    case ( moduleName, typeName ) of
-        ( "Basics", "Int" ) ->
-            True
+    case moduleName of
+        "Basics" ->
+            case typeName of
+                "Int" ->
+                    True
 
-        ( "Basics", "Float" ) ->
-            True
+                "Float" ->
+                    True
 
-        ( "Basics", "Bool" ) ->
-            True
+                "Bool" ->
+                    True
 
-        ( "Char", "Char" ) ->
-            True
+                _ ->
+                    False
 
-        ( "String", "String" ) ->
-            True
+        "Char" ->
+            typeName == "Char"
 
-        ( "List", "List" ) ->
-            True
+        "String" ->
+            typeName == "String"
+
+        "List" ->
+            typeName == "List"
 
         _ ->
             False
