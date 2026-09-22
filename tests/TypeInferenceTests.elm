@@ -4115,4 +4115,214 @@ lazyProjectSuite =
 
             _ ->
                 Expect.fail "Couldn't parse fixture or build dependency env"
+        , Test.test "addFile clears a stale error: fixing a broken module lets it succeed on the next inferModule call" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj0 ->
+                let
+                    ( beforeResult, proj1 ) =
+                        Elm.TypeInference.inferModule [ "Broken" ] proj0
+
+                    fixedBroken : Dict ModuleName String
+                    fixedBroken =
+                        Dict.singleton [ "Broken" ]
+                            (String.ExtraExtra.multilineInput """
+        module Broken exposing (bad)
+
+        bad : Int
+        bad =
+            1
+        """)
+                in
+                case parseModules fixedBroken of
+                    Err err ->
+                        Expect.fail ("Couldn't parse replacement Broken: " ++ Debug.toString err)
+
+                    Ok files ->
+                        case Dict.get [ "Broken" ] files of
+                            Nothing ->
+                                Expect.fail "Couldn't find the parsed replacement Broken file"
+
+                            Just brokenFile ->
+                                case Elm.TypeInference.addFile [ "Broken" ] brokenFile proj1 of
+                                    Err err ->
+                                        Expect.fail ("addFile failed: " ++ Debug.toString err)
+
+                                    Ok proj2 ->
+                                        let
+                                            ( afterResult, _ ) =
+                                                Elm.TypeInference.inferModule [ "Broken" ] proj2
+                                        in
+                                        Expect.all
+                                            [ \() -> beforeResult |> Expect.err
+                                            , \() -> afterResult |> Expect.ok
+                                            ]
+                                            ()
+        , Test.test "addFile invalidates importers: changing an imported module's exposed type flips its importer's result" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj0 ->
+                let
+                    ( beforeResult, proj1 ) =
+                        Elm.TypeInference.inferModule [ "Main" ] proj0
+
+                    changedA : Dict ModuleName String
+                    changedA =
+                        Dict.singleton [ "A" ]
+                            (String.ExtraExtra.multilineInput """
+        module A exposing (value)
+
+        value : String
+        value =
+            "not an int"
+        """)
+                in
+                case parseModules changedA of
+                    Err err ->
+                        Expect.fail ("Couldn't parse replacement A: " ++ Debug.toString err)
+
+                    Ok files ->
+                        case Dict.get [ "A" ] files of
+                            Nothing ->
+                                Expect.fail "Couldn't find the parsed replacement A file"
+
+                            Just aFile ->
+                                case Elm.TypeInference.addFile [ "A" ] aFile proj1 of
+                                    Err err ->
+                                        Expect.fail ("addFile failed: " ++ Debug.toString err)
+
+                                    Ok proj2 ->
+                                        let
+                                            ( afterResult, _ ) =
+                                                Elm.TypeInference.inferModule [ "Main" ] proj2
+                                        in
+                                        Expect.all
+                                            [ \() -> beforeResult |> Expect.ok
+                                            , \() -> afterResult |> Expect.err
+                                            ]
+                                            ()
+        , Test.test "addFile fails with MissingModuleName for an empty module name" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj0 ->
+                case parseModules (Dict.singleton [ "A" ] "module A exposing (value)\n\nvalue : Int\nvalue =\n    1\n") of
+                    Err err ->
+                        Expect.fail ("Couldn't parse A: " ++ Debug.toString err)
+
+                    Ok files ->
+                        case Dict.get [ "A" ] files of
+                            Nothing ->
+                                Expect.fail "Couldn't find the parsed A file"
+
+                            Just aFile ->
+                                case Elm.TypeInference.addFile [] aFile proj0 of
+                                    Err error ->
+                                        Expect.equal error.details MissingModuleName
+
+                                    Ok _ ->
+                                        Expect.fail "Expected an error"
+        , Test.test "removeFile invalidates importers: removing an imported module breaks its importers on the next inferModule call" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj0 ->
+                let
+                    ( beforeResult, proj1 ) =
+                        Elm.TypeInference.inferModule [ "Main" ] proj0
+
+                    proj2 : Elm.TypeInference.Project
+                    proj2 =
+                        Elm.TypeInference.removeFile [ "A" ] proj1
+
+                    ( afterResult, _ ) =
+                        Elm.TypeInference.inferModule [ "Main" ] proj2
+                in
+                Expect.all
+                    [ \() -> beforeResult |> Expect.ok
+                    , \() -> afterResult |> Expect.err
+                    ]
+                    ()
+        , Test.test "removeFile is a no-op for a module that isn't in the project" <| \() ->
+        case lazyProject of
+            Err err ->
+                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+            Ok proj0 ->
+                Elm.TypeInference.removeFile [ "DoesNotExist" ] proj0
+                    |> Elm.TypeInference.inferModule [ "Main" ]
+                    |> Tuple.first
+                    |> Expect.ok
+        , Test.test "addFile invalidates modules that were already pending on the newly-added name" <| \() ->
+        let
+            addFileFixture : Dict ModuleName String
+            addFileFixture =
+                Dict.fromList
+                    [ ( [ "NeedsC" ]
+                      , String.ExtraExtra.multilineInput """
+            module NeedsC exposing (result)
+
+            import C
+
+            result : Int
+            result =
+                C.thing
+            """
+                              )
+                            ]
+
+                    cModuleSource : String
+                    cModuleSource =
+                        String.ExtraExtra.multilineInput """
+            module C exposing (thing)
+
+            thing : Int
+            thing =
+                42
+            """
+                in
+                case ( parseModules addFileFixture, buildDepEnv [] [] ) of
+                    ( Ok files, Ok depEnv ) ->
+                        case Elm.TypeInference.project Nothing depEnv files of
+                            Err err ->
+                                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+                            Ok proj0 ->
+                                let
+                                    ( beforeResult, proj1 ) =
+                                        Elm.TypeInference.inferModule [ "NeedsC" ] proj0
+                                in
+                                case parseModules (Dict.singleton [ "C" ] cModuleSource) of
+                                    Err err ->
+                                        Expect.fail ("Couldn't parse C: " ++ Debug.toString err)
+
+                                    Ok cFiles ->
+                                        case Dict.get [ "C" ] cFiles of
+                                            Nothing ->
+                                                Expect.fail "Couldn't find the parsed C file"
+
+                                            Just cFile ->
+                                                case Elm.TypeInference.addFile [ "C" ] cFile proj1 of
+                                                    Err err ->
+                                                        Expect.fail ("addFile failed: " ++ Debug.toString err)
+
+                                                    Ok proj2 ->
+                                                        let
+                                                            ( afterResult, _ ) =
+                                                                Elm.TypeInference.inferModule [ "NeedsC" ] proj2
+                                                        in
+                                                        Expect.all
+                                                            [ \() -> beforeResult |> Expect.err
+                                                            , \() -> afterResult |> Expect.ok
+                                                            ]
+                                                            ()
+
+                    _ ->
+                        Expect.fail "Couldn't parse fixture or build dependency env"
         ]

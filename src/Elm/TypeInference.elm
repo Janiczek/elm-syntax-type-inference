@@ -2,6 +2,7 @@ module Elm.TypeInference exposing
     ( dependencyEnv, DependencyEnvOutcome(..), DependencyEnv, Dependency
     , project, Project
     , inferModule, inferModules
+    , addFile, removeFile
     )
 
 {-| Type inference for
@@ -29,6 +30,8 @@ The process:
 @docs project, Project
 
 @docs inferModule, inferModules
+
+@docs addFile, removeFile
 
 -}
 
@@ -81,7 +84,8 @@ type Project
         { currentPackage : Maybe PackageName
         , depEnv : DependencyEnv
         , moduleMapping : ModuleIds.Mapping
-        , byName : Dict ModuleId ProjectModule
+        , modulesById : Dict ModuleId ProjectModule
+        , importedBy : Dict ModuleId (Set ModuleId)
         , acc : ProjectAcc
         }
 
@@ -126,19 +130,25 @@ project currentPackage depEnv files =
 
     else
         let
-            byName : Dict ModuleId ProjectModule
-            byName =
+            modulesById : Dict ModuleId ProjectModule
+            modulesById =
                 modules
                     |> List.foldl
                         (\m acc -> Dict.insert m.index.moduleId m acc)
                         Dict.empty
+
+            importedBy : Dict ModuleId (Set ModuleId)
+            importedBy =
+                modules
+                    |> List.foldl (\m acc -> addReverseEdges m.index acc) Dict.empty
         in
         Ok
             (Project
                 { currentPackage = currentPackage
                 , depEnv = depEnv
                 , moduleMapping = moduleMapping
-                , byName = byName
+                , modulesById = modulesById
+                , importedBy = importedBy
                 , acc =
                     { tables = Dict.empty
                     , interfaces = Dict.empty
@@ -147,9 +157,26 @@ project currentPackage depEnv files =
             )
 
 
+addReverseEdges : ModuleIndex -> Dict ModuleId (Set ModuleId) -> Dict ModuleId (Set ModuleId)
+addReverseEdges index acc =
+    index.imports
+        |> List.foldl
+            (\import_ innerAcc ->
+                Dict.update import_.moduleId
+                    (\maybeImporters ->
+                        Just
+                            (Set.insert index.moduleId
+                                (Maybe.withDefault Set.empty maybeImporters)
+                            )
+                    )
+                    innerAcc
+            )
+            acc
+
+
 firstPartyImportsOf : Dict ModuleId ProjectModule -> ModuleId -> List ModuleId
-firstPartyImportsOf byName moduleId =
-    case Dict.get moduleId byName of
+firstPartyImportsOf modulesById moduleId =
+    case Dict.get moduleId modulesById of
         Nothing ->
             []
 
@@ -157,7 +184,7 @@ firstPartyImportsOf byName moduleId =
             m.index.imports
                 |> List.filterMap
                     (\import_ ->
-                        if Dict.member import_.moduleId byName then
+                        if Dict.member import_.moduleId modulesById then
                             Just import_.moduleId
 
                         else
@@ -191,13 +218,13 @@ inferNodes nodes (Project p) =
     let
         toPrepare : List ProjectModule
         toPrepare =
-            SCC.stronglyConnectedComponents nodes (firstPartyImportsOf p.byName)
+            SCC.stronglyConnectedComponents nodes (firstPartyImportsOf p.modulesById)
                 |> List.ExtraExtra.fastConcatMap
                     (\component ->
                         component
                             |> List.filterMap
                                 (\id ->
-                                    case Dict.get id p.byName of
+                                    case Dict.get id p.modulesById of
                                         Nothing ->
                                             Nothing
 
@@ -219,7 +246,8 @@ inferNodes nodes (Project p) =
         , currentPackage = p.currentPackage
         , depEnv = p.depEnv
         , moduleMapping = p.moduleMapping
-        , byName = p.byName
+        , modulesById = p.modulesById
+        , importedBy = p.importedBy
         }
 
 
@@ -232,7 +260,7 @@ inferModule moduleName ((Project p) as proj) =
         target =
             FullModuleName.fromModuleName moduleName
                 |> Maybe.andThen (\full -> ModuleIds.getId full p.moduleMapping)
-                |> Maybe.andThen (\id -> Dict.get id p.byName)
+                |> Maybe.andThen (\id -> Dict.get id p.modulesById)
     in
     case target of
         Nothing ->
@@ -248,7 +276,7 @@ inferModule moduleName ((Project p) as proj) =
             let
                 (Project newP) =
                     inferNodes
-                        (Set.toList (importClosure (firstPartyImportsOf p.byName) m.index.moduleId))
+                        (Set.toList (importClosure (firstPartyImportsOf p.modulesById) m.index.moduleId))
                         proj
             in
             ( case Dict.get m.key newP.acc.tables of
@@ -301,6 +329,196 @@ inferModules files proj0 =
               }
             , proj0
             )
+
+
+
+-- EDITING A PROJECT
+
+
+{-| Remove each module (transitively) reachable from the supplied modules.
+-}
+invalidate : Dict ModuleId ProjectModule -> Set ModuleId -> Project -> Project
+invalidate modulesById directlyAffected (Project p) =
+    let
+        affected : Set ModuleId
+        affected =
+            importClosureHelp
+                (\id -> Dict.get id p.importedBy |> Maybe.map Set.toList |> Maybe.withDefault [])
+                (Set.toList directlyAffected)
+                Set.empty
+
+        interfaces : Dict ModuleId ModuleInterface
+        interfaces =
+            Set.foldl Dict.remove p.acc.interfaces affected
+
+        tables : Dict ModuleName (Result Error TypeLookupTable)
+        tables =
+            affected
+                |> Set.foldl
+                    (\id acc ->
+                        case Dict.get id modulesById of
+                            Just m ->
+                                Dict.remove m.key acc
+
+                            Nothing ->
+                                acc
+                    )
+                    p.acc.tables
+    in
+    Project
+        { acc =
+            { tables = tables
+            , interfaces = interfaces
+            }
+        , currentPackage = p.currentPackage
+        , depEnv = p.depEnv
+        , moduleMapping = p.moduleMapping
+        , modulesById = p.modulesById
+        , importedBy = p.importedBy
+        }
+
+
+{-| Make `Project` aware of a new or changed file.
+
+**NOTE:** In addition to persisting the returned `Project`, you need to also
+throw away the `TypeLookupTable` for this module that came from the old
+`Project`. They have type inference data based on the old file's source code.
+Instead run `inferModule` again on the new `Project` to get a new
+`TypeLookupTable`.
+
+-}
+addFile : ModuleName -> File -> Project -> Result Error Project
+addFile moduleName file (Project p) =
+    case FullModuleName.fromModuleName moduleName of
+        Nothing ->
+            Err
+                { moduleName = moduleName
+                , declarationNames = []
+                , details = MissingModuleName
+                }
+
+        Just _ ->
+            let
+                ( newIndex, moduleMapping1 ) =
+                    ModuleIndex.fromFile p.moduleMapping file
+
+                id : ModuleId
+                id =
+                    newIndex.moduleId
+
+                oldImportIds : Set ModuleId
+                oldImportIds =
+                    case Dict.get id p.modulesById of
+                        Just old ->
+                            Set.fromList (List.map .moduleId old.index.imports)
+
+                        Nothing ->
+                            Set.empty
+
+                newImportIds : Set ModuleId
+                newImportIds =
+                    Set.fromList (List.map .moduleId newIndex.imports)
+
+                importedBy1 : Dict ModuleId (Set ModuleId)
+                importedBy1 =
+                    Set.diff oldImportIds newImportIds
+                        |> Set.foldl
+                            (\importId acc ->
+                                Dict.update importId
+                                    (Maybe.map (Set.remove id))
+                                    acc
+                            )
+                            p.importedBy
+
+                importedBy2 : Dict ModuleId (Set ModuleId)
+                importedBy2 =
+                    Set.diff newImportIds oldImportIds
+                        |> Set.foldl
+                            (\importId acc ->
+                                Dict.update importId
+                                    (\maybeImporters ->
+                                        Just
+                                            (case maybeImporters of
+                                                Nothing ->
+                                                    Set.singleton id
+
+                                                Just importers ->
+                                                    Set.insert id importers
+                                            )
+                                    )
+                                    acc
+                            )
+                            importedBy1
+
+                modulesById1 : Dict ModuleId ProjectModule
+                modulesById1 =
+                    Dict.insert id
+                        { key = moduleName
+                        , index = newIndex
+                        , file = file
+                        }
+                        p.modulesById
+            in
+            Ok
+                (invalidate modulesById1
+                    (Set.singleton id)
+                    (Project
+                        { moduleMapping = moduleMapping1
+                        , modulesById = modulesById1
+                        , importedBy = importedBy2
+                        , acc = p.acc
+                        , currentPackage = p.currentPackage
+                        , depEnv = p.depEnv
+                        }
+                    )
+                )
+
+
+{-| Remove a module from a `Project`.
+
+**NOTE:** In addition to persisting the returned `Project`, you need to also
+throw away the `TypeLookupTable` for this module that came from the old
+`Project`.
+
+-}
+removeFile : ModuleName -> Project -> Project
+removeFile moduleName ((Project p) as proj) =
+    case
+        FullModuleName.fromModuleName moduleName
+            |> Maybe.andThen (\full -> ModuleIds.getId full p.moduleMapping)
+            |> Maybe.andThen (\id -> Dict.get id p.modulesById |> Maybe.map (Tuple.pair id))
+    of
+        Nothing ->
+            proj
+
+        Just ( id, m ) ->
+            let
+                modulesById1 : Dict ModuleId ProjectModule
+                modulesById1 =
+                    Dict.remove id p.modulesById
+
+                importedBy1 : Dict ModuleId (Set ModuleId)
+                importedBy1 =
+                    m.index.imports
+                        |> List.foldl
+                            (\import_ acc ->
+                                Dict.update import_.moduleId
+                                    (Maybe.map (Set.remove id))
+                                    acc
+                            )
+                            p.importedBy
+            in
+            invalidate p.modulesById
+                (Set.singleton id)
+                (Project
+                    { modulesById = modulesById1
+                    , importedBy = importedBy1
+                    , acc = p.acc
+                    , depEnv = p.depEnv
+                    , currentPackage = p.currentPackage
+                    , moduleMapping = p.moduleMapping
+                    }
+                )
 
 
 

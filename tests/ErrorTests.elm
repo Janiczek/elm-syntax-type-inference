@@ -211,11 +211,11 @@ missingModuleNameTest =
                     (Dict.singleton [ "Main" ]
                         (String.ExtraExtra.multilineInput
                             """
-                        module Main exposing (main)
+                module Main exposing (main)
 
-                        main =
-                            1
-                        """
+                main =
+                    1
+                """
                         )
                     )
             of
@@ -258,11 +258,11 @@ moduleNotFoundTest =
                     (Dict.singleton [ "Main" ]
                         (String.ExtraExtra.multilineInput
                             """
-                        module Main exposing (main)
+                module Main exposing (main)
 
-                        main =
-                            1
-                        """
+                main =
+                    1
+                """
                         )
                     )
             of
