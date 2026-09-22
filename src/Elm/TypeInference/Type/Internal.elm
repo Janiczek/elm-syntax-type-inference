@@ -670,11 +670,6 @@ charFromLetterIndex i =
 
 fromTypeAnnotation : TypeResolver -> TypeAnnotation -> Result FromTypeAnnotationError MonoType
 fromTypeAnnotation resolver typeAnnotation =
-    let
-        f : TypeAnnotation -> Result FromTypeAnnotationError MonoType
-        f annotation =
-            fromTypeAnnotation resolver annotation
-    in
     case typeAnnotation of
         TypeAnnotation.GenericType name ->
             Ok <| TypeVar (TypeVar.parse name)
@@ -684,7 +679,7 @@ fromTypeAnnotation resolver typeAnnotation =
                 args : Result FromTypeAnnotationError (List MonoType)
                 args =
                     annotations
-                        |> Result.Extra.combineMap (\(Node.Node _ arg) -> f arg)
+                        |> Result.Extra.combineMap (\(Node.Node _ arg) -> fromTypeAnnotation resolver arg)
             in
             -- Resolve names before collapsing primitives: local or imported
             -- types can shadow implicit names such as List, Int, and String.
@@ -718,14 +713,14 @@ fromTypeAnnotation resolver typeAnnotation =
 
         TypeAnnotation.Tupled [ a, b ] ->
             Result.map2 Tuple2
-                (f (Node.value a))
-                (f (Node.value b))
+                (fromTypeAnnotation resolver (Node.value a))
+                (fromTypeAnnotation resolver (Node.value b))
 
         TypeAnnotation.Tupled [ a, b, c ] ->
             Result.map3 Tuple3
-                (f (Node.value a))
-                (f (Node.value b))
-                (f (Node.value c))
+                (fromTypeAnnotation resolver (Node.value a))
+                (fromTypeAnnotation resolver (Node.value b))
+                (fromTypeAnnotation resolver (Node.value c))
 
         TypeAnnotation.Tupled _ ->
             Err (ImpossibleAnnotation typeAnnotation)
@@ -752,8 +747,8 @@ fromTypeAnnotation resolver typeAnnotation =
                         , to = to_
                         }
                 )
-                (f (Node.value from))
-                (f (Node.value to))
+                (fromTypeAnnotation resolver (Node.value from))
+                (fromTypeAnnotation resolver (Node.value to))
 
 
 recordBindings :
