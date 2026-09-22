@@ -674,26 +674,6 @@ fromTypeAnnotation resolver typeAnnotation =
         f : TypeAnnotation -> Result FromTypeAnnotationError MonoType
         f annotation =
             fromTypeAnnotation resolver annotation
-
-        recordBindings :
-            List (Node ( Node String, Node TypeAnnotation ))
-            -> Result FromTypeAnnotationError (Dict VarName MonoType)
-        recordBindings fields =
-            fields
-                |> Result.Extra.foldlWhileOk
-                    (\fieldNode acc ->
-                        let
-                            ( fieldNameNode, annotationNode ) =
-                                Node.value fieldNode
-
-                            type_ : Result FromTypeAnnotationError MonoType
-                            type_ =
-                                f (Node.value annotationNode)
-                        in
-                        type_
-                            |> Result.map (\type__ -> Dict.insert (Node.value fieldNameNode) type__ acc)
-                    )
-                    Dict.empty
     in
     case typeAnnotation of
         TypeAnnotation.GenericType name ->
@@ -751,11 +731,11 @@ fromTypeAnnotation resolver typeAnnotation =
             Err (ImpossibleAnnotation typeAnnotation)
 
         TypeAnnotation.Record fields ->
-            recordBindings fields
+            recordBindings resolver fields
                 |> Result.map (\fields_ -> Record { fields = fields_ })
 
         TypeAnnotation.GenericRecord name fields ->
-            recordBindings (Node.value fields)
+            recordBindings resolver (Node.value fields)
                 |> Result.map
                     (\fields_ ->
                         ExtensibleRecord
@@ -774,6 +754,20 @@ fromTypeAnnotation resolver typeAnnotation =
                 )
                 (f (Node.value from))
                 (f (Node.value to))
+
+
+recordBindings :
+    TypeResolver
+    -> List (Node ( Node String, Node TypeAnnotation ))
+    -> Result FromTypeAnnotationError (Dict VarName MonoType)
+recordBindings resolver fields =
+    fields
+        |> Result.Extra.foldlWhileOk
+            (\(Node.Node _ ( Node.Node _ fieldName, Node.Node _ fieldValueAnnotation )) acc ->
+                fromTypeAnnotation resolver fieldValueAnnotation
+                    |> Result.map (\type_ -> Dict.insert fieldName type_ acc)
+            )
+            Dict.empty
 
 
 {-| Convert a type-annotation conversion failure into an inference error.
