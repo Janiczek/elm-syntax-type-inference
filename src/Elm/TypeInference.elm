@@ -189,9 +189,13 @@ importClosureHelp edges queue visited =
 inferNodes : List ModuleId -> Project -> Project
 inferNodes nodes (Project p) =
     let
+        filteredNodes : List ModuleId
+        filteredNodes =
+            List.filter (\id -> not (Dict.member id p.acc.interfaces)) nodes
+
         toPrepare : List ProjectModule
         toPrepare =
-            SCC.stronglyConnectedComponents nodes (firstPartyImportsOf p.byName)
+            SCC.stronglyConnectedComponents filteredNodes (firstPartyImportsOf p.byName)
                 |> List.ExtraExtra.fastConcatMap
                     (\component ->
                         component
@@ -202,11 +206,7 @@ inferNodes nodes (Project p) =
                                             Nothing
 
                                         (Just m) as justM ->
-                                            if Dict.member m.index.moduleId p.acc.interfaces then
-                                                Nothing
-
-                                            else
-                                                justM
+                                            justM
                                 )
                     )
 
