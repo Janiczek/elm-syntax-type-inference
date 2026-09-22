@@ -1168,20 +1168,27 @@ collectFieldList fields2 acc remaining =
 
 collectAnnotationArgs : List MonoType -> List MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
 collectAnnotationArgs annos inferreds acc =
-    case ( annos, inferreds ) of
-        ( [], [] ) ->
-            Just acc
+    case annos of
+        [] ->
+            case inferreds of
+                [] ->
+                    Just acc
 
-        ( a :: restA, b :: restB ) ->
-            case collectAnnotationNames a b acc of
-                Nothing ->
+                _ :: _ ->
                     Nothing
 
-                Just acc1 ->
-                    collectAnnotationArgs restA restB acc1
+        a :: restA ->
+            case inferreds of
+                b :: restB ->
+                    case collectAnnotationNames a b acc of
+                        Nothing ->
+                            Nothing
 
-        _ ->
-            Nothing
+                        Just acc1 ->
+                            collectAnnotationArgs restA restB acc1
+
+                [] ->
+                    Nothing
 
 
 {-| A deduplication key for a normalized monotype inside a single `TypeLookupTable`.
