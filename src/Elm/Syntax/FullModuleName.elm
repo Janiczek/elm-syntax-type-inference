@@ -3,6 +3,7 @@ module Elm.Syntax.FullModuleName exposing
     , fromDotted
     , fromModuleName
     , fromModuleName_
+    , moduleNameIsFull
     , toModuleName
     , toString
     )
@@ -14,6 +15,22 @@ import NonemptyList exposing (NonemptyList)
 
 type alias FullModuleName =
     NonemptyList String
+
+
+{-|
+
+    ["Platform","Cmd"] -> True
+    [] -> False
+
+-}
+moduleNameIsFull : ModuleName -> Bool
+moduleNameIsFull moduleName =
+    case moduleName of
+        [] ->
+            False
+
+        _ :: _ ->
+            True
 
 
 {-|

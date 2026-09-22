@@ -108,19 +108,18 @@ project currentPackage depEnv files =
                         key =
                             FileExtra.moduleName file
                     in
-                    case FullModuleName.fromModuleName key of
-                        Nothing ->
-                            ( acc, True, accModuleMapping )
+                    if FullModuleName.moduleNameIsFull key then
+                        let
+                            ( index, newModuleMapping ) =
+                                ModuleIndex.fromFile accModuleMapping file
+                        in
+                        ( { key = key, index = index, file = file } :: acc
+                        , accMissingModuleName
+                        , newModuleMapping
+                        )
 
-                        Just _ ->
-                            let
-                                ( index, newModuleMapping ) =
-                                    ModuleIndex.fromFile accModuleMapping file
-                            in
-                            ( { key = key, index = index, file = file } :: acc
-                            , accMissingModuleName
-                            , newModuleMapping
-                            )
+                    else
+                        ( acc, True, accModuleMapping )
                 )
                 ( [], False, dep.moduleMapping )
                 files
@@ -401,89 +400,89 @@ addFile file (Project p) =
         moduleName =
             FileExtra.moduleName file
     in
-    case FullModuleName.fromModuleName moduleName of
-        Nothing ->
-            Err
-                { moduleName = moduleName
-                , declarationNames = []
-                , details = MissingModuleName
-                }
+    if FullModuleName.moduleNameIsFull moduleName then
+        let
+            ( newIndex, moduleMapping1 ) =
+                ModuleIndex.fromFile p.moduleMapping file
 
-        Just _ ->
-            let
-                ( newIndex, moduleMapping1 ) =
-                    ModuleIndex.fromFile p.moduleMapping file
+            id : ModuleId
+            id =
+                newIndex.moduleId
 
-                id : ModuleId
-                id =
-                    newIndex.moduleId
+            oldImportIds : Set ModuleId
+            oldImportIds =
+                case Dict.get id p.modulesById of
+                    Just old ->
+                        old.index.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
 
-                oldImportIds : Set ModuleId
-                oldImportIds =
-                    case Dict.get id p.modulesById of
-                        Just old ->
-                            old.index.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
+                    Nothing ->
+                        Set.empty
 
-                        Nothing ->
-                            Set.empty
+            newImportIds : Set ModuleId
+            newImportIds =
+                newIndex.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
 
-                newImportIds : Set ModuleId
-                newImportIds =
-                    newIndex.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
+            importedBy1 : Dict ModuleId (Set ModuleId)
+            importedBy1 =
+                Set.diff oldImportIds newImportIds
+                    |> Set.foldl
+                        (\importId acc ->
+                            Dict.update importId
+                                (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
+                                acc
+                        )
+                        p.importedBy
 
-                importedBy1 : Dict ModuleId (Set ModuleId)
-                importedBy1 =
-                    Set.diff oldImportIds newImportIds
-                        |> Set.foldl
-                            (\importId acc ->
-                                Dict.update importId
-                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
-                                    acc
-                            )
-                            p.importedBy
+            importedBy2 : Dict ModuleId (Set ModuleId)
+            importedBy2 =
+                Set.diff newImportIds oldImportIds
+                    |> Set.foldl
+                        (\importId acc ->
+                            Dict.update importId
+                                (\maybeImporters ->
+                                    Just
+                                        (case maybeImporters of
+                                            Nothing ->
+                                                Set.singleton id
 
-                importedBy2 : Dict ModuleId (Set ModuleId)
-                importedBy2 =
-                    Set.diff newImportIds oldImportIds
-                        |> Set.foldl
-                            (\importId acc ->
-                                Dict.update importId
-                                    (\maybeImporters ->
-                                        Just
-                                            (case maybeImporters of
-                                                Nothing ->
-                                                    Set.singleton id
+                                            Just importers ->
+                                                Set.insert id importers
+                                        )
+                                )
+                                acc
+                        )
+                        importedBy1
 
-                                                Just importers ->
-                                                    Set.insert id importers
-                                            )
-                                    )
-                                    acc
-                            )
-                            importedBy1
-
-                modulesById1 : Dict ModuleId ProjectModule
-                modulesById1 =
-                    Dict.insert id
-                        { key = moduleName
-                        , index = newIndex
-                        , file = file
-                        }
-                        p.modulesById
-            in
-            Ok
-                (invalidate modulesById1
-                    (Set.singleton id)
-                    (Project
-                        { moduleMapping = moduleMapping1
-                        , modulesById = modulesById1
-                        , importedBy = importedBy2
-                        , acc = p.acc
-                        , currentPackage = p.currentPackage
-                        , depEnv = p.depEnv
-                        }
-                    )
+            modulesById1 : Dict ModuleId ProjectModule
+            modulesById1 =
+                Dict.insert id
+                    { key = moduleName
+                    , index = newIndex
+                    , file = file
+                    }
+                    p.modulesById
+        in
+        Ok
+            (invalidate modulesById1
+                (Set.singleton id)
+                (Project
+                    { moduleMapping = moduleMapping1
+                    , modulesById = modulesById1
+                    , importedBy = importedBy2
+                    , acc = p.acc
+                    , currentPackage = p.currentPackage
+                    , depEnv = p.depEnv
+                    }
                 )
+            )
+
+    else
+        -- moduleName is not full
+        Err
+            { moduleName = moduleName
+            , declarationNames = []
+            , details = MissingModuleName
+            }
 
 
 {-| Remove a module from a `Project`.
