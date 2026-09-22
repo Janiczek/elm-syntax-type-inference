@@ -375,7 +375,7 @@ monoTypeVarsHelp type_ acc =
     let
         inFields : Dict VarName MonoType -> VarSet -> VarSet
         inFields fields acc_ =
-            Dict.foldr (\_ fieldType -> monoTypeVarsHelp fieldType) acc_ fields
+            Dict.foldr (\_ fieldType subAcc -> monoTypeVarsHelp fieldType subAcc) acc_ fields
     in
     case type_ of
         TypeVar typeVar ->
