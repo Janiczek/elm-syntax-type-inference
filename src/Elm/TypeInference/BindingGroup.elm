@@ -196,11 +196,9 @@ slotTooGeneral annoSlot finalSlot =
         collapsedFields slot =
             case
                 TypeI.collapseExtensible
-                    (ExtensibleRecord
-                        { extensionTypevar = slot.extensionTypevar
-                        , fields = slot.fields
-                        }
-                    )
+                    { extensionTypevar = slot.extensionTypevar
+                    , fields = slot.fields
+                    }
             of
                 ExtensibleRecord r ->
                     r.fields

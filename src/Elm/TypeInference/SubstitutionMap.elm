@@ -706,11 +706,9 @@ substituteMono store monoType =
             in
             if needsCollapse then
                 ( TypeI.collapseExtensible
-                    (ExtensibleRecord
-                        { extensionTypevar = extensionTypevar_
-                        , fields = fields_
-                        }
-                    )
+                    { extensionTypevar = extensionTypevar_
+                    , fields = fields_
+                    }
                 , Bitwise.or flags changedFlag
                 , s2
                 )

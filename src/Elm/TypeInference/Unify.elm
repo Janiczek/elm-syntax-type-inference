@@ -92,8 +92,12 @@ Full expansion only happens in error reporting.
 -}
 expandAlias : TypeAliases -> MonoType -> MonoType
 expandAlias typeAliases type_ =
-    expandAliasHelp maxAliasDepth typeAliases type_
-        |> TypeI.collapseExtensible
+    case expandAliasHelp maxAliasDepth typeAliases type_ of
+        ExtensibleRecord extensibleRecordUncollapsed ->
+            TypeI.collapseExtensible extensibleRecordUncollapsed
+
+        notExtensibleRecord ->
+            notExtensibleRecord
 
 
 {-| This should be enough (any real alias chain like that should be
@@ -139,11 +143,9 @@ expandAliasHelp fuel typeAliases type_ =
 
             else
                 TypeI.collapseExtensible
-                    (ExtensibleRecord
-                        { extensionTypevar = expandAliasHelp (fuel - 1) typeAliases r.extensionTypevar
-                        , fields = r.fields
-                        }
-                    )
+                    { extensionTypevar = expandAliasHelp (fuel - 1) typeAliases r.extensionTypevar
+                    , fields = r.fields
+                    }
 
         _ ->
             type_
@@ -157,8 +159,12 @@ aliases instead of as the low-level records underneath them).
 -}
 expandAliasDeep : TypeAliases -> MonoType -> MonoType
 expandAliasDeep typeAliases type_ =
-    expandAliasDeepHelp maxAliasDepth typeAliases type_
-        |> TypeI.collapseExtensible
+    case expandAliasDeepHelp maxAliasDepth typeAliases type_ of
+        ExtensibleRecord extensibleRecordUncollapsed ->
+            TypeI.collapseExtensible extensibleRecordUncollapsed
+
+        notExtensibleRecord ->
+            notExtensibleRecord
 
 
 expandAliasDeepHelp : Int -> TypeAliases -> MonoType -> MonoType

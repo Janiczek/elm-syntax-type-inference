@@ -27,7 +27,7 @@ import Elm.TypeInference.Error exposing (ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
-import Elm.TypeInference.Type as Public exposing (PackageName, VarName)
+import Elm.TypeInference.Type as Public exposing (PackageName, Type, VarName)
 import Elm.TypeInference.TypeVar as TypeVar
     exposing
         ( SuperType(..)
@@ -136,30 +136,33 @@ mono =
 Bias towards the outer fields.
 
 -}
-collapseExtensible : MonoType -> MonoType
-collapseExtensible type_ =
-    case type_ of
-        ExtensibleRecord r1 ->
-            if Dict.isEmpty r1.fields then
-                collapseExtensible r1.extensionTypevar
+collapseExtensible :
+    { extensionTypevar : MonoType
+    , fields : Dict VarName MonoType
+    }
+    -> MonoType
+collapseExtensible r1 =
+    if Dict.isEmpty r1.fields then
+        case r1.extensionTypevar of
+            ExtensibleRecord extensionExtensible ->
+                collapseExtensible extensionExtensible
 
-            else
-                case r1.extensionTypevar of
-                    Record r2 ->
-                        Record { fields = Dict.union r1.fields r2.fields }
+            extension ->
+                extension
 
-                    ExtensibleRecord r2 ->
-                        collapseExtensible <|
-                            ExtensibleRecord
-                                { extensionTypevar = r2.extensionTypevar
-                                , fields = Dict.union r1.fields r2.fields
-                                }
+    else
+        case r1.extensionTypevar of
+            Record r2 ->
+                Record { fields = Dict.union r1.fields r2.fields }
 
-                    _ ->
-                        type_
+            ExtensibleRecord r2 ->
+                collapseExtensible <|
+                    { extensionTypevar = r2.extensionTypevar
+                    , fields = Dict.union r1.fields r2.fields
+                    }
 
-        _ ->
-            type_
+            _ ->
+                ExtensibleRecord r1
 
 
 {-| Converts special `UserDefinedType`s into dedicated `MonoType`s:
@@ -851,15 +854,11 @@ toPublicPair moduleMapping t1 t2 =
 toPublicTypeNormalized : ModuleIds.Mapping -> MonoType -> Public.Type
 toPublicTypeNormalized moduleMapping mono_ =
     let
-        collapsed : MonoType
-        collapsed =
-            collapseExtensible mono_
-
         f : MonoType -> Public.Type
         f =
             toPublicType moduleMapping { alreadyNormalized = True }
     in
-    case collapsed of
+    case mono_ of
         TypeVar typeVar ->
             Public.TypeVar (TypeVar.toString typeVar)
 
@@ -904,22 +903,27 @@ toPublicTypeNormalized moduleMapping mono_ =
         Record { fields } ->
             Public.Record { fields = Dict.map (\_ v -> f v) fields }
 
-        ExtensibleRecord { extensionTypevar, fields } ->
-            Public.ExtensibleRecord
-                { extensionTypevar =
-                    case
-                        extensionTypevar
-                    of
-                        TypeVar var ->
-                            TypeVar.toString var
+        ExtensibleRecord extensibleRecordUncollapsed ->
+            case collapseExtensible extensibleRecordUncollapsed of
+                ExtensibleRecord { extensionTypevar, fields } ->
+                    Public.ExtensibleRecord
+                        { extensionTypevar =
+                            case
+                                extensionTypevar
+                            of
+                                TypeVar var ->
+                                    TypeVar.toString var
 
-                        _ ->
-                            -- Should be impossible to trigger for users of the
-                            -- library, as they don't have access to MonoType
-                            -- constructors.
-                            "<elm-syntax-type-inference bug: non-var as extensible record base>"
-                , fields = fields |> Dict.map (\_ v -> f v)
-                }
+                                _ ->
+                                    -- Should be impossible to trigger for users of the
+                                    -- library, as they don't have access to MonoType
+                                    -- constructors.
+                                    "<elm-syntax-type-inference bug: non-var as extensible record base>"
+                        , fields = fields |> Dict.map (\_ v -> f v)
+                        }
+
+                collapsed ->
+                    toPublicTypeNormalized moduleMapping collapsed
 
         UserDefinedType r ->
             Public.Named
@@ -954,11 +958,9 @@ shaderSlotToPublic : (MonoType -> Public.Type) -> MonoType -> Dict VarName MonoT
 shaderSlotToPublic f extensionTypevar fields =
     case
         collapseExtensible
-            (ExtensibleRecord
-                { extensionTypevar = extensionTypevar
-                , fields = fields
-                }
-            )
+            { extensionTypevar = extensionTypevar
+            , fields = fields
+            }
     of
         Record r ->
             ( Dict.map (\_ v -> f v) r.fields
@@ -1026,7 +1028,7 @@ applyAnnotationNames mapping (( style, super ) as var) =
 
 collectAnnotationNames : MonoType -> MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
 collectAnnotationNames annoMono inferredMono acc =
-    case ( collapseExtensible annoMono, collapseExtensible inferredMono ) of
+    case ( annoMono, inferredMono ) of
         ( TypeVar ( Named annoName, annoSuper ), TypeVar ( Generated inferredId, inferredSuper ) ) ->
             if annoSuper /= inferredSuper then
                 Nothing
@@ -1071,26 +1073,31 @@ collectAnnotationNames annoMono inferredMono acc =
 
         ( Function a1, Function b1 ) ->
             collectAnnotationNames a1.from b1.from acc
-                |> Maybe.andThen (collectAnnotationNames a1.to b1.to)
+                |> Maybe.andThen (\a -> a |> collectAnnotationNames a1.to b1.to)
 
         ( List a, List b ) ->
             collectAnnotationNames a b acc
 
         ( Tuple2 a1 a2, Tuple2 b1 b2 ) ->
             collectAnnotationNames a1 b1 acc
-                |> Maybe.andThen (collectAnnotationNames a2 b2)
+                |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
 
         ( Tuple3 a1 a2 a3, Tuple3 b1 b2 b3 ) ->
             collectAnnotationNames a1 b1 acc
-                |> Maybe.andThen (collectAnnotationNames a2 b2)
-                |> Maybe.andThen (collectAnnotationNames a3 b3)
+                |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
+                |> Maybe.andThen (\a -> a |> collectAnnotationNames a3 b3)
 
         ( Record r1, Record r2 ) ->
             collectRecordFields r1.fields r2.fields acc
 
-        ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
-            collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc
-                |> Maybe.andThen (collectRecordFields r1.fields r2.fields)
+        ( ExtensibleRecord r1Uncollapsed, ExtensibleRecord r2Uncollapsed ) ->
+            case ( collapseExtensible r1Uncollapsed, collapseExtensible r2Uncollapsed ) of
+                ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
+                    collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc
+                        |> Maybe.andThen (\a -> a |> collectRecordFields r1.fields r2.fields)
+
+                ( r1, r2 ) ->
+                    collectAnnotationNames r1 r2 acc
 
         ( UserDefinedType u1, UserDefinedType u2 ) ->
             if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
@@ -1101,11 +1108,11 @@ collectAnnotationNames annoMono inferredMono acc =
 
         ( WebGLShader s1, WebGLShader s2 ) ->
             collectAnnotationNames s1.attributesExtension s2.attributesExtension acc
-                |> Maybe.andThen (collectRecordFields s1.attributes s2.attributes)
-                |> Maybe.andThen (collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
-                |> Maybe.andThen (collectRecordFields s1.uniforms s2.uniforms)
-                |> Maybe.andThen (collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
-                |> Maybe.andThen (collectRecordFields s1.varyings s2.varyings)
+                |> Maybe.andThen (\a -> a |> collectRecordFields s1.attributes s2.attributes)
+                |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
+                |> Maybe.andThen (\a -> a |> collectRecordFields s1.uniforms s2.uniforms)
+                |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
+                |> Maybe.andThen (\a -> a |> collectRecordFields s1.varyings s2.varyings)
 
         ( Int, Int ) ->
             Just acc
@@ -1186,7 +1193,13 @@ monoPublicKeyAlpha : MonoType -> String
 monoPublicKeyAlpha mono_ =
     Tuple.first
         (monoPublicKeyAlphaHelp
-            (collapseExtensible mono_)
+            (case mono_ of
+                ExtensibleRecord extensibleRecord ->
+                    collapseExtensible extensibleRecord
+
+                notExtensibleRecord ->
+                    notExtensibleRecord
+            )
             { next = 0, mapping = Dict.empty }
         )
 
@@ -1249,7 +1262,7 @@ alphaVarCode ( style, super ) state =
 
 monoPublicKeyAlphaHelp : MonoType -> AlphaState -> ( String, AlphaState )
 monoPublicKeyAlphaHelp mono_ state =
-    case collapseExtensible mono_ of
+    case mono_ of
         TypeVar var ->
             let
                 ( code, state1 ) =
@@ -1322,15 +1335,20 @@ monoPublicKeyAlphaHelp mono_ state =
             in
             ( "11;" ++ strKey rk, s1 )
 
-        ExtensibleRecord { extensionTypevar, fields } ->
-            let
-                ( ek, s1 ) =
-                    extNameAlpha extensionTypevar state
+        ExtensibleRecord extensibleRecordUncollapsed ->
+            case collapseExtensible extensibleRecordUncollapsed of
+                ExtensibleRecord { extensionTypevar, fields } ->
+                    let
+                        ( ek, s1 ) =
+                            extNameAlpha extensionTypevar state
 
-                ( rk, s2 ) =
-                    recordKeyAlpha fields s1
-            in
-            ( "12;" ++ strKey ek ++ strKey rk, s2 )
+                        ( rk, s2 ) =
+                            recordKeyAlpha fields s1
+                    in
+                    ( "12;" ++ strKey ek ++ strKey rk, s2 )
+
+                collapsed ->
+                    monoPublicKeyAlphaHelp collapsed state
 
         UserDefinedType r ->
             let
@@ -1423,11 +1441,9 @@ shaderSlotKeyAlpha : MonoType -> Dict VarName MonoType -> AlphaState -> ( String
 shaderSlotKeyAlpha extensionTypevar fields state =
     case
         collapseExtensible
-            (ExtensibleRecord
-                { extensionTypevar = extensionTypevar
-                , fields = fields
-                }
-            )
+            { extensionTypevar = extensionTypevar
+            , fields = fields
+            }
     of
         Record r ->
             let
@@ -1459,7 +1475,7 @@ shaderSlotKeyAlpha extensionTypevar fields state =
 
 monoPublicKeyNormalized : MonoType -> String
 monoPublicKeyNormalized mono_ =
-    case collapseExtensible mono_ of
+    case mono_ of
         TypeVar typeVar ->
             "0;" ++ strKey (TypeVar.toString typeVar)
 
@@ -1503,10 +1519,15 @@ monoPublicKeyNormalized mono_ =
         Record { fields } ->
             "11;" ++ strKey (recordKeyOf fields)
 
-        ExtensibleRecord { extensionTypevar, fields } ->
-            "12;"
-                ++ strKey (extNameOf extensionTypevar)
-                ++ strKey (recordKeyOf fields)
+        ExtensibleRecord extensibleRecordNotCollapsed ->
+            case collapseExtensible extensibleRecordNotCollapsed of
+                ExtensibleRecord { extensionTypevar, fields } ->
+                    "12;"
+                        ++ strKey (extNameOf extensionTypevar)
+                        ++ strKey (recordKeyOf fields)
+
+                collapsed ->
+                    monoPublicKeyNormalized collapsed
 
         UserDefinedType r ->
             "13;"
@@ -1554,11 +1575,9 @@ shaderSlotKey : MonoType -> Dict VarName MonoType -> String
 shaderSlotKey extensionTypevar fields =
     case
         collapseExtensible
-            (ExtensibleRecord
-                { extensionTypevar = extensionTypevar
-                , fields = fields
-                }
-            )
+            { extensionTypevar = extensionTypevar
+            , fields = fields
+            }
     of
         Record r ->
             strKey (recordKeyOf r.fields)
