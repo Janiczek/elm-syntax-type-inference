@@ -475,7 +475,7 @@ generalize envFreeVars monoType =
         boundIds : List TypeVar
         boundIds =
             VarSet.diff
-                (monoTypeVars monoType)
+                (monoTypeVars monoType).order
                 envFreeVars
                 |> VarSet.toList
     in

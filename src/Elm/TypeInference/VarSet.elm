@@ -146,8 +146,8 @@ toList order =
     go Set.empty Set.empty order []
 
 
-diff : VarSet -> VarSet -> List TypeVar
-diff l r =
+diff : List TypeVar -> VarSet -> List TypeVar
+diff order r =
     List.filter
         (\( style, super ) ->
             case style of
@@ -157,7 +157,7 @@ diff l r =
                 Named name ->
                     not (Set.member (namedKeyFrom name super) r.membersNamed)
         )
-        l.order
+        order
 
 
 fromList : List TypeVar -> VarSet
