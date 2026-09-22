@@ -91,7 +91,7 @@ finished pending =
 type alias Active =
     { directDependencies : List String
     , allDependencies : List Dependency
-    , files : Dict ModuleName File
+    , files : List File
     , sourcePaths : Dict ModuleName String
     , dependencySources : Dict String (List File)
     , currentPackage : Maybe String
@@ -100,7 +100,7 @@ type alias Active =
 
 type alias PendingInference =
     { depEnv : DependencyEnv
-    , files : Dict ModuleName File
+    , files : List File
     , sourcePaths : Dict ModuleName String
     , currentPackage : Maybe String
     }
@@ -221,7 +221,7 @@ update msg model =
                             , result
                                 (Encode.object
                                     [ ( "ok", Encode.bool False )
-                                    , ( "moduleCount", Encode.int (Dict.size active.files) )
+                                    , ( "moduleCount", Encode.int (List.length active.files) )
                                     , ( "error", Encode.string ("package sources decode error: " ++ Decode.errorToString err) )
                                     ]
                                 )
@@ -349,7 +349,7 @@ run flagsValue =
                                     step
                                         { directDependencies = flags.directDependencies
                                         , allDependencies = allDependencies
-                                        , files = Dict.map (\_ { file } -> file) kept
+                                        , files = kept |> Dict.values |> List.map .file
                                         , sourcePaths = Dict.map (\_ { path } -> path) kept
                                         , dependencySources = Dict.empty
                                         , currentPackage = flags.currentPackage
@@ -390,13 +390,13 @@ step active =
             )
 
 
-reportDepEnvError : Dict (List String) File -> Error.Error -> ( Model, Cmd Msg )
+reportDepEnvError : List File -> Error.Error -> ( Model, Cmd Msg )
 reportDepEnvError files depEnvError =
     ( finished Nothing
     , result
         (Encode.object
             [ ( "ok", Encode.bool False )
-            , ( "moduleCount", Encode.int (Dict.size files) )
+            , ( "moduleCount", Encode.int (List.length files) )
             , ( "error", Encode.string (Error.toString depEnvError) )
             ]
         )
@@ -427,14 +427,14 @@ runInference pending =
                 [] ->
                     Encode.object
                         [ ( "ok", Encode.bool True )
-                        , ( "moduleCount", Encode.int (Dict.size pending.files) )
+                        , ( "moduleCount", Encode.int (List.length pending.files) )
                         , ( "tableCount", Encode.int (Dict.size tablesAndErrors.tables) )
                         ]
 
                 _ ->
                     Encode.object
                         [ ( "ok", Encode.bool False )
-                        , ( "moduleCount", Encode.int (Dict.size pending.files) )
+                        , ( "moduleCount", Encode.int (List.length pending.files) )
                         , ( "tableCount", Encode.int (Dict.size tablesAndErrors.tables) )
                         , ( "error", Encode.string (String.join "\n" (List.map Error.toString (Dict.values tablesAndErrors.errors))) )
                         ]

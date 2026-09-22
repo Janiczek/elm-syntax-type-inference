@@ -21,6 +21,7 @@ import Elm.Syntax.Declaration exposing (Declaration(..))
 import Elm.Syntax.Exposing as Exposing exposing (Exposing(..))
 import Elm.Syntax.Expression.Extra
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Import
 import Elm.Syntax.Module as Module
@@ -80,9 +81,7 @@ fromFile moduleMapping file =
     let
         moduleName : FullModuleName
         moduleName =
-            file.moduleDefinition
-                |> Node.value
-                |> Module.moduleName
+            FileExtra.moduleName file
                 |> FullModuleName.fromModuleName_
 
         ( moduleId, moduleMapping1 ) =

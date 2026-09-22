@@ -41,8 +41,7 @@ type alias Error =
   - **`ImpossibleDocsType`:** Similar but for hand-crafted `docs.json`. Real
     `docs.json` files emitted by the Elm compiler should never produce these.
 
-  - **`MissingModuleName`:** Raised when `Elm.TypeInference.project` is called
-    with a Dict key `[]`.
+  - **`MissingModuleName`:** Raised when a `File` has an empty module name.
 
   - **`ModuleNotFound`:** Raised when `Elm.TypeInference.inferModule` is called
     with module that's not part of the indexed `Project`.

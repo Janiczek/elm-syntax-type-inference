@@ -14,7 +14,7 @@ import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
 -}
 mainHasNoErrors : Elm.TypeInference.DependencyEnv -> File -> Expect.Expectation
 mainHasNoErrors env main =
-    case Elm.TypeInference.project Nothing env (Dict.singleton [ "Main" ] main) of
+    case Elm.TypeInference.project Nothing env [ main ] of
         Err err ->
             Expect.fail ("project indexing failed: " ++ Debug.toString err)
 

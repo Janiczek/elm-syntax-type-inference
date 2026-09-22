@@ -42,6 +42,7 @@ import Elm.Syntax.Declaration as Declaration exposing (Declaration)
 import Elm.Syntax.Expression as Expression
 import Elm.Syntax.Expression.Extra
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
@@ -92,34 +93,43 @@ type Project
 
 {-| Analyze the import graph of the project source code, producing a [`Project`](#Project).
 -}
-project : Maybe PackageName -> DependencyEnv -> Dict ModuleName File -> Result Error Project
+project : Maybe PackageName -> DependencyEnv -> List File -> Result Error Project
 project currentPackage depEnv files =
     -- Index files, assign ModuleIds, build the import graph.
     let
         (DependencyEnv dep) =
             depEnv
 
-        ( modules, moduleMapping ) =
-            Dict.foldl
-                (\key file ( acc, accModuleMapping ) ->
+        ( modules, moduleMapping, missingModuleName ) =
+            List.foldl
+                (\file ( acc, accModuleMapping, accMissing ) ->
+                    let
+                        key : ModuleName
+                        key =
+                            FileExtra.moduleName file
+                    in
                     case FullModuleName.fromModuleName key of
                         Nothing ->
-                            ( acc, accModuleMapping )
+                            ( acc, accModuleMapping, True )
 
                         Just _ ->
                             let
                                 ( index, newModuleMapping ) =
                                     ModuleIndex.fromFile accModuleMapping file
                             in
-                            ( { key = key, index = index, file = file } :: acc, newModuleMapping )
+                            ( { key = key, index = index, file = file } :: acc
+                            , newModuleMapping
+                            , accMissing
+                            )
                 )
-                ( [], dep.moduleMapping )
+                ( [], dep.moduleMapping, False )
                 files
-                |> (\( reversed, finalModuleMapping ) -> ( List.reverse reversed, finalModuleMapping ))
-
-        missingModuleName : Bool
-        missingModuleName =
-            List.length modules /= Dict.size files
+                |> (\( reversed, finalModuleMapping, missing ) ->
+                        ( List.reverse reversed
+                        , finalModuleMapping
+                        , missing
+                        )
+                   )
     in
     if missingModuleName then
         Err
@@ -297,7 +307,7 @@ inferModule moduleName ((Project p) as proj) =
 collecting successes and errors into separate `Dict`s.
 -}
 inferModules :
-    Dict ModuleName File
+    List File
     -> Project
     ->
         ( { tables : Dict ModuleName TypeLookupTable
@@ -307,8 +317,13 @@ inferModules :
         )
 inferModules files proj0 =
     files
-        |> Dict.foldl
-            (\moduleName _ ( acc, proj ) ->
+        |> List.foldl
+            (\file ( acc, proj ) ->
+                let
+                    moduleName : ModuleName
+                    moduleName =
+                        FileExtra.moduleName file
+                in
                 case inferModule moduleName proj of
                     ( Ok table, newProj ) ->
                         ( { errors = acc.errors
@@ -387,8 +402,13 @@ Instead run `inferModule` again on the new `Project` to get a new
 `TypeLookupTable`.
 
 -}
-addFile : ModuleName -> File -> Project -> Result Error Project
-addFile moduleName file (Project p) =
+addFile : File -> Project -> Result Error Project
+addFile file (Project p) =
+    let
+        moduleName : ModuleName
+        moduleName =
+            FileExtra.moduleName file
+    in
     case FullModuleName.fromModuleName moduleName of
         Nothing ->
             Err

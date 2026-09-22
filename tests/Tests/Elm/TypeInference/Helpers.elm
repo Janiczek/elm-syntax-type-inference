@@ -16,6 +16,7 @@ import Elm.Parser
 import Elm.Processing
 import Elm.Syntax.Declaration as Declaration exposing (Declaration)
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.TypeInference exposing (Dependency)
@@ -55,7 +56,7 @@ inferMainModuleWithPackage currentPackage moduleCode =
         |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                runInferenceWithPackage currentPackage [] [] (Dict.singleton mainModule file)
+                runInferenceWithPackage currentPackage [] [] [ file ]
                     |> Result.andThen
                         (\lookupTables ->
                             Dict.get mainModule lookupTables
@@ -68,7 +69,7 @@ inferMainModuleWithPackage currentPackage moduleCode =
 runInference :
     List String
     -> List Dependency
-    -> Dict ModuleName File
+    -> List File
     -> Result TestError (Dict ModuleName TypeLookupTable)
 runInference directDependencies allDependencies files =
     runInferenceWithPackage Nothing directDependencies allDependencies files
@@ -97,7 +98,7 @@ runInferenceWithPackage :
     Maybe String
     -> List String
     -> List Dependency
-    -> Dict ModuleName File
+    -> List File
     -> Result TestError (Dict ModuleName TypeLookupTable)
 runInferenceWithPackage currentPackage directDependencies allDependencies files =
     case buildDepEnv directDependencies allDependencies of
@@ -146,7 +147,7 @@ main =
         |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                runInference (List.map .name allDependencies) allDependencies (Dict.singleton mainModule file)
+                runInference (List.map .name allDependencies) allDependencies [ file ]
                     |> Result.andThen
                         (\lookupTables ->
                             Dict.get mainModule lookupTables
@@ -162,11 +163,11 @@ main =
             )
 
 
-parseModules : Dict ModuleName String -> Result TestError (Dict ModuleName File)
+parseModules : Dict ModuleName String -> Result TestError (List File)
 parseModules modules =
     modules
         |> Dict.foldl
-            (\moduleName code acc ->
+            (\_ code acc ->
                 acc
                     |> Result.andThen
                         (\filesAcc ->
@@ -174,10 +175,10 @@ parseModules modules =
                                 |> Elm.Parser.parse
                                 |> Result.map (Elm.Processing.process Elm.Processing.init)
                                 |> Result.mapError (always CouldntParse)
-                                |> Result.map (\file -> Dict.insert moduleName file filesAcc)
+                                |> Result.map (\file -> file :: filesAcc)
                         )
             )
-            (Ok Dict.empty)
+            (Ok [])
 
 
 inferModulesWithPackage :
@@ -194,14 +195,22 @@ inferModulesWithPackage currentPackage directDependencies allDependencies module
                     |> Result.map
                         (\lookupTables ->
                             files
-                                |> Dict.map
-                                    (\moduleName file ->
-                                        ( file
-                                        , lookupTables
-                                            |> Dict.get moduleName
-                                            |> Maybe.withDefault TypeLookupTable.Internal.empty
-                                        )
+                                |> List.foldl
+                                    (\file acc ->
+                                        let
+                                            moduleName : ModuleName
+                                            moduleName =
+                                                FileExtra.moduleName file
+                                        in
+                                        Dict.insert moduleName
+                                            ( file
+                                            , lookupTables
+                                                |> Dict.get moduleName
+                                                |> Maybe.withDefault TypeLookupTable.Internal.empty
+                                            )
+                                            acc
                                     )
+                                    Dict.empty
                         )
             )
 

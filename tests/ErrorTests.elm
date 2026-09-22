@@ -1,9 +1,12 @@
 module ErrorTests exposing (suite)
 
-import Dict exposing (Dict)
+import Dict
 import Elm.Docs
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.Module as Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.Node as Node exposing (Node)
+import Elm.Syntax.Range exposing (Range)
 import Elm.Type
 import Elm.TypeInference
 import Elm.TypeInference.Error as Error
@@ -229,24 +232,53 @@ missingModuleNameTest =
 
                         Ok depEnv ->
                             let
-                                -- Simulates a caller that failed to derive a module
-                                -- name for this file (eg. from its file path) and
-                                -- keyed it with `[]` instead.
-                                filesWithBadKey : Dict ModuleName File
-                                filesWithBadKey =
+                                -- A file with an empty module name.
+                                filesWithMissingName : List File
+                                filesWithMissingName =
                                     files
-                                        |> Dict.values
                                         |> List.head
-                                        |> Maybe.map (Dict.singleton [])
-                                        |> Maybe.withDefault Dict.empty
+                                        |> Maybe.map withEmptyModuleName
+                                        |> Maybe.map List.singleton
+                                        |> Maybe.withDefault []
                             in
-                            case Elm.TypeInference.project Nothing depEnv filesWithBadKey of
+                            case Elm.TypeInference.project Nothing depEnv filesWithMissingName of
                                 Err err ->
                                     Error.toString err
                                         |> Expect.equal "Missing module name (in <Missing>)"
 
                                 Ok _ ->
                                     Expect.fail "Expected a MissingModuleName error"
+
+
+withEmptyModuleName : File -> File
+withEmptyModuleName file =
+    let
+        oldModule : Module.Module
+        oldModule =
+            Node.value file.moduleDefinition
+
+        range : Range
+        range =
+            Node.range file.moduleDefinition
+
+        emptyName : Node ModuleName
+        emptyName =
+            Node.empty []
+    in
+    { file
+        | moduleDefinition =
+            Node.Node range
+                (case oldModule of
+                    Module.NormalModule data ->
+                        Module.NormalModule { data | moduleName = emptyName }
+
+                    Module.PortModule data ->
+                        Module.PortModule { data | moduleName = emptyName }
+
+                    Module.EffectModule data ->
+                        Module.EffectModule { data | moduleName = emptyName }
+                )
+    }
 
 
 moduleNotFoundTest : Test

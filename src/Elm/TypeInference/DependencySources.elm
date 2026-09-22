@@ -8,8 +8,8 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.Declaration as Declaration
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.FullModuleName as FullModuleName
-import Elm.Syntax.Module as Module
 import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.Type
@@ -171,9 +171,7 @@ suppliedModuleNames package sources =
 
 fileDottedName : File -> String
 fileDottedName file =
-    file.moduleDefinition
-        |> Node.value
-        |> Module.moduleName
+    FileExtra.moduleName file
         |> ModuleNameExtra.toString
 
 
