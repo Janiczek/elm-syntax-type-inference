@@ -1108,7 +1108,7 @@ collectAnnotationNames annoMono inferredMono acc =
         UserDefinedType u1 ->
             case inferredMono of
                 UserDefinedType u2 ->
-                    if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
+                    if u1.package /= u2.package || ModuleIds.notEqual u1.moduleId u2.moduleId || u1.name /= u2.name then
                         Nothing
 
                     else
