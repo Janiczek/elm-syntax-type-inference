@@ -189,18 +189,29 @@ fromDocsType resolver type_ =
                 (resolver moduleNameStr)
 
         Elm.Type.Record fields Nothing ->
-            fromDocsFields resolver fields
-                |> Result.map (\fields_ -> Record { fields = Dict.fromList fields_ })
+            dictFromDocsFields resolver fields
+                |> Result.map (\fields_ -> Record { fields = fields_ })
 
         Elm.Type.Record fields (Just rowVar) ->
-            fromDocsFields resolver fields
+            dictFromDocsFields resolver fields
                 |> Result.map
                     (\resolvedFields ->
                         ExtensibleRecord
                             { extensionTypevar = TypeVar (TypeVar.parse rowVar)
-                            , fields = Dict.fromList resolvedFields
+                            , fields = resolvedFields
                             }
                     )
+
+
+dictFromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ErrorDetails (Dict String MonoType)
+dictFromDocsFields resolver fields =
+    Result.Extra.foldlWhileOk
+        (\( name, value ) acc ->
+            fromDocsType resolver value
+                |> Result.map (\valueType -> Dict.insert name valueType acc)
+        )
+        Dict.empty
+        fields
 
 
 fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ErrorDetails (List ( String, MonoType ))
