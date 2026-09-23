@@ -278,27 +278,22 @@ Ignores union-find ranks; they are only a merge heuristic, not needed for lookup
 -}
 findRoot : SubstitutionMap -> TypeVar -> ( TypeVar, SubstitutionMap )
 findRoot store var =
-    let
-        go : List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
-        go path current =
-            case getSlot current store of
-                Just (Link next) ->
-                    go (current :: path) next
+    findRootHelp store [] var
 
-                _ ->
-                    if List.isEmpty path then
-                        -- No chain walked; skip work
-                        ( current, store )
 
-                    else
-                        ( current
-                        , List.foldl
-                            (\pathVar acc -> insertSlot pathVar (Link current) acc)
-                            store
-                            path
-                        )
-    in
-    go [] var
+findRootHelp : SubstitutionMap -> List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
+findRootHelp store path current =
+    case getSlot current store of
+        Just (Link next) ->
+            findRootHelp store (current :: path) next
+
+        _ ->
+            ( current
+            , List.foldl
+                (\pathVar acc -> insertSlot pathVar (Link current) acc)
+                store
+                path
+            )
 
 
 {-| Bind a root variable to a non-variable type.
@@ -341,11 +336,16 @@ union a b store =
         mergedLetRank =
             min (letRankOf a store) (letRankOf b store)
     in
-    if unionFindRankA < unionFindRankB then
+    -- unionFindRankA < unionFindRankB
+    if unionFindRankA - unionFindRankB < 0 then
         insertSlot a (Link b) store
             |> setVarLetRank b mergedLetRank
 
-    else if unionFindRankB < unionFindRankA then
+    else
+    -- unionFindRankB < unionFindRankA
+    if
+        unionFindRankB - unionFindRankA < 0
+    then
         insertSlot b (Link a) store
             |> setVarLetRank a mergedLetRank
 
