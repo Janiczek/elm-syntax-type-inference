@@ -23,9 +23,9 @@ import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, Modul
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal exposing (TypeResolver)
+import List.Extra
 import List.ExtraExtra
 import Result.Extra
-import Result.ExtraExtra
 import Set exposing (Set)
 import String.ExtraExtra
 
@@ -195,10 +195,12 @@ moduleOfVar :
 moduleOfVar moduleMapping index modules thisModule maybeModuleName varName =
     case maybeModuleName of
         Nothing ->
-            Result.ExtraExtra.firstJustLazy
-                [ \() -> unqualifiedVarInThisModule thisModule varName
-                , \() -> unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName
-                ]
+            case unqualifiedVarInThisModule thisModule varName of
+                Ok Nothing ->
+                    unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName
+
+                resultInThisModule ->
+                    resultInThisModule
 
         Just qualifier ->
             qualifiedVar moduleMapping index modules thisModule qualifier varName
@@ -786,13 +788,21 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                             }
     in
     candidates
-        |> List.ExtraExtra.fastConcatMap
+        |> List.Extra.findMap
             (\candidate ->
-                [ \() -> Ok (firstParty candidate)
-                , \() -> dependency candidate
-                ]
+                case firstParty candidate of
+                    (Just _) as done ->
+                        Just (Ok done)
+
+                    Nothing ->
+                        case dependency candidate of
+                            Ok Nothing ->
+                                Nothing
+
+                            done ->
+                                Just done
             )
-        |> Result.ExtraExtra.firstJustLazy
+        |> Maybe.withDefault (Ok Nothing)
         |> Result.map
             (\resolved ->
                 case resolved of
