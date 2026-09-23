@@ -160,26 +160,31 @@ is an error because the annotation is more general than the body.
 -}
 shaderSlotsTooGeneral : MonoType -> MonoType -> Bool
 shaderSlotsTooGeneral annoMono finalMono =
-    case ( annoMono, finalMono ) of
-        ( WebGLShader annoShader, WebGLShader finalShader ) ->
-            let
-                slots :
-                    { attributesExtension : MonoType
-                    , attributes : Dict String MonoType
-                    , uniformsExtension : MonoType
-                    , uniforms : Dict String MonoType
-                    , varyingsExtension : MonoType
-                    , varyings : Dict String MonoType
-                    }
-                    -> List { extensionTypevar : MonoType, fields : Dict String MonoType }
-                slots shader =
-                    [ { extensionTypevar = shader.attributesExtension, fields = shader.attributes }
-                    , { extensionTypevar = shader.uniformsExtension, fields = shader.uniforms }
-                    , { extensionTypevar = shader.varyingsExtension, fields = shader.varyings }
-                    ]
-            in
-            List.map2 Tuple.pair (slots annoShader) (slots finalShader)
-                |> List.any (\( annoSlot, finalSlot ) -> slotTooGeneral annoSlot finalSlot)
+    case annoMono of
+        WebGLShader annoShader ->
+            case finalMono of
+                WebGLShader finalShader ->
+                    let
+                        slots :
+                            { attributesExtension : MonoType
+                            , attributes : Dict String MonoType
+                            , uniformsExtension : MonoType
+                            , uniforms : Dict String MonoType
+                            , varyingsExtension : MonoType
+                            , varyings : Dict String MonoType
+                            }
+                            -> List { extensionTypevar : MonoType, fields : Dict String MonoType }
+                        slots shader =
+                            [ { extensionTypevar = shader.attributesExtension, fields = shader.attributes }
+                            , { extensionTypevar = shader.uniformsExtension, fields = shader.uniforms }
+                            , { extensionTypevar = shader.varyingsExtension, fields = shader.varyings }
+                            ]
+                    in
+                    List.map2 Tuple.pair (slots annoShader) (slots finalShader)
+                        |> List.any (\( annoSlot, finalSlot ) -> slotTooGeneral annoSlot finalSlot)
+
+                _ ->
+                    False
 
         _ ->
             False
