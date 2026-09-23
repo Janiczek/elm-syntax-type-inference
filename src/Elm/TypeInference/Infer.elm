@@ -845,9 +845,12 @@ solveLetDeclarations ctx declarations =
 
         isAnnotatedIndex : Int -> Bool
         isAnnotatedIndex index =
-            Dict.get index byIndex
-                |> Maybe.map hasLetAnnotation
-                |> Maybe.withDefault False
+            case Dict.get index byIndex of
+                Just letDeclNode ->
+                    hasLetAnnotation letDeclNode
+
+                Nothing ->
+                    False
 
         bodyOf : Node LetDeclaration -> Expression
         bodyOf declNode =

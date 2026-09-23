@@ -582,7 +582,13 @@ importsByAlias imports =
             case import_.alias_ of
                 Just alias ->
                     Dict.insert alias
-                        (Maybe.withDefault [] (Dict.get alias acc) ++ [ import_.moduleId ])
+                        (case Dict.get alias acc of
+                            Just byAlias ->
+                                byAlias ++ [ import_.moduleId ]
+
+                            Nothing ->
+                                [ import_.moduleId ]
+                        )
                         acc
 
                 Nothing ->

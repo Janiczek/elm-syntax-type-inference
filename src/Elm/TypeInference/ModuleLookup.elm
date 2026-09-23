@@ -102,9 +102,12 @@ addCtorParents moduleId mod acc =
             List.foldl
                 (\( ctor, _ ) innerDict ->
                     Dict.insert moduleId
-                        (Dict.get moduleId innerDict
-                            |> Maybe.withDefault Dict.empty
-                            |> Dict.insert ctor union.name
+                        (case Dict.get moduleId innerDict of
+                            Just vars ->
+                                vars |> Dict.insert ctor union.name
+
+                            Nothing ->
+                                Dict.singleton ctor union.name
                         )
                         innerDict
                 )
@@ -121,9 +124,12 @@ addRecordAliases moduleId mod acc =
         (\alias inner ->
             if isRecordAlias alias then
                 Dict.insert moduleId
-                    (Dict.get moduleId inner
-                        |> Maybe.withDefault Set.empty
-                        |> Set.insert alias.name
+                    (case Dict.get moduleId inner of
+                        Just aliases ->
+                            aliases |> Set.insert alias.name
+
+                        Nothing ->
+                            Set.singleton alias.name
                     )
                     inner
 
@@ -141,15 +147,21 @@ addName :
     -> NameIndex
     -> NameIndex
 addName moduleId packageName name acc =
-    let
-        namesSoFar : Dict VarName (List PackageName)
-        namesSoFar =
-            Maybe.withDefault Dict.empty (Dict.get moduleId acc)
-    in
     Dict.insert moduleId
-        (namesSoFar
-            |> Dict.insert name
-                (Maybe.withDefault [] (Dict.get name namesSoFar) ++ [ packageName ])
+        (case Dict.get moduleId acc of
+            Nothing ->
+                Dict.singleton name [ packageName ]
+
+            Just namesSoFar ->
+                namesSoFar
+                    |> Dict.insert name
+                        (case Dict.get name namesSoFar of
+                            Nothing ->
+                                [ packageName ]
+
+                            Just packageNames ->
+                                packageNames ++ [ packageName ]
+                        )
         )
         acc
 
@@ -398,9 +410,12 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
                     viaRecordAlias : Bool
                     viaRecordAlias =
                         Set.member varName e.opaqueTypes
-                            && (Dict.get import_.moduleId idx.recordAliases
-                                    |> Maybe.withDefault Set.empty
-                                    |> Set.member varName
+                            && (case Dict.get import_.moduleId idx.recordAliases of
+                                    Just vars ->
+                                        vars |> Set.member varName
+
+                                    Nothing ->
+                                        False
                                )
 
                     viaOpenUnion : Bool

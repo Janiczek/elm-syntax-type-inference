@@ -346,7 +346,14 @@ invalidate modulesById directlyAffected (Project p) =
         affected : Set ModuleId
         affected =
             importClosureHelp
-                (\id -> Dict.get id p.importedBy |> Maybe.map Set.toList |> Maybe.withDefault [])
+                (\id ->
+                    case Dict.get id p.importedBy of
+                        Just by ->
+                            Set.toList by
+
+                        Nothing ->
+                            []
+                )
                 (Set.toList directlyAffected)
                 Set.empty
 

@@ -54,15 +54,24 @@ resolverFor moduleMapping deps selfPackage =
         searchOrder : List PackageName
         searchOrder =
             selfPackage
-                :: (Dict.get selfPackage deps
-                        |> Maybe.map .dependencies
-                        |> Maybe.withDefault []
+                :: (case Dict.get selfPackage deps of
+                        Just dep ->
+                            dep.dependencies
+
+                        Nothing ->
+                            []
                    )
 
         addModule : PackageName -> Elm.Docs.Module -> Dict String (List PackageName) -> Dict String (List PackageName)
         addModule pkgName mod acc =
             Dict.insert mod.name
-                (Maybe.withDefault [] (Dict.get mod.name acc) ++ [ pkgName ])
+                (case Dict.get mod.name acc of
+                    Nothing ->
+                        [ pkgName ]
+
+                    Just byMod ->
+                        byMod ++ [ pkgName ]
+                )
                 acc
 
         ownersByModule : Dict String (List PackageName)

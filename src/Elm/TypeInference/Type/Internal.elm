@@ -500,7 +500,13 @@ normalize ((Forall boundVars monoType) as type_) =
                                 in
                                 Dict.insert
                                     varTypeTag
-                                    (Set.insert name (Maybe.withDefault Set.empty (Dict.get varTypeTag acc)))
+                                    (case Dict.get varTypeTag acc of
+                                        Just names ->
+                                            names |> Set.insert name
+
+                                        Nothing ->
+                                            Set.singleton name
+                                    )
                                     acc
 
                             Generated _ ->
@@ -525,17 +531,16 @@ normalize ((Forall boundVars monoType) as type_) =
 
         nextFreeSlot : SuperType -> Int -> Int
         nextFreeSlot super slot =
-            let
-                used : Set String
-                used =
-                    Dict.get (superTypeTag super) usedNamesBySuper
-                        |> Maybe.withDefault Set.empty
-            in
-            if Set.member (nameForSlot super slot) used then
-                nextFreeSlot super (slot + 1)
+            case Dict.get (superTypeTag super) usedNamesBySuper of
+                Just used ->
+                    if Set.member (nameForSlot super slot) used then
+                        nextFreeSlot super (slot + 1)
 
-            else
-                slot
+                    else
+                        slot
+
+                Nothing ->
+                    slot
 
         ( _, substGen, substNamed ) =
             allVars
