@@ -813,9 +813,10 @@ solveLetDeclarations ctx declarations =
                                 Dict.insert (functionName fn) index accAcrossDecls
 
                             LetDestructuring patternNode _ ->
-                                Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
-                                    |> List.foldl (\name acc -> Dict.insert name index acc)
-                                        accAcrossDecls
+                                Elm.Syntax.Pattern.Extra.foldVarNames
+                                    (\name acc -> Dict.insert name index acc)
+                                    accAcrossDecls
+                                    (Node.value patternNode)
                     )
                     Dict.empty
 
