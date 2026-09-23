@@ -1039,8 +1039,17 @@ solveModule ctx typeAliases file =
         |> State.traverseUnit
             (\group ->
                 group
-                    |> List.filterMap (\key -> Dict.get key topLevelFunctions)
-                    |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember inferCtx declNode fn)
+                    |> State.foldl
+                        (\key acc ->
+                            case Dict.get key topLevelFunctions of
+                                Just ( declNode, fn ) ->
+                                    Infer.topLevelMember inferCtx declNode fn
+                                        |> State.map (\member -> member :: acc)
+
+                                Nothing ->
+                                    State.pure acc
+                        )
+                        []
                     |> State.andThen
                         (\inferredMembers ->
                             inferredMembers

@@ -948,7 +948,7 @@ solveLetDeclarations ctx declarations =
             in
             State.do
                 (functions
-                    |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
+                    |> State.traverseFastAndReverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
                     |> State.andThen (\members -> BindingGroup.solveGroup (unifyConfig ctx) members)
                 )
             <| \() ->
