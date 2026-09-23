@@ -630,7 +630,7 @@ inferExpr ctx exprNode =
                 TypeEquation.append eqs
                     (TypeEquation.single
                         ( type_
-                        , Record { fields = fields }
+                        , Record fields
                         , "Record: is a record"
                         )
                     )

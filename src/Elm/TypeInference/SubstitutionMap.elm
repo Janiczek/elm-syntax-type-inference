@@ -461,7 +461,7 @@ lowerLetRanksTo targetLetRank type_ store =
                     (lowerLetRanksTo targetLetRank t1 store)
                 )
 
-        Record { fields } ->
+        Record fields ->
             lowerLetRanksInFieldsTo targetLetRank fields store
 
         ExtensibleRecord r ->
@@ -669,13 +669,13 @@ substituteMono store monoType =
             else
                 ( monoType, flags, s3 )
 
-        Record { fields } ->
+        Record fields ->
             let
                 ( fields_, flags, s1 ) =
                     substituteRecordFields store fields
             in
             if isChanged flags then
-                ( Record { fields = fields_ }, flags, s1 )
+                ( Record fields_, flags, s1 )
 
             else
                 ( monoType, flags, s1 )

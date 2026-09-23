@@ -87,7 +87,7 @@ type MonoType
     | Unit
     | Tuple2 MonoType MonoType
     | Tuple3 MonoType MonoType MonoType
-    | Record { fields : Dict VarName MonoType }
+    | Record (Dict VarName MonoType)
     | ExtensibleRecord
         { extensionTypevar : MonoType
         , fields : Dict VarName MonoType
@@ -148,8 +148,8 @@ collapseExtensible r1 =
 
     else
         case r1.extensionTypevar of
-            Record r2 ->
-                Record { fields = Dict.union r1.fields r2.fields }
+            Record r2Fields ->
+                Record (Dict.union r1.fields r2Fields)
 
             ExtensibleRecord r2 ->
                 collapseExtensible
@@ -251,8 +251,8 @@ Anythign else, we return Nothing and let downstream code report a mismatch.
 shaderSetSlot : MonoType -> Maybe ( MonoType, Dict VarName MonoType )
 shaderSetSlot arg =
     case arg of
-        Record { fields } ->
-            Just ( Record { fields = Dict.empty }, fields )
+        Record fields ->
+            Just ( Record Dict.empty, fields )
 
         ExtensibleRecord er ->
             Just ( er.extensionTypevar, er.fields )
@@ -325,8 +325,8 @@ recurse f type_ =
         Tuple3 t1 t2 t3 ->
             Tuple3 (f t1) (f t2) (f t3)
 
-        Record { fields } ->
-            Record { fields = Dict.map (\_ value -> f value) fields }
+        Record fields ->
+            Record (Dict.map (\_ value -> f value) fields)
 
         ExtensibleRecord r ->
             ExtensibleRecord
@@ -405,7 +405,7 @@ monoTypeVarsHelp type_ acc =
         Tuple3 t1 t2 t3 ->
             monoTypeVarsHelp t1 (monoTypeVarsHelp t2 (monoTypeVarsHelp t3 acc))
 
-        Record { fields } ->
+        Record fields ->
             monoTypeVarsInFieldsHelp fields acc
 
         ExtensibleRecord r ->
@@ -708,7 +708,7 @@ fromTypeAnnotation resolver typeAnnotation =
 
         TypeAnnotation.Record fields ->
             recordBindings resolver fields
-                |> Result.map (\fields_ -> Record { fields = fields_ })
+                |> Result.map Record
 
         TypeAnnotation.GenericRecord name fields ->
             recordBindings resolver (Node.value fields)
@@ -849,7 +849,7 @@ toPublicTypeNormalized moduleMapping mono_ =
                 (toPublicTypeNormalized moduleMapping t2)
                 (toPublicTypeNormalized moduleMapping t3)
 
-        Record { fields } ->
+        Record fields ->
             Public.Record { fields = Dict.map (\_ v -> toPublicTypeNormalized moduleMapping v) fields }
 
         ExtensibleRecord extensibleRecordUncollapsed ->
@@ -911,8 +911,8 @@ shaderSlotToPublic f extensionTypevar fields =
             , fields = fields
             }
     of
-        Record r ->
-            ( Dict.map (\_ v -> f v) r.fields
+        Record rFields ->
+            ( Dict.map (\_ v -> f v) rFields
             , Nothing
             )
 
@@ -1069,10 +1069,10 @@ collectAnnotationNames annoMono inferredMono acc =
                 _ ->
                     Nothing
 
-        Record r1 ->
+        Record r1Fields ->
             case inferredMono of
-                Record r2 ->
-                    collectRecordFields r1.fields r2.fields acc
+                Record r2Fields ->
+                    collectRecordFields r1Fields r2Fields acc
 
                 _ ->
                     Nothing
@@ -1373,7 +1373,7 @@ monoPublicKeyAlphaHelp mono_ state =
             in
             ( "10;" ++ strKey k1 ++ strKey k2 ++ strKey k3, s3 )
 
-        Record { fields } ->
+        Record fields ->
             let
                 ( rk, s1 ) =
                     recordKeyAlpha fields state
@@ -1485,10 +1485,10 @@ shaderSlotKeyAlpha extensionTypevar fields state =
             , fields = fields
             }
     of
-        Record r ->
+        Record rFields ->
             let
                 ( rk, s1 ) =
-                    recordKeyAlpha r.fields state
+                    recordKeyAlpha rFields state
             in
             ( strKey rk ++ maybeStrKey Nothing, s1 )
 
@@ -1556,7 +1556,7 @@ monoPublicKeyNormalized mono_ =
                 ++ strKey (monoPublicKeyNormalized t2)
                 ++ strKey (monoPublicKeyNormalized t3)
 
-        Record { fields } ->
+        Record fields ->
             "11;" ++ strKey (recordKeyOf fields)
 
         ExtensibleRecord extensibleRecordNotCollapsed ->
@@ -1618,8 +1618,8 @@ shaderSlotKey extensionTypevar fields =
             , fields = fields
             }
     of
-        Record r ->
-            strKey (recordKeyOf r.fields)
+        Record rFields ->
+            strKey (recordKeyOf rFields)
                 ++ maybeStrKey Nothing
 
         TypeVar var ->

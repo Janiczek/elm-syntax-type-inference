@@ -237,9 +237,9 @@ expandDeepChildren fuel typeAliases type_ =
                 (expandAliasDeepHelp fuel typeAliases t2)
                 (expandAliasDeepHelp fuel typeAliases t3)
 
-        TypeI.Record r ->
+        TypeI.Record rFields ->
             TypeI.Record
-                { fields = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.fields }
+                (Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) rFields)
 
         TypeI.ExtensibleRecord r ->
             TypeI.ExtensibleRecord
@@ -312,8 +312,8 @@ substituteAliasArgs mappings type_ =
                 (substituteAliasArgs mappings t2)
                 (substituteAliasArgs mappings t3)
 
-        Record { fields } ->
-            Record { fields = Dict.map (\_ v -> substituteAliasArgs mappings v) fields }
+        Record fields ->
+            Record (Dict.map (\_ v -> substituteAliasArgs mappings v) fields)
 
         ExtensibleRecord r ->
             ExtensibleRecord
@@ -573,13 +573,13 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
                         (\_ _ eqs -> eqs)
                         (\_ v1 v2 eqs -> ( v1, v2 ) :: eqs)
                         (\_ _ eqs -> eqs)
-                        extFields.fields
+                        extFields
                         er.fields
                         []
 
                 combined : Dict VarName MonoType
                 combined =
-                    Dict.union er.fields extFields.fields
+                    Dict.union er.fields extFields
             in
             State.do (unifyMany cfg overlapEqs) <| \() ->
             recordBindings cfg t1 t2 combined recordFields
@@ -636,7 +636,7 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
 
             else
                 unifyMany cfg
-                    (( er.extensionTypevar, Record { fields = residual } )
+                    (( er.extensionTypevar, Record residual )
                         :: matchedEqs
                     )
 
@@ -792,16 +792,16 @@ unifyMono cfg rawT1 rawT2 =
                     _ ->
                         typeMismatch cfg t1 t2
 
-            Record r1 ->
+            Record r1Fields ->
                 case t2 of
                     TypeVar v ->
                         bind cfg v t1
 
-                    Record r2 ->
-                        recordBindings cfg t1 t2 r1.fields r2.fields
+                    Record r2Fields ->
+                        recordBindings cfg t1 t2 r1Fields r2Fields
 
                     ExtensibleRecord er2 ->
-                        unifyRecordVsExtensible cfg t1 t2 r1.fields er2
+                        unifyRecordVsExtensible cfg t1 t2 r1Fields er2
 
                     _ ->
                         typeMismatch cfg t1 t2
@@ -879,8 +879,8 @@ unifyMono cfg rawT1 rawT2 =
                                     :: sharedEqs
                                 )
 
-                    Record r2 ->
-                        unifyRecordVsExtensible cfg t1 t2 r2.fields r1
+                    Record r2Fields ->
+                        unifyRecordVsExtensible cfg t1 t2 r2Fields r1
 
                     _ ->
                         typeMismatch cfg t1 t2
@@ -1378,7 +1378,7 @@ occursCheck typeVar type_ =
                 || occursCheck typeVar t2
                 || occursCheck typeVar t3
 
-        Record { fields } ->
+        Record fields ->
             Dict.Extra.any (\_ v -> occursCheck typeVar v) fields
 
         ExtensibleRecord r ->

@@ -190,7 +190,7 @@ fromDocsType resolver type_ =
 
         Elm.Type.Record fields Nothing ->
             dictFromDocsFields resolver fields
-                |> Result.map (\fields_ -> Record { fields = fields_ })
+                |> Result.map Record
 
         Elm.Type.Record fields (Just rowVar) ->
             dictFromDocsFields resolver fields

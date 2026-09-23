@@ -218,8 +218,8 @@ collapsedFields slot =
         ExtensibleRecord r ->
             r.fields
 
-        Record r ->
-            r.fields
+        Record rFields ->
+            rFields
 
         _ ->
             Dict.empty
