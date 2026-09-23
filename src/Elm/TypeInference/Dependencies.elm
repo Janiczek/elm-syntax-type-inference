@@ -70,12 +70,12 @@ resolverFor moduleMapping deps selfPackage =
             searchOrder
                 |> List.foldl
                     (\pkgName accAcrossPks ->
-                        Dict.get pkgName deps
-                            |> Maybe.map
-                                (\pkg ->
-                                    List.foldl (\mod acc -> addModule pkgName mod acc) accAcrossPks pkg.modules
-                                )
-                            |> Maybe.withDefault accAcrossPks
+                        case Dict.get pkgName deps of
+                            Just pkg ->
+                                List.foldl (\mod acc -> addModule pkgName mod acc) accAcrossPks pkg.modules
+
+                            Nothing ->
+                                accAcrossPks
                     )
                     Dict.empty
 
