@@ -976,46 +976,50 @@ applyAnnotationNames mapping (( style, super ) as var) =
 collectAnnotationNames : MonoType -> MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
 collectAnnotationNames annoMono inferredMono acc =
     case annoMono of
-        TypeVar ( Named annoName, annoSuper ) ->
-            case inferredMono of
-                TypeVar ( Generated inferredId, inferredSuper ) ->
-                    if annoSuper /= inferredSuper then
-                        Nothing
+        TypeVar ( annoStyle, annoSuper ) ->
+            case annoStyle of
+                Named annoName ->
+                    case inferredMono of
+                        TypeVar ( inferredStyle, inferredSuper ) ->
+                            case inferredStyle of
+                                Generated inferredId ->
+                                    if annoSuper /= inferredSuper then
+                                        Nothing
 
-                    else
-                        let
-                            key : Int
-                            key =
-                                VarSet.genKeyFrom inferredId inferredSuper
+                                    else
+                                        let
+                                            key : Int
+                                            key =
+                                                VarSet.genKeyFrom inferredId inferredSuper
 
-                            wanted : TypeVar
-                            wanted =
-                                ( Named annoName, annoSuper )
-                        in
-                        case Dict.get key acc of
-                            Nothing ->
-                                Just (Dict.insert key wanted acc)
+                                            wanted : TypeVar
+                                            wanted =
+                                                ( Named annoName, annoSuper )
+                                        in
+                                        case Dict.get key acc of
+                                            Nothing ->
+                                                Just (Dict.insert key wanted acc)
 
-                            Just existing ->
-                                if existing == wanted then
-                                    Just acc
+                                            Just existing ->
+                                                if existing == wanted then
+                                                    Just acc
 
-                                else
-                                    Nothing
+                                                else
+                                                    Nothing
 
-                TypeVar ( Named inferredName, inferredSuper ) ->
-                    if ( Named annoName, annoSuper ) == ( Named inferredName, inferredSuper ) then
-                        Just acc
+                                Named inferredName ->
+                                    if ( Named annoName, annoSuper ) == ( Named inferredName, inferredSuper ) then
+                                        Just acc
 
-                    else
-                        Nothing
+                                    else
+                                        Nothing
 
-                _ ->
+                        _ ->
+                            Nothing
+
+                Generated _ ->
+                    -- Should be impossible (annotations shouldn't contain generated vars)
                     Nothing
-
-        TypeVar ( Generated _, _ ) ->
-            -- Should be impossible (annotations shouldn't contain generated vars)
-            Nothing
 
         Function a1 ->
             case inferredMono of
