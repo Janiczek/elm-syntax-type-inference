@@ -575,36 +575,31 @@ qualifiedModuleDefinesByName moduleMapping index modules qualifier varName =
 dedupeOwners : List ( PackageName, ModuleId ) -> List ( PackageName, ModuleId )
 dedupeOwners pairs =
     List.foldl
-        (\( package, mod ) ( seen, acc ) ->
-            let
-                key : ( PackageName, ModuleId )
-                key =
-                    ( package, mod )
-            in
-            if List.member key seen then
-                ( seen, acc )
+        (\key acc ->
+            if List.member key acc then
+                acc
 
             else
-                ( key :: seen, ( package, mod ) :: acc )
+                key :: acc
         )
-        ( [], [] )
+        []
         pairs
-        |> Tuple.second
 
 
+{-| Assumes you don't care about order
+-}
 dedupeModuleIds : List ModuleId -> List ModuleId
 dedupeModuleIds names =
     List.foldl
-        (\mod ( seen, acc ) ->
-            if List.member mod seen then
-                ( seen, acc )
+        (\mod acc ->
+            if List.member mod acc then
+                acc
 
             else
-                ( mod :: seen, acc ++ [ mod ] )
+                mod :: acc
         )
-        ( [], [] )
+        []
         names
-        |> Tuple.second
 
 
 dependencyModuleDefines : ModuleIds.Mapping -> Index -> ModuleId -> VarName -> Result ErrorDetails (Maybe PackageName)
