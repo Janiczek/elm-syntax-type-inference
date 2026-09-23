@@ -428,34 +428,42 @@ addFile file (Project p) =
 
             importedBy1 : Dict ModuleId (Set ModuleId)
             importedBy1 =
-                Set.diff oldImportIds newImportIds
+                oldImportIds
                     |> Set.foldl
                         (\importId acc ->
-                            case Dict.get importId acc of
-                                Nothing ->
-                                    acc
+                            if Set.member importId newImportIds then
+                                acc
 
-                                Just by ->
-                                    Dict.insert importId
-                                        (by |> Set.remove id)
+                            else
+                                case Dict.get importId acc of
+                                    Nothing ->
                                         acc
+
+                                    Just by ->
+                                        Dict.insert importId
+                                            (by |> Set.remove id)
+                                            acc
                         )
                         p.importedBy
 
             importedBy2 : Dict ModuleId (Set ModuleId)
             importedBy2 =
-                Set.diff newImportIds oldImportIds
+                newImportIds
                     |> Set.foldl
                         (\importId acc ->
-                            Dict.insert importId
-                                (case Dict.get importId acc of
-                                    Nothing ->
-                                        Set.singleton id
-
-                                    Just importers ->
-                                        Set.insert id importers
-                                )
+                            if Set.member importId oldImportIds then
                                 acc
+
+                            else
+                                Dict.insert importId
+                                    (case Dict.get importId acc of
+                                        Nothing ->
+                                            Set.singleton id
+
+                                        Just importers ->
+                                            Set.insert id importers
+                                    )
+                                    acc
                         )
                         importedBy1
 
