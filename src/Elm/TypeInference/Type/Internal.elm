@@ -152,7 +152,7 @@ collapseExtensible r1 =
                 Record { fields = Dict.union r1.fields r2.fields }
 
             ExtensibleRecord r2 ->
-                collapseExtensible <|
+                collapseExtensible
                     { extensionTypevar = r2.extensionTypevar
                     , fields = Dict.union r1.fields r2.fields
                     }
@@ -376,9 +376,7 @@ monoTypeVarsHelp type_ acc =
             typeVar :: acc
 
         Function { from, to } ->
-            acc
-                |> monoTypeVarsHelp to
-                |> monoTypeVarsHelp from
+            monoTypeVarsHelp from (monoTypeVarsHelp to acc)
 
         Int ->
             acc
@@ -402,23 +400,17 @@ monoTypeVarsHelp type_ acc =
             acc
 
         Tuple2 t1 t2 ->
-            acc
-                |> monoTypeVarsHelp t2
-                |> monoTypeVarsHelp t1
+            monoTypeVarsHelp t1 (monoTypeVarsHelp t2 acc)
 
         Tuple3 t1 t2 t3 ->
-            acc
-                |> monoTypeVarsHelp t3
-                |> monoTypeVarsHelp t2
-                |> monoTypeVarsHelp t1
+            monoTypeVarsHelp t1 (monoTypeVarsHelp t2 (monoTypeVarsHelp t3 acc))
 
         Record { fields } ->
             monoTypeVarsInFieldsHelp fields acc
 
         ExtensibleRecord r ->
-            acc
-                |> monoTypeVarsInFieldsHelp r.fields
-                |> monoTypeVarsHelp r.extensionTypevar
+            monoTypeVarsHelp r.extensionTypevar
+                (monoTypeVarsInFieldsHelp r.fields acc)
 
         UserDefinedType r ->
             List.foldr monoTypeVarsHelp acc r.args
@@ -1030,8 +1022,12 @@ collectAnnotationNames annoMono inferredMono acc =
         Function a1 ->
             case inferredMono of
                 Function b1 ->
-                    collectAnnotationNames a1.from b1.from acc
-                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a1.to b1.to)
+                    case collectAnnotationNames a1.from b1.from acc of
+                        Nothing ->
+                            Nothing
+
+                        Just a ->
+                            collectAnnotationNames a1.to b1.to a
 
                 _ ->
                     Nothing
@@ -1047,8 +1043,12 @@ collectAnnotationNames annoMono inferredMono acc =
         Tuple2 a1 a2 ->
             case inferredMono of
                 Tuple2 b1 b2 ->
-                    collectAnnotationNames a1 b1 acc
-                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
+                    case collectAnnotationNames a1 b1 acc of
+                        Nothing ->
+                            Nothing
+
+                        Just a ->
+                            collectAnnotationNames a2 b2 a
 
                 _ ->
                     Nothing
@@ -1056,9 +1056,15 @@ collectAnnotationNames annoMono inferredMono acc =
         Tuple3 a1 a2 a3 ->
             case inferredMono of
                 Tuple3 b1 b2 b3 ->
-                    collectAnnotationNames a1 b1 acc
-                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
-                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a3 b3)
+                    case
+                        collectAnnotationNames a1 b1 acc
+                            |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
+                    of
+                        Nothing ->
+                            Nothing
+
+                        Just a ->
+                            collectAnnotationNames a3 b3 a
 
                 _ ->
                     Nothing
@@ -1083,8 +1089,12 @@ collectAnnotationNames annoMono inferredMono acc =
                         (ExtensibleRecord r1) as r1Collapsed ->
                             case r2Collapsed of
                                 ExtensibleRecord r2 ->
-                                    collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc
-                                        |> Maybe.andThen (\a -> a |> collectRecordFields r1.fields r2.fields)
+                                    case collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc of
+                                        Nothing ->
+                                            Nothing
+
+                                        Just a ->
+                                            collectRecordFields r1.fields r2.fields a
 
                                 _ ->
                                     collectAnnotationNames r1Collapsed r2Collapsed acc

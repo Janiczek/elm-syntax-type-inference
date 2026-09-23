@@ -1249,10 +1249,20 @@ isComparable typeAliases type_ =
             isComparable typeAliases inner
 
         Tuple2 a b ->
-            isComparable typeAliases a && isComparable typeAliases b
+            -- && but with a bit of TCO
+            if isComparable typeAliases a then
+                isComparable typeAliases b
+
+            else
+                False
 
         Tuple3 a b c ->
-            isComparable typeAliases a && isComparable typeAliases b && isComparable typeAliases c
+            -- && but with a bit of TCO
+            if isComparable typeAliases a && isComparable typeAliases b then
+                isComparable typeAliases c
+
+            else
+                False
 
         TypeVar _ ->
             True

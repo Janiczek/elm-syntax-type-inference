@@ -423,9 +423,9 @@ lowerLetRanksTo targetLetRank type_ store =
                 store
 
         Function { from, to } ->
-            store
-                |> lowerLetRanksTo targetLetRank from
-                |> lowerLetRanksTo targetLetRank to
+            lowerLetRanksTo targetLetRank
+                to
+                (lowerLetRanksTo targetLetRank from store)
 
         Int ->
             store
@@ -449,15 +449,17 @@ lowerLetRanksTo targetLetRank type_ store =
             store
 
         Tuple2 t1 t2 ->
-            store
-                |> lowerLetRanksTo targetLetRank t1
-                |> lowerLetRanksTo targetLetRank t2
+            lowerLetRanksTo targetLetRank
+                t2
+                (lowerLetRanksTo targetLetRank t1 store)
 
         Tuple3 t1 t2 t3 ->
-            store
-                |> lowerLetRanksTo targetLetRank t1
-                |> lowerLetRanksTo targetLetRank t2
-                |> lowerLetRanksTo targetLetRank t3
+            lowerLetRanksTo targetLetRank
+                t3
+                (lowerLetRanksTo targetLetRank
+                    t2
+                    (lowerLetRanksTo targetLetRank t1 store)
+                )
 
         Record { fields } ->
             lowerLetRanksInFieldsTo targetLetRank fields store
