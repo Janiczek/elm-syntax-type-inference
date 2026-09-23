@@ -133,49 +133,54 @@ runFrames edges frames acc =
             case frame.remaining of
                 [] ->
                     -- Done exploring `frame.node`'s neighbours.
-                    case ( Dict.get frame.node acc.index, Dict.get frame.node acc.lowlink ) of
-                        ( Just vIndex, Just vLowlink ) ->
-                            let
-                                accAfterPop : Acc comparable
-                                accAfterPop =
-                                    -- vLowlink == vIndex
-                                    if vLowlink - vIndex == 0 then
-                                        let
-                                            ( component, remainingStack ) =
-                                                splitOffComponent frame.node acc.nodeStack
-                                        in
-                                        { index = acc.index
-                                        , lowlink = acc.lowlink
-                                        , onStack = List.foldl Set.remove acc.onStack component
-                                        , nodeStack = remainingStack
-                                        , sccs = component :: acc.sccs
-                                        , counter = acc.counter
-                                        }
-
-                                    else
-                                        acc
-                            in
-                            case outerFrames of
-                                [] ->
-                                    runFrames edges outerFrames accAfterPop
-
-                                parent :: _ ->
-                                    case Dict.get parent.node accAfterPop.lowlink of
-                                        Just parentLowlink ->
-                                            runFrames edges
-                                                outerFrames
-                                                { index = accAfterPop.index
-                                                , lowlink = Dict.insert parent.node (min parentLowlink vLowlink) accAfterPop.lowlink
-                                                , onStack = accAfterPop.onStack
-                                                , nodeStack = accAfterPop.nodeStack
-                                                , sccs = accAfterPop.sccs
-                                                , counter = accAfterPop.counter
+                    case Dict.get frame.node acc.index of
+                        Just vIndex ->
+                            case Dict.get frame.node acc.lowlink of
+                                Just vLowlink ->
+                                    let
+                                        accAfterPop : Acc comparable
+                                        accAfterPop =
+                                            -- vLowlink == vIndex
+                                            if vLowlink - vIndex == 0 then
+                                                let
+                                                    ( component, remainingStack ) =
+                                                        splitOffComponent frame.node acc.nodeStack
+                                                in
+                                                { index = acc.index
+                                                , lowlink = acc.lowlink
+                                                , onStack = List.foldl Set.remove acc.onStack component
+                                                , nodeStack = remainingStack
+                                                , sccs = component :: acc.sccs
+                                                , counter = acc.counter
                                                 }
 
-                                        Nothing ->
+                                            else
+                                                acc
+                                    in
+                                    case outerFrames of
+                                        [] ->
                                             runFrames edges outerFrames accAfterPop
 
-                        _ ->
+                                        parent :: _ ->
+                                            case Dict.get parent.node accAfterPop.lowlink of
+                                                Just parentLowlink ->
+                                                    runFrames edges
+                                                        outerFrames
+                                                        { index = accAfterPop.index
+                                                        , lowlink = Dict.insert parent.node (min parentLowlink vLowlink) accAfterPop.lowlink
+                                                        , onStack = accAfterPop.onStack
+                                                        , nodeStack = accAfterPop.nodeStack
+                                                        , sccs = accAfterPop.sccs
+                                                        , counter = accAfterPop.counter
+                                                        }
+
+                                                Nothing ->
+                                                    runFrames edges outerFrames accAfterPop
+
+                                Nothing ->
+                                    runFrames edges outerFrames acc
+
+                        Nothing ->
                             runFrames edges outerFrames acc
 
                 w :: ws ->
@@ -194,17 +199,22 @@ runFrames edges frames acc =
                             (initNode w acc)
 
                     else if Set.member w acc.onStack then
-                        case ( Dict.get w acc.index, Dict.get frame.node acc.lowlink ) of
-                            ( Just wIndex, Just vLowlink ) ->
-                                runFrames edges
-                                    framesWithNextNeighbour
-                                    { index = acc.index
-                                    , lowlink = Dict.insert frame.node (min vLowlink wIndex) acc.lowlink
-                                    , onStack = acc.onStack
-                                    , nodeStack = acc.nodeStack
-                                    , sccs = acc.sccs
-                                    , counter = acc.counter
-                                    }
+                        case Dict.get w acc.index of
+                            Just wIndex ->
+                                case Dict.get frame.node acc.lowlink of
+                                    Just vLowlink ->
+                                        runFrames edges
+                                            framesWithNextNeighbour
+                                            { index = acc.index
+                                            , lowlink = Dict.insert frame.node (min vLowlink wIndex) acc.lowlink
+                                            , onStack = acc.onStack
+                                            , nodeStack = acc.nodeStack
+                                            , sccs = acc.sccs
+                                            , counter = acc.counter
+                                            }
+
+                                    Nothing ->
+                                        runFrames edges framesWithNextNeighbour acc
 
                             _ ->
                                 runFrames edges framesWithNextNeighbour acc
