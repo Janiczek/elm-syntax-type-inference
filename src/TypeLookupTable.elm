@@ -74,7 +74,7 @@ get range (Internal.TLT tlt) =
 
                         key : String
                         key =
-                            TypeI.monoPublicKey { alreadyNormalized = False } monoType
+                            TypeI.normalizeToMonoPublicKeyAlpha monoType
 
                         ( pubType, pool1 ) =
                             case Dict.get key tlt.pool of

@@ -12,10 +12,10 @@ module Elm.TypeInference.Type.Internal exposing
     , id_
     , mapVarsMono
     , mono
-    , monoPublicKey
     , monoTypeVars
     , normalizeAndToPublicPair
     , normalizeAndToPublicType
+    , normalizeToMonoPublicKeyAlpha
     , number_
     , renameToAnnotation
     )
@@ -1152,21 +1152,10 @@ collectAnnotationArgs annos inferreds acc =
                     Nothing
 
 
-{-| A deduplication key for a normalized monotype inside a single `TypeLookupTable`.
+{-| Alpha-equivalence deduplication key for a normalized monotype inside a single `TypeLookupTable`.
 -}
-monoPublicKey : { alreadyNormalized : Bool } -> MonoType -> String
-monoPublicKey { alreadyNormalized } origMono =
-    if alreadyNormalized then
-        monoPublicKeyNormalized origMono
-
-    else
-        monoPublicKeyAlpha origMono
-
-
-{-| Alpha-equivalence deduplication key.
--}
-monoPublicKeyAlpha : MonoType -> String
-monoPublicKeyAlpha mono_ =
+normalizeToMonoPublicKeyAlpha : MonoType -> String
+normalizeToMonoPublicKeyAlpha mono_ =
     Tuple.first
         (monoPublicKeyAlphaHelp
             (case mono_ of
