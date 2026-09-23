@@ -754,7 +754,7 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
 
         firstParty : ModuleId -> Maybe ( PackageName, ModuleId )
         firstParty unaliasedId =
-            if unaliasedId == thisModule.moduleId && List.isEmpty qualifier then
+            if ModuleIds.equal unaliasedId thisModule.moduleId && List.isEmpty qualifier then
                 if Set.member typeName thisModule.declaredTypes then
                     Just ( "", thisModule.moduleId )
 
@@ -791,7 +791,7 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
 
         dependency : ModuleId -> Result ResolverAmbiguity (Maybe ( PackageName, ModuleId ))
         dependency unaliasedId =
-            if unaliasedId == thisModule.moduleId && List.isEmpty qualifier then
+            if ModuleIds.equal unaliasedId thisModule.moduleId && List.isEmpty qualifier then
                 Ok Nothing
 
             else

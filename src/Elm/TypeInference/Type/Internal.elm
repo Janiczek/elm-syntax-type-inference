@@ -188,7 +188,7 @@ collapseElmCoreType : ModuleId -> VarName -> List MonoType -> Maybe MonoType
 collapseElmCoreType moduleId name args =
     case args of
         [] ->
-            if moduleId == ModuleIds.basicsId then
+            if ModuleIds.equal moduleId ModuleIds.basicsId then
                 case name of
                     "Int" ->
                         Just Int
@@ -202,17 +202,17 @@ collapseElmCoreType moduleId name args =
                     _ ->
                         Nothing
 
-            else if moduleId == ModuleIds.charId && name == "Char" then
+            else if ModuleIds.equal moduleId ModuleIds.charId && name == "Char" then
                 Just Char
 
-            else if moduleId == ModuleIds.stringId && name == "String" then
+            else if ModuleIds.equal moduleId ModuleIds.stringId && name == "String" then
                 Just String
 
             else
                 Nothing
 
         [ inner ] ->
-            if moduleId == ModuleIds.listId && name == "List" then
+            if ModuleIds.equal moduleId ModuleIds.listId && name == "List" then
                 Just (List inner)
 
             else
@@ -224,7 +224,7 @@ collapseElmCoreType moduleId name args =
 
 collapseWebGLShader : ModuleId -> VarName -> List MonoType -> Maybe MonoType
 collapseWebGLShader moduleId name args =
-    if moduleId == ModuleIds.webGLId && name == "Shader" then
+    if ModuleIds.equal moduleId ModuleIds.webGLId && name == "Shader" then
         case args of
             [ attributes, uniforms, varyings ] ->
                 Maybe.map3 makeWebGLShader
@@ -980,9 +980,9 @@ collectAnnotationNames annoMono inferredMono acc =
     case annoMono of
         TypeVar (( annoStyle, annoSuper ) as annoTypeVar) ->
             case annoStyle of
-                Named _ ->
+                Named annoName ->
                     case inferredMono of
-                        TypeVar (( inferredStyle, inferredSuper ) as inferredTypeVar) ->
+                        TypeVar ( inferredStyle, inferredSuper ) ->
                             case inferredStyle of
                                 Generated inferredId ->
                                     if annoSuper /= inferredSuper then
@@ -999,14 +999,14 @@ collectAnnotationNames annoMono inferredMono acc =
                                                 Just (Dict.insert key annoTypeVar acc)
 
                                             Just existing ->
-                                                if existing == annoTypeVar then
+                                                if TypeVar.equal existing annoTypeVar then
                                                     Just acc
 
                                                 else
                                                     Nothing
 
-                                Named _ ->
-                                    if annoTypeVar == inferredTypeVar then
+                                Named inferredName ->
+                                    if annoName == inferredName && annoSuper == inferredSuper then
                                         Just acc
 
                                     else

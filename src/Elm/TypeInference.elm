@@ -1019,7 +1019,7 @@ solveModule ctx typeAliases file =
                                         -- Only this module's own declarations
                                         -- are being ordered here; everything
                                         -- else is already in `globalEnv`.
-                                        if resolvedModule == ctx.thisIndex.moduleId && Dict.member resolvedName topLevelFunctions then
+                                        if ModuleIds.equal resolvedModule ctx.thisIndex.moduleId && Dict.member resolvedName topLevelFunctions then
                                             Just resolvedName
 
                                         else

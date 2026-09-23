@@ -5,6 +5,7 @@ module Elm.TypeInference.ModuleIds exposing
     , charId
     , dottedForDisplay
     , empty
+    , equal
     , getId
     , getIdByDotted
     , getName
@@ -36,8 +37,17 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 
 
+{-| When checking for equality, prefer `ModuleIds.equal` over `==`
+-}
 type alias ModuleId =
     Int
+
+
+{-| Faster than `==`
+-}
+equal : ModuleId -> ModuleId -> Bool
+equal a b =
+    a - b == 0
 
 
 type alias Mapping =

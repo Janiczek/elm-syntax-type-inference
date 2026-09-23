@@ -9,7 +9,7 @@ import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
-import Elm.TypeInference.TypeVar
+import Elm.TypeInference.TypeVar as TypeVar
     exposing
         ( SuperType(..)
         , TypeVar
@@ -350,7 +350,7 @@ findAliasArg needle mappings =
             Nothing
 
         ( param, argType ) :: rest ->
-            if sameVar param needle then
+            if TypeVar.equal param needle then
                 Just argType
 
             else
@@ -443,35 +443,13 @@ collapseNamedShader typeAliases type_ =
             type_
 
 
-{-| Faster than `param == needle`
--}
-sameVar : TypeVar -> TypeVar -> Bool
-sameVar ( style1, super1 ) ( style2, super2 ) =
-    case style1 of
-        Generated id1 ->
-            case style2 of
-                Generated id2 ->
-                    id1 == id2 && super1 == super2
-
-                Named _ ->
-                    False
-
-        Named name1 ->
-            case style2 of
-                Named name2 ->
-                    name1 == name2 && super1 == super2
-
-                Generated _ ->
-                    False
-
-
 shallowEqual : MonoType -> MonoType -> Bool
 shallowEqual t1 t2 =
     case t1 of
         TypeVar v1 ->
             case t2 of
                 TypeVar v2 ->
-                    sameVar v1 v2
+                    TypeVar.equal v1 v2
 
                 _ ->
                     False
@@ -1344,7 +1322,7 @@ occursCheck : TypeVar -> MonoType -> Bool
 occursCheck typeVar type_ =
     case type_ of
         TypeVar var ->
-            sameVar var typeVar
+            TypeVar.equal var typeVar
 
         Function { from, to } ->
             occursCheck typeVar from || occursCheck typeVar to

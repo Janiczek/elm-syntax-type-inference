@@ -2,6 +2,7 @@ module Elm.TypeInference.TypeVar exposing
     ( SuperType(..)
     , TypeVar
     , TypeVarStyle(..)
+    , equal
     , parse
     , toString
     )
@@ -18,6 +19,8 @@ import List.Extra
     x : number (in source code) == SuperVar Number ""
     x : number1 (in source code) == SuperVar Number "1"
     x : number (given by compiler) == SuperId Number 1
+
+Prefer `TypeVar.equal` over `==`
 
 -}
 type alias TypeVar =
@@ -114,3 +117,27 @@ superTypeToString super =
 
         CompAppend ->
             "compappend"
+
+
+{-| Faster than `==`
+-}
+equal : TypeVar -> TypeVar -> Bool
+equal ( style1, super1 ) ( style2, super2 ) =
+    case style1 of
+        Generated id1 ->
+            case style2 of
+                Generated id2 ->
+                    -- id1 == id2
+                    (id1 - id2 == 0)
+                        && (super1 == super2)
+
+                Named _ ->
+                    False
+
+        Named name1 ->
+            case style2 of
+                Named name2 ->
+                    name1 == name2 && super1 == super2
+
+                Generated _ ->
+                    False
