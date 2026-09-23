@@ -460,27 +460,10 @@ decide what to close over.
 -}
 closeOver : MonoType -> Type
 closeOver monoType =
-    monoType
-        |> generalize VarSet.empty
-
-
-{-| Put bound vars into the Forall.
-
-    generalize {a} (a -> b)
-    --> Forall [b] (a -> b)
-
-Meaning `a` stays free (belongs to the environment) but `b` is bound.
-
--}
-generalize : VarSet -> MonoType -> Type
-generalize envFreeVars monoType =
     let
         boundIds : List TypeVar
         boundIds =
-            VarSet.diff
-                (monoTypeVars monoType)
-                envFreeVars
-                |> VarSet.toList
+            monoTypeVars monoType |> VarSet.toList
     in
     Forall boundIds monoType
 
