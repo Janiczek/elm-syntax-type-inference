@@ -304,17 +304,27 @@ unqualifiedVarOutsideThisModule :
     -> VarName
     -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
 unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName =
-    Result.Extra.combineMap
-        (\import_ ->
+    Result.Extra.foldlWhileOk
+        (\import_ acc ->
             if ModuleIndex.importCouldExposeValue import_ varName then
                 explicitImportDefinesValue moduleMapping index modules import_ varName
+                    |> Result.map
+                        (\maybeImportDefinesValue ->
+                            case maybeImportDefinesValue of
+                                Nothing ->
+                                    acc
+
+                                Just importDefinesValue ->
+                                    importDefinesValue :: acc
+                        )
 
             else
-                Ok Nothing
+                Ok acc
         )
+        []
         thisModule.imports
         |> Result.andThen
-            (\explicitMaybeMatches ->
+            (\explicitMatches ->
                 let
                     home : ModuleId
                     home =
@@ -323,17 +333,12 @@ unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName =
                 dependencyModuleDefines moduleMapping index home varName
                     |> Result.map
                         (\maybePackage ->
-                            let
-                                explicitMatches : List ( PackageName, ModuleId )
-                                explicitMatches =
-                                    List.filterMap identity explicitMaybeMatches
-                            in
-                            case maybePackage |> Maybe.map (\package -> ( package, home )) of
+                            case maybePackage of
                                 Nothing ->
                                     explicitMatches
 
                                 Just implicitMatch ->
-                                    explicitMatches ++ [ implicitMatch ]
+                                    ( implicitMatch, home ) :: explicitMatches
                         )
             )
         |> Result.andThen
@@ -463,18 +468,30 @@ qualifiedVar moduleMapping index modules thisModule qualifier varName =
                     dedupeModuleIds
                         (case ImplicitImports.unaliasModuleId single of
                             Just m ->
-                                singleModulesWithAlias ++ [ m ]
+                                m :: singleModulesWithAlias
 
                             Nothing ->
                                 singleModulesWithAlias
                         )
             in
-            Result.Extra.combineMap
-                (\unaliased -> qualifiedModuleDefines moduleMapping index modules unaliased varName)
+            Result.Extra.foldlWhileOk
+                (\unaliased acc ->
+                    qualifiedModuleDefines moduleMapping index modules unaliased varName
+                        |> Result.map
+                            (\maybeQualModDefines ->
+                                case maybeQualModDefines of
+                                    Nothing ->
+                                        acc
+
+                                    Just qualModDefines ->
+                                        qualModDefines :: acc
+                            )
+                )
+                []
                 aliasCandidates
                 |> Result.andThen
                     (\aliasMatches ->
-                        case dedupeOwners (List.filterMap identity aliasMatches) of
+                        case dedupeOwners aliasMatches of
                             [] ->
                                 let
                                     qualifierModuleName : ModuleName
@@ -553,6 +570,8 @@ qualifiedModuleDefinesByName moduleMapping index modules qualifier varName =
             qualifiedModuleDefines moduleMapping index modules moduleId varName
 
 
+{-| Assumes you don't care about order
+-}
 dedupeOwners : List ( PackageName, ModuleId ) -> List ( PackageName, ModuleId )
 dedupeOwners pairs =
     List.foldl
@@ -566,7 +585,7 @@ dedupeOwners pairs =
                 ( seen, acc )
 
             else
-                ( key :: seen, acc ++ [ ( package, mod ) ] )
+                ( key :: seen, ( package, mod ) :: acc )
         )
         ( [], [] )
         pairs
