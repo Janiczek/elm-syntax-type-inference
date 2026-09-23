@@ -662,15 +662,15 @@ qualifierCandidates moduleMapping thisModule qualifier =
                 _ ->
                     []
 
-        aliasCandidates : List ModuleId
-        aliasCandidates =
+        aliasCandidatesReverse : List ModuleId
+        aliasCandidatesReverse =
             List.foldl
                 (\candidate acc ->
                     if List.member candidate acc then
                         acc
 
                     else
-                        acc ++ [ candidate ]
+                        candidate :: acc
                 )
                 []
                 (aliasedModules ++ implicitAlias)
@@ -691,21 +691,28 @@ qualifierCandidates moduleMapping thisModule qualifier =
             else
                 ModuleIds.getId (FullModuleName.fromModuleName_ qualifier) moduleMapping
     in
-    if List.isEmpty aliasCandidates then
-        case ( literalAvailable, literalId ) of
-            ( True, Just lid ) ->
-                [ lid ]
+    if List.isEmpty aliasCandidatesReverse then
+        if literalAvailable then
+            case literalId of
+                Just lid ->
+                    [ lid ]
 
-            _ ->
-                []
+                Nothing ->
+                    []
+
+        else
+            []
+
+    else if literalAvailable then
+        case literalId of
+            Just literalId_ ->
+                (literalId_ :: aliasCandidatesReverse) |> List.reverse
+
+            Nothing ->
+                aliasCandidatesReverse |> List.reverse
 
     else
-        case ( literalAvailable, literalId ) of
-            ( True, Just literalId_ ) ->
-                aliasCandidates ++ [ literalId_ ]
-
-            _ ->
-                aliasCandidates
+        aliasCandidatesReverse |> List.reverse
 
 
 typeResolverFor : ModuleIds.Mapping -> Index -> Dict ModuleId ModuleIndex -> ModuleIndex -> TypeResolver
