@@ -61,8 +61,8 @@ resolverFor moduleMapping deps selfPackage =
 
         addModule : PackageName -> Elm.Docs.Module -> Dict String (List PackageName) -> Dict String (List PackageName)
         addModule pkgName mod acc =
-            Dict.update mod.name
-                (\existing -> Just (Maybe.withDefault [] existing ++ [ pkgName ]))
+            Dict.insert mod.name
+                (Maybe.withDefault [] (Dict.get mod.name acc) ++ [ pkgName ])
                 acc
 
         ownersByModule : Dict String (List PackageName)

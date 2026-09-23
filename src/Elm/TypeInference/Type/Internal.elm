@@ -493,9 +493,14 @@ normalize ((Forall boundVars monoType) as type_) =
                     (\( style, super ) acc ->
                         case style of
                             Named name ->
-                                Dict.update
-                                    (superTypeTag super)
-                                    (\existing -> Just (Set.insert name (Maybe.withDefault Set.empty existing)))
+                                let
+                                    varTypeTag : Int
+                                    varTypeTag =
+                                        superTypeTag super
+                                in
+                                Dict.insert
+                                    varTypeTag
+                                    (Set.insert name (Maybe.withDefault Set.empty (Dict.get varTypeTag acc)))
                                     acc
 
                             Generated _ ->

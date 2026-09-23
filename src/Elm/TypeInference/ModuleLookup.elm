@@ -101,12 +101,10 @@ addCtorParents moduleId mod acc =
         (\union inner ->
             List.foldl
                 (\( ctor, _ ) innerDict ->
-                    Dict.update moduleId
-                        (\maybeCtors ->
-                            maybeCtors
-                                |> Maybe.withDefault Dict.empty
-                                |> Dict.insert ctor union.name
-                                |> Just
+                    Dict.insert moduleId
+                        (Dict.get moduleId innerDict
+                            |> Maybe.withDefault Dict.empty
+                            |> Dict.insert ctor union.name
                         )
                         innerDict
                 )
@@ -122,12 +120,10 @@ addRecordAliases moduleId mod acc =
     List.foldl
         (\alias inner ->
             if isRecordAlias alias then
-                Dict.update moduleId
-                    (\maybeSet ->
-                        maybeSet
-                            |> Maybe.withDefault Set.empty
-                            |> Set.insert alias.name
-                            |> Just
+                Dict.insert moduleId
+                    (Dict.get moduleId inner
+                        |> Maybe.withDefault Set.empty
+                        |> Set.insert alias.name
                     )
                     inner
 
@@ -145,12 +141,15 @@ addName :
     -> NameIndex
     -> NameIndex
 addName moduleId packageName name acc =
-    Dict.update moduleId
-        (\maybeInner ->
-            Maybe.withDefault Dict.empty maybeInner
-                |> Dict.update name
-                    (\maybeOwners -> Just (Maybe.withDefault [] maybeOwners ++ [ packageName ]))
-                |> Just
+    let
+        namesSoFar : Dict VarName (List PackageName)
+        namesSoFar =
+            Maybe.withDefault Dict.empty (Dict.get moduleId acc)
+    in
+    Dict.insert moduleId
+        (namesSoFar
+            |> Dict.insert name
+                (Maybe.withDefault [] (Dict.get name namesSoFar) ++ [ packageName ])
         )
         acc
 

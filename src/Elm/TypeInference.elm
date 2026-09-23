@@ -165,12 +165,9 @@ addReverseEdges index acc =
     index.imports
         |> List.foldl
             (\import_ innerAcc ->
-                Dict.update import_.moduleId
-                    (\maybeImporters ->
-                        Just
-                            (Set.insert index.moduleId
-                                (Maybe.withDefault Set.empty maybeImporters)
-                            )
+                Dict.insert import_.moduleId
+                    (Set.insert index.moduleId
+                        (Maybe.withDefault Set.empty (Dict.get import_.moduleId innerAcc))
                     )
                     innerAcc
             )
@@ -427,9 +424,14 @@ addFile file (Project p) =
                 Set.diff oldImportIds newImportIds
                     |> Set.foldl
                         (\importId acc ->
-                            Dict.update importId
-                                (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
-                                acc
+                            case Dict.get importId acc of
+                                Nothing ->
+                                    acc
+
+                                Just by ->
+                                    Dict.insert importId
+                                        (by |> Set.remove id)
+                                        acc
                         )
                         p.importedBy
 
@@ -438,16 +440,13 @@ addFile file (Project p) =
                 Set.diff newImportIds oldImportIds
                     |> Set.foldl
                         (\importId acc ->
-                            Dict.update importId
-                                (\maybeImporters ->
-                                    Just
-                                        (case maybeImporters of
-                                            Nothing ->
-                                                Set.singleton id
+                            Dict.insert importId
+                                (case Dict.get importId acc of
+                                    Nothing ->
+                                        Set.singleton id
 
-                                            Just importers ->
-                                                Set.insert id importers
-                                        )
+                                    Just importers ->
+                                        Set.insert id importers
                                 )
                                 acc
                         )
@@ -513,9 +512,12 @@ removeFile moduleName ((Project p) as proj) =
                     m.index.imports
                         |> List.foldl
                             (\import_ acc ->
-                                Dict.update import_.moduleId
-                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
-                                    acc
+                                case Dict.get import_.moduleId acc of
+                                    Nothing ->
+                                        acc
+
+                                    Just by ->
+                                        Dict.insert import_.moduleId (by |> Set.remove id) acc
                             )
                             p.importedBy
             in
