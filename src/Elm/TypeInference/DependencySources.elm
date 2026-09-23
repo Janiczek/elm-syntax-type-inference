@@ -211,16 +211,20 @@ docsTypeRefs tipe =
             let
                 ( moduleName, typeName ) =
                     ModuleNameExtra.splitLastDot qualifiedName
+
+                argsRefs : List ( String, String )
+                argsRefs =
+                    List.ExtraExtra.fastConcatMap docsTypeRefs args
             in
             -- Skip elm/core stuff
-            (if isPrimitiveRef moduleName typeName then
-                []
+            if isPrimitiveRef moduleName typeName then
+                argsRefs
 
-             else
-                modulePart qualifiedName
-                    |> List.map (\m -> ( m, typeName ))
-            )
-                ++ List.ExtraExtra.fastConcatMap docsTypeRefs args
+            else if String.isEmpty moduleName then
+                argsRefs
+
+            else
+                ( moduleName, typeName ) :: argsRefs
 
         Elm.Type.Record fields _ ->
             List.ExtraExtra.fastConcatMap (\( _, value ) -> docsTypeRefs value) fields
