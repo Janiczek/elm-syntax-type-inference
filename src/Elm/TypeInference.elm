@@ -1102,7 +1102,7 @@ gatherTypeAliases ctx file =
                                 case Node.value typeAlias.typeAnnotation of
                                     TypeAnnotation.Record fields ->
                                         fields
-                                            |> State.traverse
+                                            |> State.traverseFastAndReverse
                                                 (\(Node _ ( _, Node _ fieldType )) ->
                                                     case TypeI.fromTypeAnnotation resolver fieldType of
                                                         Err fromTypeAnnotationError ->
@@ -1112,9 +1112,9 @@ gatherTypeAliases ctx file =
                                                             State.pure fieldValueType
                                                 )
                                             |> State.map
-                                                (\fieldTypes ->
-                                                    fieldTypes
-                                                        |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
+                                                (\fieldTypesReverse ->
+                                                    fieldTypesReverse
+                                                        |> List.foldl (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
                                                 )
                                             |> State.andThen
                                                 (\ctorType ->

@@ -93,11 +93,11 @@ type alias Inferred =
 
 inferMany : (a -> StateM Inferred) -> List a -> StateM ( List Id, Equations )
 inferMany f items =
-    State.traverse f items
+    State.traverseFastAndReverse f items
         |> State.map
             (\inferred ->
                 inferred
-                    |> List.foldr
+                    |> List.foldl
                         (\( id_, eqs ) ( ids, allEqs ) ->
                             ( id_ :: ids
                             , TypeEquation.append eqs allEqs
@@ -562,7 +562,7 @@ inferExpr ctx exprNode =
         CaseExpression { expression, cases } ->
             State.do (inferExpr ctx expression) <| \( scrutineeId, scrutineeEqs ) ->
             State.do
-                (State.traverse
+                (State.traverseFastAndReverse
                     (\( patternNode, bodyNode ) ->
                         State.withScopedEnv <|
                             (State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
@@ -576,13 +576,13 @@ inferExpr ctx exprNode =
             let
                 caseEqs : Equations
                 caseEqs =
-                    List.foldr
+                    List.foldl
                         (\( _, branchEqs ) acc -> TypeEquation.append branchEqs acc)
                         TypeEquation.empty
                         caseInferreds
 
                 ( scrutineeEquations, bodyEquations ) =
-                    List.foldr
+                    List.foldl
                         (\( ( patternId, bodyId ), _ ) ( scruts, bodies ) ->
                             ( ( TypeI.id_ scrutineeId
                               , TypeI.id_ patternId
