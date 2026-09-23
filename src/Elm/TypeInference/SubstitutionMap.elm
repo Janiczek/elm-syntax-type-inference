@@ -465,9 +465,9 @@ lowerLetRanksTo targetLetRank type_ store =
             lowerLetRanksInFieldsTo targetLetRank fields store
 
         ExtensibleRecord r ->
-            store
-                |> lowerLetRanksTo targetLetRank r.extensionTypevar
-                |> lowerLetRanksInFieldsTo targetLetRank r.fields
+            lowerLetRanksInFieldsTo targetLetRank
+                r.fields
+                (lowerLetRanksTo targetLetRank r.extensionTypevar store)
 
         UserDefinedType r ->
             List.foldl (\arg storeAcc -> lowerLetRanksTo targetLetRank arg storeAcc) store r.args
