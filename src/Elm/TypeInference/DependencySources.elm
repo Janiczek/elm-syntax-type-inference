@@ -23,7 +23,6 @@ import Elm.TypeInference.Type exposing (PackageName)
 import Elm.TypeInference.Type.Internal as TypeI
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
-import List.ExtraExtra
 import Result.Extra
 import Set exposing (Set)
 
@@ -185,49 +184,76 @@ isKnownRef docsTypes ( moduleName, typeName ) =
 docsModuleRefs : List Elm.Docs.Module -> List ( String, String )
 docsModuleRefs modules =
     modules
-        |> List.ExtraExtra.fastConcatMap
-            (\mod ->
-                []
-                    |> List.ExtraExtra.fastConcatMapWithInitial (\value -> docsTypeRefs value.tipe) mod.values
-                    |> List.ExtraExtra.fastConcatMapWithInitial (\binop -> docsTypeRefs binop.tipe) mod.binops
-                    |> List.ExtraExtra.fastConcatMapWithInitial (\union -> List.ExtraExtra.fastConcatMap (\( _, payload ) -> List.ExtraExtra.fastConcatMap docsTypeRefs payload) union.tags) mod.unions
-                    |> List.ExtraExtra.fastConcatMapWithInitial (\typeAlias -> docsTypeRefs typeAlias.tipe) mod.aliases
+        |> List.foldl
+            (\mod accAcrossModules ->
+                List.foldl (\value acc -> acc |> addDocsTypeRefsToList value.tipe)
+                    accAcrossModules
+                    mod.values
+                    |> (\acc ->
+                            List.foldl
+                                (\binop accAcrossBinops -> accAcrossBinops |> addDocsTypeRefsToList binop.tipe)
+                                acc
+                                mod.binops
+                       )
+                    |> (\acc ->
+                            List.foldl
+                                (\union accAcrossUnions ->
+                                    List.foldl
+                                        (\( _, payload ) accAcrossPayloads ->
+                                            List.foldl addDocsTypeRefsToList accAcrossPayloads payload
+                                        )
+                                        accAcrossUnions
+                                        union.tags
+                                )
+                                acc
+                                mod.unions
+                       )
+                    |> (\acc ->
+                            List.foldl
+                                (\typeAlias accAcrossTypeAliases -> addDocsTypeRefsToList typeAlias.tipe accAcrossTypeAliases)
+                                acc
+                                mod.aliases
+                       )
             )
-
-
-docsTypeRefs : Elm.Type.Type -> List ( String, String )
-docsTypeRefs tipe =
-    case tipe of
-        Elm.Type.Var _ ->
             []
 
+
+addDocsTypeRefsToList : Elm.Type.Type -> List ( String, String ) -> List ( String, String )
+addDocsTypeRefsToList tipe acc =
+    case tipe of
+        Elm.Type.Var _ ->
+            acc
+
         Elm.Type.Lambda from to ->
-            docsTypeRefs from ++ docsTypeRefs to
+            addDocsTypeRefsToList from (addDocsTypeRefsToList to acc)
 
         Elm.Type.Tuple parts ->
-            List.ExtraExtra.fastConcatMap docsTypeRefs parts
+            List.foldl addDocsTypeRefsToList acc parts
 
         Elm.Type.Type qualifiedName args ->
             let
                 ( moduleName, typeName ) =
                     ModuleNameExtra.splitLastDot qualifiedName
 
-                argsRefs : List ( String, String )
-                argsRefs =
-                    List.ExtraExtra.fastConcatMap docsTypeRefs args
+                accAndArgsRefs : List ( String, String )
+                accAndArgsRefs =
+                    List.foldl addDocsTypeRefsToList acc args
             in
             -- Skip elm/core stuff
             if isPrimitiveRef moduleName typeName then
-                argsRefs
+                accAndArgsRefs
 
             else if String.isEmpty moduleName then
-                argsRefs
+                accAndArgsRefs
 
             else
-                ( moduleName, typeName ) :: argsRefs
+                ( moduleName, typeName ) :: accAndArgsRefs
 
         Elm.Type.Record fields _ ->
-            List.ExtraExtra.fastConcatMap (\( _, value ) -> docsTypeRefs value) fields
+            List.foldl
+                (\( _, value ) accAcrossFields -> accAcrossFields |> addDocsTypeRefsToList value)
+                acc
+                fields
 
 
 isPrimitiveRef : String -> String -> Bool
@@ -258,25 +284,6 @@ isPrimitiveRef moduleName typeName =
 
         _ ->
             False
-
-
-{-|
-
-     "Platform.Cmd.Cmd"
-     --> ["Platform.Cmd"]
-
-     "Int"
-     --> []
-
--}
-modulePart : String -> List String
-modulePart qualifiedName =
-    case ModuleNameExtra.splitLastDot qualifiedName of
-        ( "", _ ) ->
-            []
-
-        ( moduleName, _ ) ->
-            [ moduleName ]
 
 
 packageAliases :
