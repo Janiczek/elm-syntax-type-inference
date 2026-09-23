@@ -871,7 +871,7 @@ unifyMono cfg rawT1 rawT2 =
                     UserDefinedType ut2 ->
                         if
                             (ut1.package /= ut2.package)
-                                || (ut1.moduleId /= ut2.moduleId)
+                                || ModuleIds.notEqual ut1.moduleId ut2.moduleId
                                 || (ut1.name /= ut2.name)
                         then
                             typeMismatch cfg t1 t2
