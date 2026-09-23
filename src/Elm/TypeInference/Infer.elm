@@ -574,16 +574,9 @@ inferExpr ctx exprNode =
                 )
             <| \caseInferreds ->
             let
-                caseEqs : Equations
-                caseEqs =
+                ( scrutineeEquations, bodyEquations, caseEqs ) =
                     List.foldl
-                        (\( _, branchEqs ) acc -> TypeEquation.append branchEqs acc)
-                        TypeEquation.empty
-                        caseInferreds
-
-                ( scrutineeEquations, bodyEquations ) =
-                    List.foldl
-                        (\( ( patternId, bodyId ), _ ) ( scruts, bodies ) ->
+                        (\( ( patternId, bodyId ), branchEqs ) ( scruts, bodies, accCaseEqs ) ->
                             ( ( TypeI.id_ scrutineeId
                               , TypeI.id_ patternId
                               , "Case: scrutinee = branch pattern"
@@ -594,9 +587,10 @@ inferExpr ctx exprNode =
                               , "Case: result = branch body"
                               )
                                 :: bodies
+                            , TypeEquation.append branchEqs accCaseEqs
                             )
                         )
-                        ( [], [] )
+                        ( [], [], TypeEquation.empty )
                         caseInferreds
             in
             finishEqns <|
