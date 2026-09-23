@@ -746,7 +746,7 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
 
                 else
                     thisModule.imports
-                        |> List.filterMap
+                        |> List.ExtraExtra.findLastMap
                             (\import_ ->
                                 if not (ModuleIndex.importExposesType import_ typeName) then
                                     Nothing
@@ -763,8 +763,6 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                                         Nothing ->
                                             dependencyModuleDefinesType wrappedIndex import_.moduleId typeName
                             )
-                        |> List.reverse
-                        |> List.head
 
             else
                 Dict.get unaliasedId modules
