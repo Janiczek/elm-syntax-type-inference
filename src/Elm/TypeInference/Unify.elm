@@ -514,7 +514,7 @@ typeMismatch : UnifyConfig -> MonoType -> MonoType -> StateM ()
 typeMismatch cfg t1 t2 =
     let
         ( pubT1, pubT2 ) =
-            TypeI.toPublicPair cfg.moduleMapping
+            TypeI.normalizeAndToPublicPair cfg.moduleMapping
                 (expandAliasDeep cfg.typeAliases t1)
                 (expandAliasDeep cfg.typeAliases t2)
     in
@@ -1019,7 +1019,7 @@ bind cfg typeVar type_ =
     else if occursCheck typeVar type_ then
         let
             ( pubVar, pubType ) =
-                TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
+                TypeI.normalizeAndToPublicPair cfg.moduleMapping (TypeVar typeVar) type_
         in
         State.error
             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -1038,7 +1038,7 @@ bind cfg typeVar type_ =
                     Nothing ->
                         let
                             ( pubVar, pubOther ) =
-                                TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
+                                TypeI.normalizeAndToPublicPair cfg.moduleMapping (TypeVar typeVar) type_
                         in
                         State.error
                             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -1092,7 +1092,7 @@ bind cfg typeVar type_ =
                 else
                     let
                         ( pubVar, pubType ) =
-                            TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
+                            TypeI.normalizeAndToPublicPair cfg.moduleMapping (TypeVar typeVar) type_
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName

@@ -14,10 +14,10 @@ module Elm.TypeInference.Type.Internal exposing
     , mono
     , monoPublicKey
     , monoTypeVars
+    , normalizeAndToPublicPair
+    , normalizeAndToPublicType
     , number_
     , renameToAnnotation
-    , toPublicPair
-    , toPublicType
     )
 
 import Dict exposing (Dict)
@@ -777,20 +777,16 @@ fromTypeAnnotationError err =
             AmbiguousModuleOwner ambiguity
 
 
-toPublicType : ModuleIds.Mapping -> { alreadyNormalized : Bool } -> MonoType -> Public.Type
-toPublicType moduleMapping { alreadyNormalized } origMono =
+normalizeAndToPublicType : ModuleIds.Mapping -> MonoType -> Public.Type
+normalizeAndToPublicType moduleMapping unnormalizedMono =
     let
         mono_ : MonoType
         mono_ =
-            if alreadyNormalized then
-                origMono
-
-            else
-                let
-                    (Forall _ normalizedMono) =
-                        normalize (Forall [] origMono)
-                in
-                normalizedMono
+            let
+                (Forall _ normalizedMono) =
+                    normalize (Forall [] unnormalizedMono)
+            in
+            normalizedMono
     in
     toPublicTypeNormalized moduleMapping mono_
 
@@ -809,22 +805,22 @@ shared variable differently on each side.
 Used for type errors, where types come in pairs.
 
 -}
-toPublicPair : ModuleIds.Mapping -> MonoType -> MonoType -> ( Public.Type, Public.Type )
-toPublicPair moduleMapping t1 t2 =
+normalizeAndToPublicPair : ModuleIds.Mapping -> MonoType -> MonoType -> ( Public.Type, Public.Type )
+normalizeAndToPublicPair moduleMapping t1 t2 =
     let
         (Forall _ normalizedCombined) =
             normalize (Forall [] (Tuple2 t1 t2))
     in
     case normalizedCombined of
         Tuple2 nt1 nt2 ->
-            ( toPublicType moduleMapping { alreadyNormalized = True } nt1
-            , toPublicType moduleMapping { alreadyNormalized = True } nt2
+            ( toPublicTypeNormalized moduleMapping nt1
+            , toPublicTypeNormalized moduleMapping nt2
             )
 
         _ ->
             -- Shouldn't happen
-            ( toPublicType moduleMapping { alreadyNormalized = False } t1
-            , toPublicType moduleMapping { alreadyNormalized = False } t2
+            ( normalizeAndToPublicType moduleMapping t1
+            , normalizeAndToPublicType moduleMapping t2
             )
 
 
@@ -836,8 +832,8 @@ toPublicTypeNormalized moduleMapping mono_ =
 
         Function { from, to } ->
             Public.Function
-                { from = toPublicType moduleMapping { alreadyNormalized = True } from
-                , to = toPublicType moduleMapping { alreadyNormalized = True } to
+                { from = toPublicTypeNormalized moduleMapping from
+                , to = toPublicTypeNormalized moduleMapping to
                 }
 
         Int ->
@@ -856,24 +852,24 @@ toPublicTypeNormalized moduleMapping mono_ =
             Public.Bool
 
         List ts ->
-            Public.List (toPublicType moduleMapping { alreadyNormalized = True } ts)
+            Public.List (toPublicTypeNormalized moduleMapping ts)
 
         Unit ->
             Public.Unit
 
         Tuple2 t1 t2 ->
             Public.Tuple2
-                (toPublicType moduleMapping { alreadyNormalized = True } t1)
-                (toPublicType moduleMapping { alreadyNormalized = True } t2)
+                (toPublicTypeNormalized moduleMapping t1)
+                (toPublicTypeNormalized moduleMapping t2)
 
         Tuple3 t1 t2 t3 ->
             Public.Tuple3
-                (toPublicType moduleMapping { alreadyNormalized = True } t1)
-                (toPublicType moduleMapping { alreadyNormalized = True } t2)
-                (toPublicType moduleMapping { alreadyNormalized = True } t3)
+                (toPublicTypeNormalized moduleMapping t1)
+                (toPublicTypeNormalized moduleMapping t2)
+                (toPublicTypeNormalized moduleMapping t3)
 
         Record { fields } ->
-            Public.Record { fields = Dict.map (\_ v -> toPublicType moduleMapping { alreadyNormalized = True } v) fields }
+            Public.Record { fields = Dict.map (\_ v -> toPublicTypeNormalized moduleMapping v) fields }
 
         ExtensibleRecord extensibleRecordUncollapsed ->
             case collapseExtensible extensibleRecordUncollapsed of
@@ -891,7 +887,7 @@ toPublicTypeNormalized moduleMapping mono_ =
                                     -- library, as they don't have access to MonoType
                                     -- constructors.
                                     "<elm-syntax-type-inference bug: non-var as extensible record base>"
-                        , fields = fields |> Dict.map (\_ v -> toPublicType moduleMapping { alreadyNormalized = True } v)
+                        , fields = fields |> Dict.map (\_ v -> toPublicTypeNormalized moduleMapping v)
                         }
 
                 collapsed ->
@@ -902,19 +898,19 @@ toPublicTypeNormalized moduleMapping mono_ =
                 { package = r.package
                 , moduleName = moduleIdToModuleName moduleMapping r.moduleId
                 , name = r.name
-                , arguments = List.map (\arg -> toPublicType moduleMapping { alreadyNormalized = True } arg) r.args
+                , arguments = List.map (\arg -> toPublicTypeNormalized moduleMapping arg) r.args
                 }
 
         WebGLShader r ->
             let
                 ( attributesFields, attributesExtensionTypevar ) =
-                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.attributesExtension r.attributes
+                    shaderSlotToPublic (\t -> toPublicTypeNormalized moduleMapping t) r.attributesExtension r.attributes
 
                 ( uniformsFields, uniformsExtensionTypevar ) =
-                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.uniformsExtension r.uniforms
+                    shaderSlotToPublic (\t -> toPublicTypeNormalized moduleMapping t) r.uniformsExtension r.uniforms
 
                 ( varyingsFields, varyingsExtensionTypevar ) =
-                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.varyingsExtension r.varyings
+                    shaderSlotToPublic (\t -> toPublicTypeNormalized moduleMapping t) r.varyingsExtension r.varyings
             in
             Public.WebGLShader
                 { attributesFields = attributesFields
