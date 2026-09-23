@@ -39,28 +39,27 @@ type SuperType
 
 toString : TypeVar -> String
 toString ( style, super ) =
-    let
-        prefix : String
-        prefix =
-            case super of
-                Normal ->
-                    ""
+    case super of
+        Normal ->
+            case style of
+                Generated theId ->
+                    "#" ++ String.fromInt theId
 
-                _ ->
+                Named name ->
+                    name
+
+        _ ->
+            let
+                prefix : String
+                prefix =
                     superTypeToString super
-    in
-    case ( super, style ) of
-        ( Normal, Generated theId ) ->
-            "#" ++ String.fromInt theId
+            in
+            case style of
+                Generated theId ->
+                    prefix ++ "#" ++ String.fromInt theId
 
-        ( Normal, Named name ) ->
-            name
-
-        ( _, Generated theId ) ->
-            prefix ++ "#" ++ String.fromInt theId
-
-        ( _, Named name ) ->
-            prefix ++ name
+                Named name ->
+                    prefix ++ name
 
 
 parse : String -> TypeVar

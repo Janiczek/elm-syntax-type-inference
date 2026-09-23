@@ -975,112 +975,188 @@ applyAnnotationNames mapping (( style, super ) as var) =
 
 collectAnnotationNames : MonoType -> MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
 collectAnnotationNames annoMono inferredMono acc =
-    case ( annoMono, inferredMono ) of
-        ( TypeVar ( Named annoName, annoSuper ), TypeVar ( Generated inferredId, inferredSuper ) ) ->
-            if annoSuper /= inferredSuper then
-                Nothing
+    case annoMono of
+        TypeVar ( Named annoName, annoSuper ) ->
+            case inferredMono of
+                TypeVar ( Generated inferredId, inferredSuper ) ->
+                    if annoSuper /= inferredSuper then
+                        Nothing
 
-            else
-                let
-                    key : Int
-                    key =
-                        VarSet.genKeyFrom inferredId inferredSuper
+                    else
+                        let
+                            key : Int
+                            key =
+                                VarSet.genKeyFrom inferredId inferredSuper
 
-                    wanted : TypeVar
-                    wanted =
-                        ( Named annoName, annoSuper )
-                in
-                case Dict.get key acc of
-                    Nothing ->
-                        Just (Dict.insert key wanted acc)
+                            wanted : TypeVar
+                            wanted =
+                                ( Named annoName, annoSuper )
+                        in
+                        case Dict.get key acc of
+                            Nothing ->
+                                Just (Dict.insert key wanted acc)
 
-                    Just existing ->
-                        if existing == wanted then
-                            Just acc
+                            Just existing ->
+                                if existing == wanted then
+                                    Just acc
 
-                        else
-                            Nothing
+                                else
+                                    Nothing
 
-        ( TypeVar ( Named annoName, annoSuper ), TypeVar ( Named inferredName, inferredSuper ) ) ->
-            if ( Named annoName, annoSuper ) == ( Named inferredName, inferredSuper ) then
-                Just acc
+                TypeVar ( Named inferredName, inferredSuper ) ->
+                    if ( Named annoName, annoSuper ) == ( Named inferredName, inferredSuper ) then
+                        Just acc
 
-            else
-                Nothing
+                    else
+                        Nothing
 
-        ( TypeVar _, TypeVar _ ) ->
+                _ ->
+                    Nothing
+
+        TypeVar ( Generated _, _ ) ->
             -- Should be impossible (annotations shouldn't contain generated vars)
             Nothing
 
-        ( TypeVar _, _ ) ->
-            Nothing
+        Function a1 ->
+            case inferredMono of
+                Function b1 ->
+                    collectAnnotationNames a1.from b1.from acc
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a1.to b1.to)
 
-        ( _, TypeVar _ ) ->
-            Nothing
+                _ ->
+                    Nothing
 
-        ( Function a1, Function b1 ) ->
-            collectAnnotationNames a1.from b1.from acc
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a1.to b1.to)
+        List a ->
+            case inferredMono of
+                List b ->
+                    collectAnnotationNames a b acc
 
-        ( List a, List b ) ->
-            collectAnnotationNames a b acc
+                _ ->
+                    Nothing
 
-        ( Tuple2 a1 a2, Tuple2 b1 b2 ) ->
-            collectAnnotationNames a1 b1 acc
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
+        Tuple2 a1 a2 ->
+            case inferredMono of
+                Tuple2 b1 b2 ->
+                    collectAnnotationNames a1 b1 acc
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
 
-        ( Tuple3 a1 a2 a3, Tuple3 b1 b2 b3 ) ->
-            collectAnnotationNames a1 b1 acc
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a3 b3)
+                _ ->
+                    Nothing
 
-        ( Record r1, Record r2 ) ->
-            collectRecordFields r1.fields r2.fields acc
+        Tuple3 a1 a2 a3 ->
+            case inferredMono of
+                Tuple3 b1 b2 b3 ->
+                    collectAnnotationNames a1 b1 acc
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames a3 b3)
 
-        ( ExtensibleRecord r1Uncollapsed, ExtensibleRecord r2Uncollapsed ) ->
-            case ( collapseExtensible r1Uncollapsed, collapseExtensible r2Uncollapsed ) of
-                ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
-                    collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc
-                        |> Maybe.andThen (\a -> a |> collectRecordFields r1.fields r2.fields)
+                _ ->
+                    Nothing
 
-                ( r1, r2 ) ->
-                    collectAnnotationNames r1 r2 acc
+        Record r1 ->
+            case inferredMono of
+                Record r2 ->
+                    collectRecordFields r1.fields r2.fields acc
 
-        ( UserDefinedType u1, UserDefinedType u2 ) ->
-            if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
-                Nothing
+                _ ->
+                    Nothing
 
-            else
-                collectAnnotationArgs u1.args u2.args acc
+        ExtensibleRecord r1Uncollapsed ->
+            case inferredMono of
+                ExtensibleRecord r2Uncollapsed ->
+                    let
+                        r2Collapsed : MonoType
+                        r2Collapsed =
+                            collapseExtensible r2Uncollapsed
+                    in
+                    case collapseExtensible r1Uncollapsed of
+                        (ExtensibleRecord r1) as r1Collapsed ->
+                            case r2Collapsed of
+                                ExtensibleRecord r2 ->
+                                    collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc
+                                        |> Maybe.andThen (\a -> a |> collectRecordFields r1.fields r2.fields)
 
-        ( WebGLShader s1, WebGLShader s2 ) ->
-            collectAnnotationNames s1.attributesExtension s2.attributesExtension acc
-                |> Maybe.andThen (\a -> a |> collectRecordFields s1.attributes s2.attributes)
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
-                |> Maybe.andThen (\a -> a |> collectRecordFields s1.uniforms s2.uniforms)
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
-                |> Maybe.andThen (\a -> a |> collectRecordFields s1.varyings s2.varyings)
+                                _ ->
+                                    collectAnnotationNames r1Collapsed r2Collapsed acc
 
-        ( Int, Int ) ->
-            Just acc
+                        r1Collapsed ->
+                            collectAnnotationNames r1Collapsed r2Collapsed acc
 
-        ( Float, Float ) ->
-            Just acc
+                _ ->
+                    Nothing
 
-        ( Char, Char ) ->
-            Just acc
+        UserDefinedType u1 ->
+            case inferredMono of
+                UserDefinedType u2 ->
+                    if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
+                        Nothing
 
-        ( String, String ) ->
-            Just acc
+                    else
+                        collectAnnotationArgs u1.args u2.args acc
 
-        ( Bool, Bool ) ->
-            Just acc
+                _ ->
+                    Nothing
 
-        ( Unit, Unit ) ->
-            Just acc
+        WebGLShader s1 ->
+            case inferredMono of
+                WebGLShader s2 ->
+                    collectAnnotationNames s1.attributesExtension s2.attributesExtension acc
+                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.attributes s2.attributes)
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
+                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.uniforms s2.uniforms)
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
+                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.varyings s2.varyings)
 
-        _ ->
-            Nothing
+                _ ->
+                    Nothing
+
+        Int ->
+            case inferredMono of
+                Int ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Float ->
+            case inferredMono of
+                Float ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Char ->
+            case inferredMono of
+                Char ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        String ->
+            case inferredMono of
+                String ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Bool ->
+            case inferredMono of
+                Bool ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Unit ->
+            case inferredMono of
+                Unit ->
+                    Just acc
+
+                _ ->
+                    Nothing
 
 
 collectRecordFields : Dict VarName MonoType -> Dict VarName MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)

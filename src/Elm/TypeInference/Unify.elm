@@ -359,37 +359,48 @@ findAliasArg needle mappings =
 
 zipAliasArgs : List TypeVar -> List MonoType -> Maybe (List ( TypeVar, MonoType ))
 zipAliasArgs params args =
-    case ( params, args ) of
-        ( [], [] ) ->
-            Just []
+    case params of
+        [] ->
+            case args of
+                [] ->
+                    Just []
 
-        ( param :: restParams, argType :: restArgs ) ->
-            zipAliasArgs restParams restArgs
-                |> Maybe.map (\restZipped -> ( param, argType ) :: restZipped)
+                _ :: _ ->
+                    Nothing
 
-        _ ->
-            Nothing
+        param :: restParams ->
+            case args of
+                argType :: restArgs ->
+                    zipAliasArgs restParams restArgs
+                        |> Maybe.map (\restZipped -> ( param, argType ) :: restZipped)
+
+                [] ->
+                    Nothing
 
 
 zipArgs : List MonoType -> List MonoType -> Maybe (List ( MonoType, MonoType ))
 zipArgs args1 args2 =
-    case ( args1, args2 ) of
-        ( [], [] ) ->
-            Just []
+    case args1 of
+        [] ->
+            case args2 of
+                [] ->
+                    Just []
 
-        ( a1 :: rest1, a2 :: rest2 ) ->
-            case zipArgs rest1 rest2 of
-                Just lst ->
-                    Just (( a1, a2 ) :: lst)
-
-                Nothing ->
+                _ :: _ ->
                     Nothing
 
-        ( _ :: _, [] ) ->
-            Nothing
+        a1 :: rest1 ->
+            case args2 of
+                a2 :: rest2 ->
+                    case zipArgs rest1 rest2 of
+                        Just lst ->
+                            Just (( a1, a2 ) :: lst)
 
-        ( [], _ :: _ ) ->
-            Nothing
+                        Nothing ->
+                            Nothing
+
+                [] ->
+                    Nothing
 
 
 {-| Pair the two record field dicts up _by name_.
@@ -436,15 +447,22 @@ collapseNamedShader typeAliases type_ =
 -}
 sameVar : TypeVar -> TypeVar -> Bool
 sameVar ( style1, super1 ) ( style2, super2 ) =
-    case ( style1, style2 ) of
-        ( Generated id1, Generated id2 ) ->
-            id1 == id2 && super1 == super2
+    case style1 of
+        Generated id1 ->
+            case style2 of
+                Generated id2 ->
+                    id1 == id2 && super1 == super2
 
-        ( Named name1, Named name2 ) ->
-            name1 == name2 && super1 == super2
+                Named _ ->
+                    False
 
-        _ ->
-            False
+        Named name1 ->
+            case style2 of
+                Named name2 ->
+                    name1 == name2 && super1 == super2
+
+                Generated _ ->
+                    False
 
 
 shallowEqual : MonoType -> MonoType -> Bool
@@ -1051,15 +1069,22 @@ bind cfg typeVar type_ =
                             -- Either could be chosen as then parent (linked to),
                             -- but we prefer Generated ids as they can't collide.
                             State.modifySubst <| \subst ->
-                            case ( Tuple.first typeVar, Tuple.first otherVar ) of
-                                ( Named _, Generated _ ) ->
-                                    subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
+                            case Tuple.first typeVar of
+                                Named _ ->
+                                    case Tuple.first otherVar of
+                                        Generated _ ->
+                                            subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
 
-                                ( Generated _, Named _ ) ->
-                                    subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
+                                        Named _ ->
+                                            subst |> SubstitutionMap.union typeVar otherVar
 
-                                _ ->
-                                    subst |> SubstitutionMap.union typeVar otherVar
+                                Generated _ ->
+                                    case Tuple.first otherVar of
+                                        Named _ ->
+                                            subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
+
+                                        Generated _ ->
+                                            subst |> SubstitutionMap.union typeVar otherVar
 
                         else if m == otherSuper then
                             -- otherVar is more constrained -> it will be the `parent` representative.
@@ -1105,66 +1130,77 @@ bind cfg typeVar type_ =
 -}
 meet : SuperType -> SuperType -> Maybe SuperType
 meet a b =
-    if a == b then
-        Just a
+    case a of
+        Normal ->
+            Just b
 
-    else
-        case ( a, b ) of
-            ( Normal, other ) ->
-                Just other
+        Number ->
+            case b of
+                Normal ->
+                    Just Number
 
-            ( other, Normal ) ->
-                Just other
+                Comparable ->
+                    Just Number
 
-            ( Number, Comparable ) ->
-                Just Number
+                CompAppend ->
+                    Nothing
 
-            ( Comparable, Number ) ->
-                Just Number
+                Appendable ->
+                    Nothing
 
-            ( Comparable, Appendable ) ->
-                Just CompAppend
+                Number ->
+                    Just Number
 
-            ( Appendable, Comparable ) ->
-                Just CompAppend
+        Comparable ->
+            case b of
+                Normal ->
+                    Just Comparable
 
-            ( Comparable, CompAppend ) ->
-                Just CompAppend
+                Number ->
+                    Just Number
 
-            ( CompAppend, Comparable ) ->
-                Just CompAppend
+                Appendable ->
+                    Just CompAppend
 
-            ( Appendable, CompAppend ) ->
-                Just CompAppend
+                CompAppend ->
+                    Just CompAppend
 
-            ( CompAppend, Appendable ) ->
-                Just CompAppend
+                Comparable ->
+                    Just Comparable
 
-            ( Number, CompAppend ) ->
-                Nothing
+        Appendable ->
+            case b of
+                Normal ->
+                    Just Appendable
 
-            ( CompAppend, Number ) ->
-                Nothing
+                Comparable ->
+                    Just CompAppend
 
-            ( Number, Appendable ) ->
-                Nothing
+                CompAppend ->
+                    Just CompAppend
 
-            ( Appendable, Number ) ->
-                Nothing
+                Number ->
+                    Nothing
 
-            -- The a == b guard above makes these diagonal branches unreachable
-            -- but let's not use wildcards anyways
-            ( Number, Number ) ->
-                Just a
+                Appendable ->
+                    Just Appendable
 
-            ( Comparable, Comparable ) ->
-                Just a
+        CompAppend ->
+            case b of
+                Normal ->
+                    Just CompAppend
 
-            ( Appendable, Appendable ) ->
-                Just a
+                Comparable ->
+                    Just CompAppend
 
-            ( CompAppend, CompAppend ) ->
-                Just a
+                Appendable ->
+                    Just CompAppend
+
+                Number ->
+                    Nothing
+
+                CompAppend ->
+                    Just CompAppend
 
 
 accepts : TypeAliases -> SuperType -> MonoType -> Bool

@@ -72,15 +72,17 @@ cons eq rest =
 
 append : Equations -> Equations -> Equations
 append left right =
-    case ( left, right ) of
-        ( Empty, r ) ->
-            r
-
-        ( l, Empty ) ->
-            l
+    case left of
+        Empty ->
+            right
 
         _ ->
-            Append left right
+            case right of
+                Empty ->
+                    left
+
+                _ ->
+                    Append left right
 
 
 toList : Equations -> List TypeEquation
