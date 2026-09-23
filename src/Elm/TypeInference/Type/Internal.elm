@@ -976,11 +976,11 @@ applyAnnotationNames mapping (( style, super ) as var) =
 collectAnnotationNames : MonoType -> MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
 collectAnnotationNames annoMono inferredMono acc =
     case annoMono of
-        TypeVar ( annoStyle, annoSuper ) ->
+        TypeVar (( annoStyle, annoSuper ) as annoTypeVar) ->
             case annoStyle of
-                Named annoName ->
+                Named _ ->
                     case inferredMono of
-                        TypeVar ( inferredStyle, inferredSuper ) ->
+                        TypeVar (( inferredStyle, inferredSuper ) as inferredTypeVar) ->
                             case inferredStyle of
                                 Generated inferredId ->
                                     if annoSuper /= inferredSuper then
@@ -991,24 +991,20 @@ collectAnnotationNames annoMono inferredMono acc =
                                             key : Int
                                             key =
                                                 VarSet.genKeyFrom inferredId inferredSuper
-
-                                            wanted : TypeVar
-                                            wanted =
-                                                ( Named annoName, annoSuper )
                                         in
                                         case Dict.get key acc of
                                             Nothing ->
-                                                Just (Dict.insert key wanted acc)
+                                                Just (Dict.insert key annoTypeVar acc)
 
                                             Just existing ->
-                                                if existing == wanted then
+                                                if existing == annoTypeVar then
                                                     Just acc
 
                                                 else
                                                     Nothing
 
-                                Named inferredName ->
-                                    if ( Named annoName, annoSuper ) == ( Named inferredName, inferredSuper ) then
+                                Named _ ->
+                                    if annoTypeVar == inferredTypeVar then
                                         Just acc
 
                                     else
