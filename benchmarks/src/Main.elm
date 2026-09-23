@@ -3,6 +3,7 @@ module Main exposing (main)
 import Benchmark exposing (Benchmark, describe)
 import Benchmark.Alternative exposing (rank)
 import Benchmark.Runner.Alternative as BenchmarkRunner
+import Bitwise
 
 
 main : BenchmarkRunner.Program
@@ -39,6 +40,11 @@ main =
             [ ( "join", fullModuleNameToStringJoin )
             , ( "++ join", fullModuleNameToStringAppendJoin )
             ]
+        , rank "fromRange"
+            (\f -> exampleRanges |> List.foldl (\example _ -> f example) exampleRangeLike)
+            [ ( "r<<16 + c", fromRangeAdd )
+            , ( "r<<16 | c", fromRangeBitOr )
+            ]
         ]
         |> BenchmarkRunner.program
 
@@ -61,6 +67,35 @@ exampleModuleNameSegments =
 exampleFullModuleNames : List ( String, List String )
 exampleFullModuleNames =
     exampleModuleNames |> List.map (\moduleName -> ( "Example", moduleName |> String.split "." ))
+
+
+type alias Range =
+    { start : { row : Int, column : Int }
+    , end : { row : Int, column : Int }
+    }
+
+
+type alias RangeLike =
+    ( Int, Int )
+
+
+exampleRanges : List Range
+exampleRanges =
+    List.map4
+        (\sr sc er ec ->
+            { start = { row = sr * 10, column = sc + 1 }
+            , end = { row = er * 4, column = ec // 2 }
+            }
+        )
+        (List.range 1 100)
+        (List.range 1 100)
+        (List.range 1 100)
+        (List.range 1 100)
+
+
+exampleRangeLike : RangeLike
+exampleRangeLike =
+    ( 123, 456 )
 
 
 firstCharIsUpperUncons : String -> Bool
@@ -335,3 +370,17 @@ fullModuleNameToStringAppendJoin ( fullModuleNameSegment0, fullModuleNameSegment
 
         _ ->
             fullModuleNameSegment0 ++ "." ++ String.join "." fullModuleNameSegment1Up
+
+
+fromRangeBitOr : Range -> RangeLike
+fromRangeBitOr { start, end } =
+    ( Bitwise.or (Bitwise.shiftLeftBy 16 start.row) start.column
+    , Bitwise.or (Bitwise.shiftLeftBy 16 end.row) end.column
+    )
+
+
+fromRangeAdd : Range -> RangeLike
+fromRangeAdd { start, end } =
+    ( Bitwise.or (Bitwise.shiftLeftBy 16 start.row) start.column
+    , Bitwise.or (Bitwise.shiftLeftBy 16 end.row) end.column
+    )
