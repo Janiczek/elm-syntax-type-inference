@@ -34,11 +34,7 @@ import Elm.TypeInference.TypeVar as TypeVar
         , TypeVar
         , TypeVarStyle(..)
         )
-import Elm.TypeInference.VarSet as VarSet
-    exposing
-        ( VarSet
-        , superTypeTag
-        )
+import Elm.TypeInference.VarSet as VarSet exposing (superTypeTag)
 import Result.Extra
 import Set exposing (Set)
 

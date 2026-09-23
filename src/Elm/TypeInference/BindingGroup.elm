@@ -11,7 +11,6 @@ import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType(..), Type(..))
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
-import Elm.TypeInference.VarSet as VarSet
 
 
 {-| One binding in the binding group.
