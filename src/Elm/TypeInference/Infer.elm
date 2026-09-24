@@ -121,23 +121,18 @@ functionType argIds resultId =
 -}
 resolveGlobalVar : Ctx -> PackageName -> ModuleId -> VarName -> StateM MonoType
 resolveGlobalVar ctx package moduleId name =
-    let
-        ( aliasedPackage, aliasedModuleId, aliasedName ) =
-            if package == "" then
-                case
-                    ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
-                        |> Result.withDefault Nothing
-                of
-                    Just ( m, n ) ->
-                        ( "", m, n )
+    if package == "" then
+        case
+            ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
+        of
+            Ok (Just ( m, n )) ->
+                State.lookupGlobalEnv ctx.moduleMapping "" m n
 
-                    Nothing ->
-                        ( package, moduleId, name )
+            _ ->
+                State.lookupGlobalEnv ctx.moduleMapping package moduleId name
 
-            else
-                ( package, moduleId, name )
-    in
-    State.lookupGlobalEnv ctx.moduleMapping aliasedPackage aliasedModuleId aliasedName
+    else
+        State.lookupGlobalEnv ctx.moduleMapping package moduleId name
 
 
 {-| Resolves a value or operator symbol to its type.
