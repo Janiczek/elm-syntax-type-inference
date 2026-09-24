@@ -551,36 +551,38 @@ substituteMono store monoType =
                     , store
                     )
 
-                Just (Ground groundType) ->
-                    ( groundType
-                    , groundAndChanged
-                    , store
-                    )
-
-                Just (Bound bound) ->
-                    resolveBound store var bound
-
-                Just (Link _) ->
-                    let
-                        ( root, store1 ) =
-                            findRoot store var
-                    in
-                    case getSlot root store1 of
-                        Just (Bound bound) ->
-                            resolveBound store1 var bound
-
-                        Just (Ground groundType) ->
+                Just varSlot ->
+                    case varSlot of
+                        Ground groundType ->
                             ( groundType
                             , groundAndChanged
-                            , insertSlot var (Ground groundType) store1
+                            , store
                             )
 
-                        _ ->
-                            -- Unbound root: the best we can say is which var this one has merged into.
-                            ( TypeVar root
-                            , changedFlag
-                            , store1
-                            )
+                        Bound bound ->
+                            resolveBound store var bound
+
+                        Link _ ->
+                            let
+                                ( root, store1 ) =
+                                    findRoot store var
+                            in
+                            case getSlot root store1 of
+                                Just (Bound bound) ->
+                                    resolveBound store1 var bound
+
+                                Just (Ground groundType) ->
+                                    ( groundType
+                                    , groundAndChanged
+                                    , insertSlot var (Ground groundType) store1
+                                    )
+
+                                _ ->
+                                    -- Unbound root: the best we can say is which var this one has merged into.
+                                    ( TypeVar root
+                                    , changedFlag
+                                    , store1
+                                    )
 
         -- The rest are just recursion
         Function { from, to } ->
