@@ -45,6 +45,43 @@ main =
             [ ( "r<<16 + c", fromRangeAdd )
             , ( "r<<16 | c", fromRangeBitOr )
             ]
+        , rank "string equals"
+            (\f ->
+                exampleStringPairList
+                    |> List.foldl
+                        (\( a, b ) _ ->
+                            f a b
+                                -- try to confuse mono of _Utils_eq
+                                || (String.length a == String.length b)
+                                || (Just [ EQ ] == Just [ LT ])
+                        )
+                        False
+            )
+            [ ( "== as function", stringEqualsOperator )
+            , ( "(==)", (==) )
+            , ( "<= && >=", stringEqualsLeAndGe )
+            , ( "not (< || >)", stringEqualsLessOrGreater )
+            , ( "++ \"\" == ++ \"\"", stringEqualsAppendEmptyAppendEmpty )
+            , ( "== ++ \"\"", stringEqualsAppendEmpty )
+            , ( "== \"\" ++", stringEqualsPrependEmpty )
+            , ( "== slice 0 length", stringEqualsSliceToLength )
+            , ( "== slice 0 big", stringEqualsSliceToBigNumber )
+            , ( "== slice 0 infinity", stringEqualsSliceToInfinity )
+            , ( "slice == slice", stringEqualsSliceSlice )
+            , ( "case compare of EQ", stringEqualsCaseCompare )
+            , ( "length==length && ==", stringEqualsCheckLengthFirst )
+            , ( "length==length && String.replace a \"\" b == \"\"", stringEqualsReplace )
+            , ( "String.startsWith a b && length==length", stringEqualsStartsWithThenLengthCheck )
+            , ( "length==length && String.startsWith a b", stringEqualsStartsWith )
+            , ( "length==length && String.endsWith a b", stringEqualsEndsWith )
+            , ( "length==length && String.indexes a b /= []", stringEqualsIndexes )
+            , ( "let_=length a _=length b in ==", stringEqualsIgnoreLengths )
+            , ( "let_=length b in ==", stringEqualsIgnoreLength )
+            , ( "a==lit,b==list ==", stringEqualsAfterUnnecessaryLiteralEqualityCheck )
+            , ( "startsWith a b && startsWith b a", stringEqualsStartsWithStartsWith )
+            , ( "endsWith a b && endsWith b a", stringEqualsEndsWithEndsWith )
+            , ( "first char == && ==", stringEqualsSliceFirstMatches )
+            ]
         ]
         |> BenchmarkRunner.program
 
@@ -52,6 +89,22 @@ main =
 exampleStringList : List String
 exampleStringList =
     [ "Dict", "size", "List", "length", "identity", "", "", "VeryLongModuleNameYouWouldNotBelieveHowLongItIs", "NonEmpty", "map", "foldl", "foldr", "", "Internal", "CompanyName", "view", "update", "subscriptions" ]
+
+
+exampleStringPairList : List ( String, String )
+exampleStringPairList =
+    ( "a", "b" )
+        :: ( "List", "Listen" )
+        :: List.indexedMap
+            (\i a ->
+                if remainderBy 12 i == 0 then
+                    ( a, String.reverse a )
+
+                else
+                    ( a, a |> String.right 12 )
+            )
+            exampleStringList
+        ++ [ ( "Test", "test" ) ]
 
 
 exampleModuleNames : List String
@@ -384,3 +437,149 @@ fromRangeAdd { start, end } =
     ( Bitwise.or (Bitwise.shiftLeftBy 16 start.row) start.column
     , Bitwise.or (Bitwise.shiftLeftBy 16 end.row) end.column
     )
+
+
+stringEqualsOperator : String -> String -> Bool
+stringEqualsOperator a b =
+    a == b
+
+
+stringEqualsLessOrGreater : String -> String -> Bool
+stringEqualsLessOrGreater a b =
+    Basics.not (a < b || a > b)
+
+
+stringEqualsLeAndGe : String -> String -> Bool
+stringEqualsLeAndGe a b =
+    a <= b && a >= b
+
+
+stringEqualsSliceToBigNumber : String -> String -> Bool
+stringEqualsSliceToBigNumber a b =
+    a == String.slice 0 65536 b
+
+
+stringEqualsSliceToInfinity : String -> String -> Bool
+stringEqualsSliceToInfinity a b =
+    a == String.slice 0 infinity b
+
+
+infinity : Int
+infinity =
+    (0 / 0) |> Basics.round
+
+
+stringEqualsSliceSlice : String -> String -> Bool
+stringEqualsSliceSlice a b =
+    String.slice 0 (String.length a) a == String.slice 0 (String.length b) b
+
+
+stringEqualsSliceToLength : String -> String -> Bool
+stringEqualsSliceToLength a b =
+    a == String.slice 0 (String.length b) b
+
+
+stringEqualsAppendEmptyAppendEmpty : String -> String -> Bool
+stringEqualsAppendEmptyAppendEmpty a b =
+    a ++ "" == b ++ ""
+
+
+stringEqualsAppendEmpty : String -> String -> Bool
+stringEqualsAppendEmpty a b =
+    a == b ++ ""
+
+
+stringEqualsPrependEmpty : String -> String -> Bool
+stringEqualsPrependEmpty a b =
+    a == "" ++ b
+
+
+stringEqualsCaseCompare : String -> String -> Bool
+stringEqualsCaseCompare a b =
+    case compare a b of
+        EQ ->
+            True
+
+        _ ->
+            False
+
+
+stringEqualsIgnoreLengths : String -> String -> Bool
+stringEqualsIgnoreLengths a b =
+    let
+        _ =
+            String.length a
+
+        _ =
+            String.length b
+    in
+    a == b
+
+
+stringEqualsIgnoreLength : String -> String -> Bool
+stringEqualsIgnoreLength a b =
+    let
+        _ =
+            String.length a
+    in
+    a == b
+
+
+stringEqualsCheckLengthFirst : String -> String -> Bool
+stringEqualsCheckLengthFirst a b =
+    String.length a - String.length b == 0 && a == b
+
+
+stringEqualsReplace : String -> String -> Bool
+stringEqualsReplace a b =
+    String.length a - String.length b == 0 && String.replace a "" b == ""
+
+
+stringEqualsStartsWith : String -> String -> Bool
+stringEqualsStartsWith a b =
+    String.length a - String.length b == 0 && String.startsWith a b
+
+
+stringEqualsStartsWithThenLengthCheck : String -> String -> Bool
+stringEqualsStartsWithThenLengthCheck a b =
+    String.startsWith a b && String.length a - String.length b == 0
+
+
+stringEqualsEndsWith : String -> String -> Bool
+stringEqualsEndsWith a b =
+    String.length a - String.length b == 0 && String.endsWith a b
+
+
+stringEqualsStartsWithStartsWith : String -> String -> Bool
+stringEqualsStartsWithStartsWith a b =
+    String.startsWith a b && String.startsWith b a
+
+
+stringEqualsEndsWithEndsWith : String -> String -> Bool
+stringEqualsEndsWithEndsWith a b =
+    String.endsWith a b && String.endsWith b a
+
+
+stringEqualsIndexes : String -> String -> Bool
+stringEqualsIndexes a b =
+    String.length a
+        - String.length b
+        == 0
+        && (case String.indexes a b of
+                _ :: _ ->
+                    True
+
+                [] ->
+                    False
+           )
+
+
+stringEqualsAfterUnnecessaryLiteralEqualityCheck : String -> String -> Bool
+stringEqualsAfterUnnecessaryLiteralEqualityCheck a b =
+    (a == "") == (b == "") && a == b
+
+
+stringEqualsSliceFirstMatches : String -> String -> Bool
+stringEqualsSliceFirstMatches a b =
+    (a |> String.slice 0 1 |> String.any (\aFirst -> b |> String.slice 0 1 |> String.any (\bFirst -> Char.toCode aFirst - Char.toCode bFirst == 0)))
+        && (a == b)
