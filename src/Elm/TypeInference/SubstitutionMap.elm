@@ -847,24 +847,16 @@ substituteRecordFields store fields =
 
 substituteTypeArgs : SubstitutionMap -> List MonoType -> ( List MonoType, Flags, SubstitutionMap )
 substituteTypeArgs store args =
-    let
-        ( args_, flags, store1 ) =
-            List.foldr
-                (\type_ ( accArgs, accFlags, accSubst ) ->
-                    let
-                        ( type__, argFlags, accSubst1 ) =
-                            substituteMono accSubst type_
-                    in
-                    ( type__ :: accArgs, both accFlags argFlags, accSubst1 )
-                )
-                ( [], groundFlag, store )
-                args
-    in
-    if isChanged flags then
-        ( args_, flags, store1 )
-
-    else
-        ( args, flags, store1 )
+    List.foldr
+        (\type_ ( accArgs, accFlags, accSubst ) ->
+            let
+                ( type__, argFlags, accSubst1 ) =
+                    substituteMono accSubst type_
+            in
+            ( type__ :: accArgs, both accFlags argFlags, accSubst1 )
+        )
+        ( [], groundFlag, store )
+        args
 
 
 
