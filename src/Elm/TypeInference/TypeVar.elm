@@ -46,27 +46,15 @@ type SuperType
 
 toString : TypeVar -> String
 toString ( style, super ) =
-    case super of
-        Normal ->
-            case style of
+    superTypeToString super
+        ++ (case style of
                 Generated theId ->
                     "#" ++ String.fromInt theId
 
                 Named name ->
                     name
-
-        _ ->
-            let
-                prefix : String
-                prefix =
-                    superTypeToString super
-            in
-            case style of
-                Generated theId ->
-                    prefix ++ "#" ++ String.fromInt theId
-
-                Named name ->
-                    prefix ++ name
+           )
+        ++ ""
 
 
 parse : String -> TypeVar
@@ -108,7 +96,7 @@ superTypeToString : SuperType -> String
 superTypeToString super =
     case super of
         Normal ->
-            "any type"
+            ""
 
         Number ->
             "number"
