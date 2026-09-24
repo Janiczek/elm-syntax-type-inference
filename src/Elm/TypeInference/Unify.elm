@@ -1025,11 +1025,11 @@ bind cfg typeVar type_ =
 
     else
         let
-            ( _, super ) =
+            ( style, super ) =
                 typeVar
         in
         case type_ of
-            TypeVar (( _, otherSuper ) as otherVar) ->
+            TypeVar (( otherStyle, otherSuper ) as otherVar) ->
                 case meet super otherSuper of
                     Nothing ->
                         let
@@ -1047,9 +1047,9 @@ bind cfg typeVar type_ =
                             -- Either could be chosen as then parent (linked to),
                             -- but we prefer Generated ids as they can't collide.
                             State.modifySubst <| \subst ->
-                            case Tuple.first typeVar of
+                            case style of
                                 Named _ ->
-                                    case Tuple.first otherVar of
+                                    case otherStyle of
                                         Generated _ ->
                                             subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
 
@@ -1057,7 +1057,7 @@ bind cfg typeVar type_ =
                                             subst |> SubstitutionMap.union typeVar otherVar
 
                                 Generated _ ->
-                                    case Tuple.first otherVar of
+                                    case otherStyle of
                                         Named _ ->
                                             subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
 
