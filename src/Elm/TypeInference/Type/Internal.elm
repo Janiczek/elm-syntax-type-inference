@@ -1598,7 +1598,7 @@ recordKeyOf fields =
     String.fromInt (Dict.size fields)
         ++ ";"
         ++ Dict.foldl
-            (\k v acc -> acc ++ (strKey k ++ strKey (monoPublicKeyNormalized v)))
+            (\k v acc -> acc ++ strKey k ++ strKey (monoPublicKeyNormalized v) ++ "")
             ""
             fields
 
@@ -1607,7 +1607,7 @@ argsKeyOf : List MonoType -> String
 argsKeyOf args =
     String.fromInt (List.length args)
         ++ ";"
-        ++ List.foldl (\arg acc -> acc ++ strKey (monoPublicKeyNormalized arg)) "" args
+        ++ List.foldl (\arg acc -> acc ++ strKey (monoPublicKeyNormalized arg) ++ "") "" args
 
 
 shaderSlotKey : MonoType -> Dict VarName MonoType -> String
@@ -1621,18 +1621,22 @@ shaderSlotKey extensionTypevar fields =
         Record rFields ->
             strKey (recordKeyOf rFields)
                 ++ maybeStrKey Nothing
+                ++ ""
 
         TypeVar var ->
             strKey "0;"
                 ++ maybeStrKey (Just (TypeVar.toString var))
+                ++ ""
 
         ExtensibleRecord r ->
             strKey (recordKeyOf r.fields)
                 ++ maybeStrKey (Just (extNameOf r.extensionTypevar))
+                ++ ""
 
         _ ->
             strKey "0;"
                 ++ maybeStrKey Nothing
+                ++ ""
 
 
 strKey : String -> String
