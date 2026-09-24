@@ -11,8 +11,6 @@ module Elm.TypeInference.TypeVar exposing
 
 {-| -}
 
-import List.Extra
-
 
 {-|
 
@@ -59,37 +57,37 @@ toString ( style, super ) =
 
 parse : String -> TypeVar
 parse name =
-    let
-        maybeConstrained : Maybe ( TypeVarStyle, SuperType )
-        maybeConstrained =
-            typeVariableConstraintPrefixes
-                |> List.Extra.findMap
-                    (\( prefix, super ) ->
-                        if String.startsWith prefix name then
-                            Just
-                                ( Named (String.dropLeft (String.length prefix) name)
-                                , super
-                                )
+    -- using String.slice instead of dropLeft to avoid a bounds check.
+    -- using String.slice 0 2 case of instead of one if else if chain
+    --     because String.startsWith uses find() == 0 internally
+    --     and because most type variables are short and do not have a constraint
+    case String.slice 0 1 name of
+        "c" ->
+            if String.startsWith "compappend" name then
+                ( Named (String.slice 10 (String.length name) name), CompAppend )
 
-                        else
-                            Nothing
-                    )
-    in
-    case maybeConstrained of
-        Just constrained ->
-            constrained
+            else if String.startsWith "comparable" name then
+                ( Named (String.slice 10 (String.length name) name), Comparable )
 
-        Nothing ->
+            else
+                ( Named name, Normal )
+
+        "n" ->
+            if String.startsWith "number" name then
+                ( Named (String.slice 6 (String.length name) name), Number )
+
+            else
+                ( Named name, Normal )
+
+        "a" ->
+            if String.startsWith "appendable" name then
+                ( Named (String.slice 10 (String.length name) name), Appendable )
+
+            else
+                ( Named name, Normal )
+
+        _ ->
             ( Named name, Normal )
-
-
-typeVariableConstraintPrefixes : List ( String, SuperType )
-typeVariableConstraintPrefixes =
-    [ ( "compappend", CompAppend )
-    , ( "comparable", Comparable )
-    , ( "appendable", Appendable )
-    , ( "number", Number )
-    ]
 
 
 superTypeToString : SuperType -> String
