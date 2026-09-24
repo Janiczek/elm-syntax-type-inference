@@ -1043,7 +1043,7 @@ bind cfg typeVar type_ =
                             }
 
                     Just m ->
-                        if m == super && m == otherSuper then
+                        if TypeVar.superTypeEqual m super && TypeVar.superTypeEqual m otherSuper then
                             -- Either could be chosen as then parent (linked to),
                             -- but we prefer Generated ids as they can't collide.
                             State.modifySubst <| \subst ->
@@ -1064,11 +1064,11 @@ bind cfg typeVar type_ =
                                         Generated _ ->
                                             subst |> SubstitutionMap.union typeVar otherVar
 
-                        else if m == otherSuper then
+                        else if TypeVar.superTypeEqual m otherSuper then
                             -- otherVar is more constrained -> it will be the `parent` representative.
                             State.modifySubst (\subst -> subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar })
 
-                        else if m == super then
+                        else if TypeVar.superTypeEqual m super then
                             State.modifySubst (\subst -> subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar })
 
                         else

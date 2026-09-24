@@ -985,7 +985,7 @@ collectAnnotationNames annoMono inferredMono acc =
                         TypeVar ( inferredStyle, inferredSuper ) ->
                             case inferredStyle of
                                 Generated inferredId ->
-                                    if annoSuper /= inferredSuper then
+                                    if TypeVar.superTypeNotEqual annoSuper inferredSuper then
                                         Nothing
 
                                     else
@@ -1006,7 +1006,7 @@ collectAnnotationNames annoMono inferredMono acc =
                                                     Nothing
 
                                 Named inferredName ->
-                                    if annoName == inferredName && annoSuper == inferredSuper then
+                                    if annoName == inferredName && TypeVar.superTypeEqual annoSuper inferredSuper then
                                         Just acc
 
                                     else

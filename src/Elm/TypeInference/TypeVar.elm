@@ -4,6 +4,8 @@ module Elm.TypeInference.TypeVar exposing
     , TypeVarStyle(..)
     , equal
     , parse
+    , superTypeEqual
+    , superTypeNotEqual
     , toString
     )
 
@@ -32,6 +34,8 @@ type TypeVarStyle
     | Named String
 
 
+{-| Prefer `TypeVar.superTypeEqual`/`superTypeNotEqual` over `==`/`/=`
+-}
 type SuperType
     = Normal
     | {- Int | Float -} Number
@@ -129,7 +133,7 @@ equal ( style1, super1 ) ( style2, super2 ) =
                 Generated id2 ->
                     -- id1 == id2
                     (id1 - id2 == 0)
-                        && (super1 == super2)
+                        && superTypeEqual super1 super2
 
                 Named _ ->
                     False
@@ -137,7 +141,40 @@ equal ( style1, super1 ) ( style2, super2 ) =
         Named name1 ->
             case style2 of
                 Named name2 ->
-                    name1 == name2 && super1 == super2
+                    name1 == name2 && superTypeEqual super1 super2
 
                 Generated _ ->
                     False
+
+
+{-| Faster than `==`
+-}
+superTypeEqual : SuperType -> SuperType -> Bool
+superTypeEqual a b =
+    superTypeToTag a - superTypeToTag b == 0
+
+
+superTypeToTag : SuperType -> Int
+superTypeToTag super =
+    case super of
+        Normal ->
+            0
+
+        Number ->
+            1
+
+        Comparable ->
+            2
+
+        Appendable ->
+            3
+
+        CompAppend ->
+            4
+
+
+{-| Faster than `/=`
+-}
+superTypeNotEqual : SuperType -> SuperType -> Bool
+superTypeNotEqual a b =
+    superTypeToTag a - superTypeToTag b /= 0

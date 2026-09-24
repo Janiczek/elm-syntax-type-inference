@@ -82,6 +82,21 @@ main =
             , ( "endsWith a b && endsWith b a", stringEqualsEndsWithEndsWith )
             , ( "first char == && ==", stringEqualsSliceFirstMatches )
             ]
+        , rank "SuperType equals"
+            (\f ->
+                exampleSuperTypePairList
+                    |> List.foldl
+                        (\( a, b ) _ ->
+                            f a b
+                                -- try to confuse mono of _Utils_eq
+                                || (Just [ EQ ] == Just [ LT ])
+                        )
+                        False
+            )
+            [ ( "==", superTypeEqualOperator )
+            , ( "case of case of", superTypeEqualCaseOf )
+            , ( "toInt == toInt", superTypeEqualToInt )
+            ]
         ]
         |> BenchmarkRunner.program
 
@@ -149,6 +164,33 @@ exampleRanges =
 exampleRangeLike : RangeLike
 exampleRangeLike =
     ( 123, 456 )
+
+
+type SuperType
+    = Normal
+    | Number
+    | Comparable
+    | Appendable
+    | CompAppend
+
+
+exampleSuperTypeListShort : List SuperType
+exampleSuperTypeListShort =
+    [ CompAppend, Normal, Comparable, Number, Normal, Normal, Normal, Normal, Number, Number, Appendable, Appendable, Appendable, Normal, Normal, Number, Comparable, Normal, Normal ]
+
+
+exampleSuperTypeListLong : List SuperType
+exampleSuperTypeListLong =
+    List.concat (List.repeat 3 exampleSuperTypeListShort)
+        ++ List.repeat 12 Normal
+        ++ List.concat (List.repeat 3 (List.drop 2 (List.reverse exampleSuperTypeListShort)))
+
+
+exampleSuperTypePairList : List ( SuperType, SuperType )
+exampleSuperTypePairList =
+    List.map2 Tuple.pair
+        exampleSuperTypeListLong
+        (List.reverse (List.drop 9 exampleSuperTypeListLong))
 
 
 firstCharIsUpperUncons : String -> Bool
@@ -583,3 +625,76 @@ stringEqualsSliceFirstMatches : String -> String -> Bool
 stringEqualsSliceFirstMatches a b =
     (a |> String.slice 0 1 |> String.any (\aFirst -> b |> String.slice 0 1 |> String.any (\bFirst -> Char.toCode aFirst - Char.toCode bFirst == 0)))
         && (a == b)
+
+
+superTypeEqualCaseOf : SuperType -> SuperType -> Bool
+superTypeEqualCaseOf a b =
+    case a of
+        Normal ->
+            case b of
+                Normal ->
+                    True
+
+                _ ->
+                    False
+
+        Number ->
+            case b of
+                Number ->
+                    True
+
+                _ ->
+                    False
+
+        Comparable ->
+            case b of
+                Comparable ->
+                    True
+
+                _ ->
+                    False
+
+        Appendable ->
+            case b of
+                Appendable ->
+                    True
+
+                _ ->
+                    False
+
+        CompAppend ->
+            case b of
+                CompAppend ->
+                    True
+
+                _ ->
+                    False
+
+
+superTypeEqualOperator : SuperType -> SuperType -> Bool
+superTypeEqualOperator a b =
+    a == b
+
+
+superTypeEqualToInt : SuperType -> SuperType -> Bool
+superTypeEqualToInt a b =
+    superTypeToTag a - superTypeToTag b == 0
+
+
+superTypeToTag : SuperType -> Int
+superTypeToTag super =
+    case super of
+        Normal ->
+            0
+
+        Number ->
+            1
+
+        Comparable ->
+            2
+
+        Appendable ->
+            3
+
+        CompAppend ->
+            4
