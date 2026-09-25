@@ -11,7 +11,6 @@ import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType(..), Type(..))
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
-import Elm.TypeInference.VarSet as VarSet
 
 
 {-| One binding in the binding group.
@@ -125,7 +124,7 @@ checkOne cfg member =
                 if shaderSlotsTooGeneral annoMono finalMono then
                     let
                         ( pubAnno, pubFinal ) =
-                            TypeI.toPublicPair cfg.moduleMapping annoMono finalMono
+                            TypeI.normalizeAndToPublicPair cfg.moduleMapping annoMono finalMono
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -136,7 +135,7 @@ checkOne cfg member =
                 else if List.isEmpty (TypeI.monoTypeVars finalMono) then
                     let
                         ( pubAnno, pubFinal ) =
-                            TypeI.toPublicPair cfg.moduleMapping annoMono finalMono
+                            TypeI.normalizeAndToPublicPair cfg.moduleMapping annoMono finalMono
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -161,26 +160,31 @@ is an error because the annotation is more general than the body.
 -}
 shaderSlotsTooGeneral : MonoType -> MonoType -> Bool
 shaderSlotsTooGeneral annoMono finalMono =
-    case ( annoMono, finalMono ) of
-        ( WebGLShader annoShader, WebGLShader finalShader ) ->
-            let
-                slots :
-                    { attributesExtension : MonoType
-                    , attributes : Dict String MonoType
-                    , uniformsExtension : MonoType
-                    , uniforms : Dict String MonoType
-                    , varyingsExtension : MonoType
-                    , varyings : Dict String MonoType
-                    }
-                    -> List { extensionTypevar : MonoType, fields : Dict String MonoType }
-                slots shader =
-                    [ { extensionTypevar = shader.attributesExtension, fields = shader.attributes }
-                    , { extensionTypevar = shader.uniformsExtension, fields = shader.uniforms }
-                    , { extensionTypevar = shader.varyingsExtension, fields = shader.varyings }
-                    ]
-            in
-            List.map2 Tuple.pair (slots annoShader) (slots finalShader)
-                |> List.any (\( annoSlot, finalSlot ) -> slotTooGeneral annoSlot finalSlot)
+    case annoMono of
+        WebGLShader annoShader ->
+            case finalMono of
+                WebGLShader finalShader ->
+                    let
+                        slots :
+                            { attributesExtension : MonoType
+                            , attributes : Dict String MonoType
+                            , uniformsExtension : MonoType
+                            , uniforms : Dict String MonoType
+                            , varyingsExtension : MonoType
+                            , varyings : Dict String MonoType
+                            }
+                            -> List { extensionTypevar : MonoType, fields : Dict String MonoType }
+                        slots shader =
+                            [ { extensionTypevar = shader.attributesExtension, fields = shader.attributes }
+                            , { extensionTypevar = shader.uniformsExtension, fields = shader.uniforms }
+                            , { extensionTypevar = shader.varyingsExtension, fields = shader.varyings }
+                            ]
+                    in
+                    List.map2 Tuple.pair (slots annoShader) (slots finalShader)
+                        |> List.any (\( annoSlot, finalSlot ) -> slotTooGeneral annoSlot finalSlot)
+
+                _ ->
+                    False
 
         _ ->
             False
@@ -214,8 +218,8 @@ collapsedFields slot =
         ExtensibleRecord r ->
             r.fields
 
-        Record r ->
-            r.fields
+        Record rFields ->
+            rFields
 
         _ ->
             Dict.empty

@@ -3,6 +3,7 @@ module Elm.Syntax.FullModuleName exposing
     , fromDotted
     , fromModuleName
     , fromModuleName_
+    , moduleNameIsFull
     , toModuleName
     , toString
     )
@@ -14,6 +15,22 @@ import NonemptyList exposing (NonemptyList)
 
 type alias FullModuleName =
     NonemptyList String
+
+
+{-|
+
+    ["Platform","Cmd"] -> True
+    [] -> False
+
+-}
+moduleNameIsFull : ModuleName -> Bool
+moduleNameIsFull moduleName =
+    case moduleName of
+        [] ->
+            False
+
+        _ :: _ ->
+            True
 
 
 {-|
@@ -45,9 +62,17 @@ fromString string =
 -}
 fromModuleName_ : ModuleName -> FullModuleName
 fromModuleName_ moduleName =
-    moduleName
-        |> fromModuleName
-        |> Maybe.withDefault (fromString "<BUG> The file didn't have a proper module name")
+    case moduleName of
+        [] ->
+            errorFullModuleName
+
+        moduleNameSegmentHead :: moduleNameSegmentTail ->
+            ( moduleNameSegmentHead, moduleNameSegmentTail )
+
+
+errorFullModuleName : FullModuleName
+errorFullModuleName =
+    fromString "<BUG> The file didn't have a proper module name"
 
 
 {-|
@@ -76,5 +101,10 @@ toModuleName fullModuleName =
 
 -}
 toString : FullModuleName -> String
-toString fullModuleName =
-    ModuleNameExtra.toString (toModuleName fullModuleName)
+toString ( fullModuleNameSegment0, fullModuleNameSegment1Up ) =
+    case fullModuleNameSegment1Up of
+        [] ->
+            fullModuleNameSegment0
+
+        _ ->
+            fullModuleNameSegment0 ++ "." ++ String.join "." fullModuleNameSegment1Up

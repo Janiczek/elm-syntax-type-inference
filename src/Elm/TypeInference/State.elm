@@ -32,7 +32,7 @@ module Elm.TypeInference.State exposing
     , run
     , setIdToCurrentLetRank
     , test_initFull
-    , traverse
+    , traverseFastAndReverse
     , traverseUnit
     , withDeeperLetRank
     , withScopedEnv
@@ -216,19 +216,20 @@ foldlHelp reduce acc list state =
                     foldlHelp reduce b rest newState
 
 
-{-| Tail-recursive instead of List.foldr (which blew the stack in the past).
+{-| Like `State.traverse` but avoids reversing the traversed list at the end,
+leaving the resulting elements from last traversed to first traversed.
 Prefer `State.traverseUnit` if the function returns a `StateM ()`
 -}
-traverse : (a -> StateM b) -> List a -> StateM (List b)
-traverse f list =
-    \state -> traverseHelp f [] list state
+traverseFastAndReverse : (a -> StateM b) -> List a -> StateM (List b)
+traverseFastAndReverse f list =
+    \state -> traverseAndReverseHelp f [] list state
 
 
-traverseHelp : (a -> StateM b) -> List b -> List a -> State -> ( Result Error (List b), State )
-traverseHelp f acc list state =
+traverseAndReverseHelp : (a -> StateM b) -> List b -> List a -> State -> ( Result Error (List b), State )
+traverseAndReverseHelp f acc list state =
     case list of
         [] ->
-            ( Ok (List.reverse acc), state )
+            ( Ok acc, state )
 
         x :: rest ->
             case f x state of
@@ -236,7 +237,7 @@ traverseHelp f acc list state =
                     ( Err err, newState )
 
                 ( Ok b, newState ) ->
-                    traverseHelp f (b :: acc) rest newState
+                    traverseAndReverseHelp f (b :: acc) rest newState
 
 
 traverseUnit : (a -> StateM ()) -> List a -> StateM ()
@@ -606,7 +607,7 @@ instantiate (Forall boundVars monoType) =
             pure monoType
 
         _ ->
-            do (traverse (\var -> map (\id -> ( var, id )) getNextIdAndTick) boundVars) <| \varIds ->
+            do (traverseFastAndReverse (\var -> map (\id -> ( var, id )) getNextIdAndTick) boundVars) <| \varIds ->
             let
                 ( renamingGen, renamingNamed ) =
                     varIds

@@ -74,7 +74,7 @@ get range (Internal.TLT tlt) =
 
                         key : String
                         key =
-                            TypeI.monoPublicKey { alreadyNormalized = False } monoType
+                            TypeI.normalizeToMonoPublicKeyAlpha monoType
 
                         ( pubType, pool1 ) =
                             case Dict.get key tlt.pool of
@@ -85,7 +85,7 @@ get range (Internal.TLT tlt) =
                                     let
                                         fresh : Type
                                         fresh =
-                                            TypeI.toPublicType tlt.moduleMapping { alreadyNormalized = False } monoType
+                                            TypeI.normalizeAndToPublicType tlt.moduleMapping monoType
                                     in
                                     ( fresh, Dict.insert key fresh tlt.pool )
                     in

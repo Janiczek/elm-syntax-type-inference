@@ -72,15 +72,17 @@ cons eq rest =
 
 append : Equations -> Equations -> Equations
 append left right =
-    case ( left, right ) of
-        ( Empty, r ) ->
-            r
-
-        ( l, Empty ) ->
-            l
+    case left of
+        Empty ->
+            right
 
         _ ->
-            Append left right
+            case right of
+                Empty ->
+                    left
+
+                _ ->
+                    Append left right
 
 
 toList : Equations -> List TypeEquation
@@ -94,14 +96,16 @@ go stack acc =
         [] ->
             acc
 
-        Empty :: rest ->
-            go rest acc
+        head :: rest ->
+            case head of
+                Empty ->
+                    go rest acc
 
-        (One eq) :: rest ->
-            go rest (eq :: acc)
+                One eq ->
+                    go rest (eq :: acc)
 
-        (Batch eqs) :: rest ->
-            go rest (List.foldl (::) acc eqs)
+                Batch eqs ->
+                    go rest (List.foldl (::) acc eqs)
 
-        (Append left right) :: rest ->
-            go (left :: right :: rest) acc
+                Append left right ->
+                    go (left :: right :: rest) acc

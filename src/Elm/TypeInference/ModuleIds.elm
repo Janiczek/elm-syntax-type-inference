@@ -5,6 +5,7 @@ module Elm.TypeInference.ModuleIds exposing
     , charId
     , dottedForDisplay
     , empty
+    , equal
     , getId
     , getIdByDotted
     , getName
@@ -16,6 +17,7 @@ module Elm.TypeInference.ModuleIds exposing
     , mathVector4Id
     , maybeId
     , moduleNameForDisplay
+    , notEqual
     , platformCmdId
     , platformId
     , platformSubId
@@ -36,8 +38,24 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 
 
+{-| When checking for equality, prefer `ModuleIds.equal`/`notEqual` over `==`/`/=`
+-}
 type alias ModuleId =
     Int
+
+
+{-| Faster than `==`
+-}
+equal : ModuleId -> ModuleId -> Bool
+equal a b =
+    a - b == 0
+
+
+{-| Faster than `/=`
+-}
+notEqual : ModuleId -> ModuleId -> Bool
+notEqual a b =
+    a - b /= 0
 
 
 type alias Mapping =

@@ -9,7 +9,7 @@ import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
-import Elm.TypeInference.TypeVar
+import Elm.TypeInference.TypeVar as TypeVar
     exposing
         ( SuperType(..)
         , TypeVar
@@ -237,9 +237,9 @@ expandDeepChildren fuel typeAliases type_ =
                 (expandAliasDeepHelp fuel typeAliases t2)
                 (expandAliasDeepHelp fuel typeAliases t3)
 
-        TypeI.Record r ->
+        TypeI.Record rFields ->
             TypeI.Record
-                { fields = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.fields }
+                (Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) rFields)
 
         TypeI.ExtensibleRecord r ->
             TypeI.ExtensibleRecord
@@ -312,8 +312,8 @@ substituteAliasArgs mappings type_ =
                 (substituteAliasArgs mappings t2)
                 (substituteAliasArgs mappings t3)
 
-        Record { fields } ->
-            Record { fields = Dict.map (\_ v -> substituteAliasArgs mappings v) fields }
+        Record fields ->
+            Record (Dict.map (\_ v -> substituteAliasArgs mappings v) fields)
 
         ExtensibleRecord r ->
             ExtensibleRecord
@@ -350,7 +350,7 @@ findAliasArg needle mappings =
             Nothing
 
         ( param, argType ) :: rest ->
-            if sameVar param needle then
+            if TypeVar.equal param needle then
                 Just argType
 
             else
@@ -359,37 +359,48 @@ findAliasArg needle mappings =
 
 zipAliasArgs : List TypeVar -> List MonoType -> Maybe (List ( TypeVar, MonoType ))
 zipAliasArgs params args =
-    case ( params, args ) of
-        ( [], [] ) ->
-            Just []
+    case params of
+        [] ->
+            case args of
+                [] ->
+                    Just []
 
-        ( param :: restParams, argType :: restArgs ) ->
-            zipAliasArgs restParams restArgs
-                |> Maybe.map (\restZipped -> ( param, argType ) :: restZipped)
+                _ :: _ ->
+                    Nothing
 
-        _ ->
-            Nothing
+        param :: restParams ->
+            case args of
+                argType :: restArgs ->
+                    zipAliasArgs restParams restArgs
+                        |> Maybe.map (\restZipped -> ( param, argType ) :: restZipped)
+
+                [] ->
+                    Nothing
 
 
 zipArgs : List MonoType -> List MonoType -> Maybe (List ( MonoType, MonoType ))
 zipArgs args1 args2 =
-    case ( args1, args2 ) of
-        ( [], [] ) ->
-            Just []
+    case args1 of
+        [] ->
+            case args2 of
+                [] ->
+                    Just []
 
-        ( a1 :: rest1, a2 :: rest2 ) ->
-            case zipArgs rest1 rest2 of
-                Just lst ->
-                    Just (( a1, a2 ) :: lst)
-
-                Nothing ->
+                _ :: _ ->
                     Nothing
 
-        ( _ :: _, [] ) ->
-            Nothing
+        a1 :: rest1 ->
+            case args2 of
+                a2 :: rest2 ->
+                    case zipArgs rest1 rest2 of
+                        Just lst ->
+                            Just (( a1, a2 ) :: lst)
 
-        ( [], _ :: _ ) ->
-            Nothing
+                        Nothing ->
+                            Nothing
+
+                [] ->
+                    Nothing
 
 
 {-| Pair the two record field dicts up _by name_.
@@ -432,28 +443,13 @@ collapseNamedShader typeAliases type_ =
             type_
 
 
-{-| Faster than `param == needle`
--}
-sameVar : TypeVar -> TypeVar -> Bool
-sameVar ( style1, super1 ) ( style2, super2 ) =
-    case ( style1, style2 ) of
-        ( Generated id1, Generated id2 ) ->
-            id1 == id2 && super1 == super2
-
-        ( Named name1, Named name2 ) ->
-            name1 == name2 && super1 == super2
-
-        _ ->
-            False
-
-
 shallowEqual : MonoType -> MonoType -> Bool
 shallowEqual t1 t2 =
     case t1 of
         TypeVar v1 ->
             case t2 of
                 TypeVar v2 ->
-                    sameVar v1 v2
+                    TypeVar.equal v1 v2
 
                 _ ->
                     False
@@ -514,7 +510,7 @@ typeMismatch : UnifyConfig -> MonoType -> MonoType -> StateM ()
 typeMismatch cfg t1 t2 =
     let
         ( pubT1, pubT2 ) =
-            TypeI.toPublicPair cfg.moduleMapping
+            TypeI.normalizeAndToPublicPair cfg.moduleMapping
                 (expandAliasDeep cfg.typeAliases t1)
                 (expandAliasDeep cfg.typeAliases t2)
     in
@@ -555,13 +551,13 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
                         (\_ _ eqs -> eqs)
                         (\_ v1 v2 eqs -> ( v1, v2 ) :: eqs)
                         (\_ _ eqs -> eqs)
-                        extFields.fields
+                        extFields
                         er.fields
                         []
 
                 combined : Dict VarName MonoType
                 combined =
-                    Dict.union er.fields extFields.fields
+                    Dict.union er.fields extFields
             in
             State.do (unifyMany cfg overlapEqs) <| \() ->
             recordBindings cfg t1 t2 combined recordFields
@@ -618,7 +614,7 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
 
             else
                 unifyMany cfg
-                    (( er.extensionTypevar, Record { fields = residual } )
+                    (( er.extensionTypevar, Record residual )
                         :: matchedEqs
                     )
 
@@ -774,16 +770,16 @@ unifyMono cfg rawT1 rawT2 =
                     _ ->
                         typeMismatch cfg t1 t2
 
-            Record r1 ->
+            Record r1Fields ->
                 case t2 of
                     TypeVar v ->
                         bind cfg v t1
 
-                    Record r2 ->
-                        recordBindings cfg t1 t2 r1.fields r2.fields
+                    Record r2Fields ->
+                        recordBindings cfg t1 t2 r1Fields r2Fields
 
                     ExtensibleRecord er2 ->
-                        unifyRecordVsExtensible cfg t1 t2 r1.fields er2
+                        unifyRecordVsExtensible cfg t1 t2 r1Fields er2
 
                     _ ->
                         typeMismatch cfg t1 t2
@@ -861,8 +857,8 @@ unifyMono cfg rawT1 rawT2 =
                                     :: sharedEqs
                                 )
 
-                    Record r2 ->
-                        unifyRecordVsExtensible cfg t1 t2 r2.fields r1
+                    Record r2Fields ->
+                        unifyRecordVsExtensible cfg t1 t2 r2Fields r1
 
                     _ ->
                         typeMismatch cfg t1 t2
@@ -875,7 +871,7 @@ unifyMono cfg rawT1 rawT2 =
                     UserDefinedType ut2 ->
                         if
                             (ut1.package /= ut2.package)
-                                || (ut1.moduleId /= ut2.moduleId)
+                                || ModuleIds.notEqual ut1.moduleId ut2.moduleId
                                 || (ut1.name /= ut2.name)
                         then
                             typeMismatch cfg t1 t2
@@ -1019,7 +1015,7 @@ bind cfg typeVar type_ =
     else if occursCheck typeVar type_ then
         let
             ( pubVar, pubType ) =
-                TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
+                TypeI.normalizeAndToPublicPair cfg.moduleMapping (TypeVar typeVar) type_
         in
         State.error
             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -1029,16 +1025,16 @@ bind cfg typeVar type_ =
 
     else
         let
-            ( _, super ) =
+            ( style, super ) =
                 typeVar
         in
         case type_ of
-            TypeVar (( _, otherSuper ) as otherVar) ->
+            TypeVar (( otherStyle, otherSuper ) as otherVar) ->
                 case meet super otherSuper of
                     Nothing ->
                         let
                             ( pubVar, pubOther ) =
-                                TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
+                                TypeI.normalizeAndToPublicPair cfg.moduleMapping (TypeVar typeVar) type_
                         in
                         State.error
                             { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -1047,25 +1043,32 @@ bind cfg typeVar type_ =
                             }
 
                     Just m ->
-                        if m == super && m == otherSuper then
+                        if TypeVar.superTypeEqual m super && TypeVar.superTypeEqual m otherSuper then
                             -- Either could be chosen as then parent (linked to),
                             -- but we prefer Generated ids as they can't collide.
                             State.modifySubst <| \subst ->
-                            case ( Tuple.first typeVar, Tuple.first otherVar ) of
-                                ( Named _, Generated _ ) ->
-                                    subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
+                            case style of
+                                Named _ ->
+                                    case otherStyle of
+                                        Generated _ ->
+                                            subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
 
-                                ( Generated _, Named _ ) ->
-                                    subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
+                                        Named _ ->
+                                            subst |> SubstitutionMap.union typeVar otherVar
 
-                                _ ->
-                                    subst |> SubstitutionMap.union typeVar otherVar
+                                Generated _ ->
+                                    case otherStyle of
+                                        Named _ ->
+                                            subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
 
-                        else if m == otherSuper then
+                                        Generated _ ->
+                                            subst |> SubstitutionMap.union typeVar otherVar
+
+                        else if TypeVar.superTypeEqual m otherSuper then
                             -- otherVar is more constrained -> it will be the `parent` representative.
                             State.modifySubst (\subst -> subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar })
 
-                        else if m == super then
+                        else if TypeVar.superTypeEqual m super then
                             State.modifySubst (\subst -> subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar })
 
                         else
@@ -1092,7 +1095,7 @@ bind cfg typeVar type_ =
                 else
                     let
                         ( pubVar, pubType ) =
-                            TypeI.toPublicPair cfg.moduleMapping (TypeVar typeVar) type_
+                            TypeI.normalizeAndToPublicPair cfg.moduleMapping (TypeVar typeVar) type_
                     in
                     State.error
                         { moduleName = FullModuleName.toModuleName cfg.moduleName
@@ -1105,66 +1108,77 @@ bind cfg typeVar type_ =
 -}
 meet : SuperType -> SuperType -> Maybe SuperType
 meet a b =
-    if a == b then
-        Just a
+    case a of
+        Normal ->
+            Just b
 
-    else
-        case ( a, b ) of
-            ( Normal, other ) ->
-                Just other
+        Number ->
+            case b of
+                Normal ->
+                    Just Number
 
-            ( other, Normal ) ->
-                Just other
+                Comparable ->
+                    Just Number
 
-            ( Number, Comparable ) ->
-                Just Number
+                CompAppend ->
+                    Nothing
 
-            ( Comparable, Number ) ->
-                Just Number
+                Appendable ->
+                    Nothing
 
-            ( Comparable, Appendable ) ->
-                Just CompAppend
+                Number ->
+                    Just Number
 
-            ( Appendable, Comparable ) ->
-                Just CompAppend
+        Comparable ->
+            case b of
+                Normal ->
+                    Just Comparable
 
-            ( Comparable, CompAppend ) ->
-                Just CompAppend
+                Number ->
+                    Just Number
 
-            ( CompAppend, Comparable ) ->
-                Just CompAppend
+                Appendable ->
+                    Just CompAppend
 
-            ( Appendable, CompAppend ) ->
-                Just CompAppend
+                CompAppend ->
+                    Just CompAppend
 
-            ( CompAppend, Appendable ) ->
-                Just CompAppend
+                Comparable ->
+                    Just Comparable
 
-            ( Number, CompAppend ) ->
-                Nothing
+        Appendable ->
+            case b of
+                Normal ->
+                    Just Appendable
 
-            ( CompAppend, Number ) ->
-                Nothing
+                Comparable ->
+                    Just CompAppend
 
-            ( Number, Appendable ) ->
-                Nothing
+                CompAppend ->
+                    Just CompAppend
 
-            ( Appendable, Number ) ->
-                Nothing
+                Number ->
+                    Nothing
 
-            -- The a == b guard above makes these diagonal branches unreachable
-            -- but let's not use wildcards anyways
-            ( Number, Number ) ->
-                Just a
+                Appendable ->
+                    Just Appendable
 
-            ( Comparable, Comparable ) ->
-                Just a
+        CompAppend ->
+            case b of
+                Normal ->
+                    Just CompAppend
 
-            ( Appendable, Appendable ) ->
-                Just a
+                Comparable ->
+                    Just CompAppend
 
-            ( CompAppend, CompAppend ) ->
-                Just a
+                Appendable ->
+                    Just CompAppend
+
+                Number ->
+                    Nothing
+
+                CompAppend ->
+                    Just CompAppend
 
 
 accepts : TypeAliases -> SuperType -> MonoType -> Bool
@@ -1213,10 +1227,20 @@ isComparable typeAliases type_ =
             isComparable typeAliases inner
 
         Tuple2 a b ->
-            isComparable typeAliases a && isComparable typeAliases b
+            -- && but with a bit of TCO
+            if isComparable typeAliases a then
+                isComparable typeAliases b
+
+            else
+                False
 
         Tuple3 a b c ->
-            isComparable typeAliases a && isComparable typeAliases b && isComparable typeAliases c
+            -- && but with a bit of TCO
+            if isComparable typeAliases a && isComparable typeAliases b then
+                isComparable typeAliases c
+
+            else
+                False
 
         TypeVar _ ->
             True
@@ -1298,7 +1322,7 @@ occursCheck : TypeVar -> MonoType -> Bool
 occursCheck typeVar type_ =
     case type_ of
         TypeVar var ->
-            sameVar var typeVar
+            TypeVar.equal var typeVar
 
         Function { from, to } ->
             occursCheck typeVar from || occursCheck typeVar to
@@ -1332,7 +1356,7 @@ occursCheck typeVar type_ =
                 || occursCheck typeVar t2
                 || occursCheck typeVar t3
 
-        Record { fields } ->
+        Record fields ->
             Dict.Extra.any (\_ v -> occursCheck typeVar v) fields
 
         ExtensibleRecord r ->

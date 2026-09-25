@@ -703,22 +703,20 @@ publicBoundarySuite : Test
 publicBoundarySuite =
     Test.describe "Elm.TypeInference.Type.Internal.toPublicType"
         [ Test.test "an extensible record with a concrete closed tail collapses to a closed Record" <| \() ->
-        TypeI.toPublicType ModuleIds.empty
-            { alreadyNormalized = False }
+        TypeI.normalizeAndToPublicType ModuleIds.empty
             (TypeI.ExtensibleRecord
-                { extensionTypevar = TypeI.Record { fields = Dict.singleton "b" TypeI.Char }
+                { extensionTypevar = TypeI.Record (Dict.singleton "b" TypeI.Char)
                 , fields = Dict.singleton "a" TypeI.Int
                 }
             )
             |> Expect.equal
                 (Type.Record { fields = Dict.fromList [ ( "a", Type.Int ), ( "b", Type.Char ) ] })
         , Test.test "a nested extensible chain flattens without losing fields" <| \() ->
-        TypeI.toPublicType ModuleIds.empty
-            { alreadyNormalized = False }
+        TypeI.normalizeAndToPublicType ModuleIds.empty
             (TypeI.ExtensibleRecord
                 { extensionTypevar =
                     TypeI.ExtensibleRecord
-                        { extensionTypevar = TypeI.Record { fields = Dict.singleton "c" TypeI.Bool }
+                        { extensionTypevar = TypeI.Record (Dict.singleton "c" TypeI.Bool)
                         , fields = Dict.singleton "b" TypeI.Char
                         }
                 , fields = Dict.singleton "a" TypeI.Int
@@ -735,8 +733,7 @@ publicBoundarySuite =
                     }
                 )
         , Test.test "an open record with a type-variable tail stays open" <| \() ->
-        TypeI.toPublicType ModuleIds.empty
-            { alreadyNormalized = False }
+        TypeI.normalizeAndToPublicType ModuleIds.empty
             (TypeI.ExtensibleRecord
                 { extensionTypevar = TypeI.TypeVar ( TypeVar.Generated 0, TypeVar.Normal )
                 , fields = Dict.singleton "a" TypeI.Int

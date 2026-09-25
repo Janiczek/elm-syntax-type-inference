@@ -41,7 +41,7 @@ import Elm.TypeInference.Type.Internal as TypeI
         , Type
         , TypeResolver
         )
-import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations, TypeEquation)
+import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import Regex exposing (Regex)
 
@@ -93,11 +93,11 @@ type alias Inferred =
 
 inferMany : (a -> StateM Inferred) -> List a -> StateM ( List Id, Equations )
 inferMany f items =
-    State.traverse f items
+    State.traverseFastAndReverse f items
         |> State.map
             (\inferred ->
                 inferred
-                    |> List.foldr
+                    |> List.foldl
                         (\( id_, eqs ) ( ids, allEqs ) ->
                             ( id_ :: ids
                             , TypeEquation.append eqs allEqs
@@ -121,23 +121,18 @@ functionType argIds resultId =
 -}
 resolveGlobalVar : Ctx -> PackageName -> ModuleId -> VarName -> StateM MonoType
 resolveGlobalVar ctx package moduleId name =
-    let
-        ( aliasedPackage, aliasedModuleId, aliasedName ) =
-            if package == "" then
-                case
-                    ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
-                        |> Result.withDefault Nothing
-                of
-                    Just ( m, n ) ->
-                        ( "", m, n )
+    if package == "" then
+        case
+            ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId name
+        of
+            Ok (Just ( m, n )) ->
+                State.lookupGlobalEnv ctx.moduleMapping "" m n
 
-                    Nothing ->
-                        ( package, moduleId, name )
+            _ ->
+                State.lookupGlobalEnv ctx.moduleMapping package moduleId name
 
-            else
-                ( package, moduleId, name )
-    in
-    State.lookupGlobalEnv ctx.moduleMapping aliasedPackage aliasedModuleId aliasedName
+    else
+        State.lookupGlobalEnv ctx.moduleMapping package moduleId name
 
 
 {-| Resolves a value or operator symbol to its type.
@@ -378,17 +373,13 @@ inferExpr ctx exprNode =
         type_ =
             TypeI.id_ exprId
 
-        finish : List TypeEquation -> StateM Inferred
+        finish : Equations -> StateM Inferred
         finish eqs =
-            State.pure ( exprId, TypeEquation.batch eqs )
-
-        finishEqns : Equations -> StateM Inferred
-        finishEqns eqs =
             State.pure ( exprId, eqs )
     in
     case Node.value exprNode of
         UnitExpr ->
-            finish [ ( type_, Unit, "Unit" ) ]
+            finish <| TypeEquation.single <| ( type_, Unit, "Unit" )
 
         Application application ->
             case application of
@@ -399,7 +390,7 @@ inferExpr ctx exprNode =
                     State.do State.getNextIdAndTick <| \resultId ->
                     State.do (inferExpr ctx fnNode) <| \( fnId, fnEqs ) ->
                     State.do (inferMany (\arg -> inferExpr ctx arg) argNodes) <| \( argIds, argEqs ) ->
-                    finishEqns <|
+                    finish <|
                         TypeEquation.append fnEqs
                             (TypeEquation.append argEqs
                                 (TypeEquation.batch
@@ -417,7 +408,7 @@ inferExpr ctx exprNode =
             State.do (inferExpr ctx e1) <| \( e1Id, e1Eqs ) ->
             State.do (inferExpr ctx e2) <| \( e2Id, e2Eqs ) ->
             State.do (lookupVarOrOperator ctx Nothing operator) <| \operatorType ->
-            finishEqns <|
+            finish <|
                 TypeEquation.append e1Eqs
                     (TypeEquation.append e2Eqs
                         (TypeEquation.batch
@@ -439,7 +430,7 @@ inferExpr ctx exprNode =
             <| \isLexical ->
             if isLexical then
                 State.do (State.lookupEnv ctx.thisModule.moduleName varName) <| \varType ->
-                finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
+                finish <| TypeEquation.single <| ( type_, varType, "FunctionOrValue: var from env" )
 
             else
                 case
@@ -453,16 +444,16 @@ inferExpr ctx exprNode =
                 of
                     Ok (Just ( package, moduleId )) ->
                         State.do (resolveGlobalVar ctx package moduleId varName) <| \varType ->
-                        finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
+                        finish <| TypeEquation.single <| ( type_, varType, "FunctionOrValue: global/top-level var" )
 
                     Ok Nothing ->
                         if isKernelVar ctx (FullModuleName.fromModuleName moduleName) varName then
                             -- Kernel functions are like Debug.todo: "trust me bro"
-                            finish []
+                            finish TypeEquation.empty
 
                         else
                             State.do (State.lookupEnv ctx.thisModule.moduleName varName) <| \varType ->
-                            finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
+                            finish <| TypeEquation.single <| ( type_, varType, "FunctionOrValue: var from env" )
 
                     Err details ->
                         State.error (toError ctx details)
@@ -471,7 +462,7 @@ inferExpr ctx exprNode =
             State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
             State.do (inferExpr ctx e2) <| \( id2, eqs2 ) ->
             State.do (inferExpr ctx e3) <| \( id3, eqs3 ) ->
-            finishEqns <|
+            finish <|
                 TypeEquation.append eqs1
                     (TypeEquation.append eqs2
                         (TypeEquation.append eqs3
@@ -486,26 +477,26 @@ inferExpr ctx exprNode =
 
         PrefixOperator operator ->
             State.do (lookupVarOrOperator ctx Nothing operator) <| \operatorType ->
-            finish [ ( type_, operatorType, "Prefix operator: is a fn" ) ]
+            finish <| TypeEquation.single <| ( type_, operatorType, "Prefix operator: is a fn" )
 
         Operator _ ->
             stateErrorImpossibleExpr ctx exprNode
 
         Integer _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, TypeI.number_ numberId, "Int" ) ]
+            finish <| TypeEquation.single <| ( type_, TypeI.number_ numberId, "Int" )
 
         Hex _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, TypeI.number_ numberId, "Hex" ) ]
+            finish <| TypeEquation.single <| ( type_, TypeI.number_ numberId, "Hex" )
 
         Floatable _ ->
-            finish [ ( type_, Float, "Float" ) ]
+            finish <| TypeEquation.single <| ( type_, Float, "Float" )
 
         Negation e1 ->
             State.do State.getNextIdAndTick <| \numberId ->
             State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
-            finishEqns <|
+            finish <|
                 TypeEquation.cons
                     ( type_, TypeI.id_ id1, "Negation = inner" )
                     (TypeEquation.cons
@@ -514,16 +505,16 @@ inferExpr ctx exprNode =
                     )
 
         Literal _ ->
-            finish [ ( type_, String, "String" ) ]
+            finish <| TypeEquation.single <| ( type_, String, "String" )
 
         CharLiteral _ ->
-            finish [ ( type_, Char, "Char" ) ]
+            finish <| TypeEquation.single <| ( type_, Char, "Char" )
 
         TupledExpression exprNodes ->
             State.do (inferMany (\part -> inferExpr ctx part) exprNodes) <| \( ids, eqs ) ->
             case ids of
                 [ id1, id2 ] ->
-                    finishEqns <|
+                    finish <|
                         TypeEquation.append eqs
                             (TypeEquation.single
                                 ( type_
@@ -533,7 +524,7 @@ inferExpr ctx exprNode =
                             )
 
                 [ id1, id2, id3 ] ->
-                    finishEqns <|
+                    finish <|
                         TypeEquation.append eqs
                             (TypeEquation.single
                                 ( type_
@@ -547,13 +538,13 @@ inferExpr ctx exprNode =
 
         ParenthesizedExpression e1 ->
             State.do (inferExpr ctx e1) <| \( id1, eqs1 ) ->
-            finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized = inner" ) eqs1
+            finish <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized = inner" ) eqs1
 
         LetExpression { declarations, expression } ->
             State.withScopedEnv <|
                 (State.do (solveLetDeclarations ctx declarations) <| \() ->
                 State.do (inferExpr ctx expression) <| \( bodyId, bodyEqs ) ->
-                finishEqns <|
+                finish <|
                     TypeEquation.cons
                         ( type_, TypeI.id_ bodyId, "Let = its body" )
                         bodyEqs
@@ -562,7 +553,7 @@ inferExpr ctx exprNode =
         CaseExpression { expression, cases } ->
             State.do (inferExpr ctx expression) <| \( scrutineeId, scrutineeEqs ) ->
             State.do
-                (State.traverse
+                (State.traverseFastAndReverse
                     (\( patternNode, bodyNode ) ->
                         State.withScopedEnv <|
                             (State.do (inferPattern ctx patternNode) <| \( patternId, patternEqs ) ->
@@ -574,16 +565,9 @@ inferExpr ctx exprNode =
                 )
             <| \caseInferreds ->
             let
-                caseEqs : Equations
-                caseEqs =
-                    List.foldr
-                        (\( _, branchEqs ) acc -> TypeEquation.append branchEqs acc)
-                        TypeEquation.empty
-                        caseInferreds
-
-                ( scrutineeEquations, bodyEquations ) =
-                    List.foldr
-                        (\( ( patternId, bodyId ), _ ) ( scruts, bodies ) ->
+                ( scrutineeEquations, bodyEquations, caseEqs ) =
+                    List.foldl
+                        (\( ( patternId, bodyId ), branchEqs ) ( scruts, bodies, accCaseEqs ) ->
                             ( ( TypeI.id_ scrutineeId
                               , TypeI.id_ patternId
                               , "Case: scrutinee = branch pattern"
@@ -594,12 +578,13 @@ inferExpr ctx exprNode =
                               , "Case: result = branch body"
                               )
                                 :: bodies
+                            , TypeEquation.append branchEqs accCaseEqs
                             )
                         )
-                        ( [], [] )
+                        ( [], [], TypeEquation.empty )
                         caseInferreds
             in
-            finishEqns <|
+            finish <|
                 TypeEquation.append scrutineeEqs
                     (TypeEquation.append caseEqs
                         (TypeEquation.append
@@ -612,7 +597,7 @@ inferExpr ctx exprNode =
             State.withScopedEnv <|
                 (State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, argEqs ) ->
                 State.do (inferExpr ctx expression) <| \( bodyId, bodyEqs ) ->
-                finishEqns <|
+                finish <|
                     TypeEquation.append argEqs
                         (TypeEquation.append bodyEqs
                             (TypeEquation.single
@@ -626,11 +611,11 @@ inferExpr ctx exprNode =
 
         RecordExpr fieldSetters ->
             State.do (inferRecordSetters ctx fieldSetters) <| \( fields, eqs ) ->
-            finishEqns <|
+            finish <|
                 TypeEquation.append eqs
                     (TypeEquation.single
                         ( type_
-                        , Record { fields = fields }
+                        , Record fields
                         , "Record: is a record"
                         )
                     )
@@ -638,7 +623,7 @@ inferExpr ctx exprNode =
         ListExpr exprNodes ->
             State.do (inferMany (\el -> inferExpr ctx el) exprNodes) <| \( ids, eqs ) ->
             State.do State.getNextIdAndTick <| \listItemId ->
-            finishEqns <|
+            finish <|
                 TypeEquation.append eqs
                     (TypeEquation.append
                         (TypeEquation.batch
@@ -664,7 +649,7 @@ inferExpr ctx exprNode =
             -- The field-name node has the field's type, which is the type of
             -- the whole access expression.
             State.do (State.aliasNodeId (Node.range fieldNameNode) resultId) <| \() ->
-            finishEqns <|
+            finish <|
                 TypeEquation.append
                     (TypeEquation.batch
                         [ ( type_, TypeI.id_ resultId, "Record access = the field = the result" )
@@ -685,9 +670,10 @@ inferExpr ctx exprNode =
         RecordAccessFunction fieldName ->
             State.do State.getNextIdAndTick <| \recordId ->
             State.do State.getNextIdAndTick <| \resultId ->
-            finish
-                [ ( type_
-                  , Function
+            finish <|
+                TypeEquation.single <|
+                    ( type_
+                    , Function
                         { from =
                             ExtensibleRecord
                                 { extensionTypevar = TypeI.id_ recordId
@@ -697,9 +683,8 @@ inferExpr ctx exprNode =
                                 }
                         , to = TypeI.id_ resultId
                         }
-                  , "Record access fn: is a function"
-                  )
-                ]
+                    , "Record access fn: is a function"
+                    )
 
         RecordUpdateExpression recordVarNode fieldSetters ->
             let
@@ -727,7 +712,7 @@ inferExpr ctx exprNode =
                         , fields = fields
                         }
             in
-            finishEqns <|
+            finish <|
                 TypeEquation.append eqs
                     (TypeEquation.batch
                         [ ( recordVarType, asExtensibleRecord, "Record update: base record has at least that field" )
@@ -749,9 +734,10 @@ inferExpr ctx exprNode =
             State.do State.getNextIdAndTick <| \attributesId ->
             State.do State.getNextIdAndTick <| \uniformsId ->
             State.do State.getNextIdAndTick <| \varyingsId ->
-            finish
-                [ ( type_
-                  , WebGLShader
+            finish <|
+                TypeEquation.single <|
+                    ( type_
+                    , WebGLShader
                         { attributesExtension = TypeI.id_ attributesId
                         , attributes = declarations.attributes
                         , uniformsExtension = TypeI.id_ uniformsId
@@ -759,9 +745,8 @@ inferExpr ctx exprNode =
                         , varyingsExtension = TypeI.id_ varyingsId
                         , varyings = declarations.varyings
                         }
-                  , "GLSLExpression: is a shader"
-                  )
-                ]
+                    , "GLSLExpression: is a shader"
+                    )
 
 
 stateErrorImpossibleExpr : Ctx -> Node Expression -> StateM Inferred
@@ -823,9 +808,10 @@ solveLetDeclarations ctx declarations =
                                 Dict.insert (functionName fn) index accAcrossDecls
 
                             LetDestructuring patternNode _ ->
-                                Elm.Syntax.Pattern.Extra.varNames (Node.value patternNode)
-                                    |> List.foldl (\name acc -> Dict.insert name index acc)
-                                        accAcrossDecls
+                                Elm.Syntax.Pattern.Extra.foldVarNames
+                                    (\name acc -> Dict.insert name index acc)
+                                    accAcrossDecls
+                                    (Node.value patternNode)
                     )
                     Dict.empty
 
@@ -845,9 +831,12 @@ solveLetDeclarations ctx declarations =
 
         isAnnotatedIndex : Int -> Bool
         isAnnotatedIndex index =
-            Dict.get index byIndex
-                |> Maybe.map hasLetAnnotation
-                |> Maybe.withDefault False
+            case Dict.get index byIndex of
+                Just letDeclNode ->
+                    hasLetAnnotation letDeclNode
+
+                Nothing ->
+                    False
 
         bodyOf : Node LetDeclaration -> Expression
         bodyOf declNode =
@@ -945,7 +934,7 @@ solveLetDeclarations ctx declarations =
             in
             State.do
                 (functions
-                    |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
+                    |> State.traverseFastAndReverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
                     |> State.andThen (\members -> BindingGroup.solveGroup (unifyConfig ctx) members)
                 )
             <| \() ->
@@ -996,37 +985,33 @@ inferPattern ctx patternNode =
         type_ =
             TypeI.id_ patternId
 
-        finish : List TypeEquation -> StateM Inferred
+        finish : Equations -> StateM Inferred
         finish eqs =
-            State.pure ( patternId, TypeEquation.batch eqs )
-
-        finishEqns : Equations -> StateM Inferred
-        finishEqns eqs =
             State.pure ( patternId, eqs )
     in
     case Node.value patternNode of
         AllPattern ->
-            finish []
+            finish <| TypeEquation.empty
 
         UnitPattern ->
-            finish [ ( type_, Unit, "Unit pattern" ) ]
+            finish <| TypeEquation.single <| ( type_, Unit, "Unit pattern" )
 
         CharPattern _ ->
-            finish [ ( type_, Char, "Char pattern" ) ]
+            finish <| TypeEquation.single <| ( type_, Char, "Char pattern" )
 
         StringPattern _ ->
-            finish [ ( type_, String, "String pattern" ) ]
+            finish <| TypeEquation.single <| ( type_, String, "String pattern" )
 
         IntPattern _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, TypeI.number_ numberId, "Int pattern" ) ]
+            finish <| TypeEquation.single <| ( type_, TypeI.number_ numberId, "Int pattern" )
 
         HexPattern _ ->
             State.do State.getNextIdAndTick <| \numberId ->
-            finish [ ( type_, TypeI.number_ numberId, "Hex pattern" ) ]
+            finish <| TypeEquation.single <| ( type_, TypeI.number_ numberId, "Hex pattern" )
 
         FloatPattern _ ->
-            finish [ ( type_, Float, "Float pattern" ) ]
+            finish <| TypeEquation.single <| ( type_, Float, "Float pattern" )
 
         TuplePattern patterns ->
             let
@@ -1037,7 +1022,7 @@ inferPattern ctx patternNode =
             State.do (inferMany (\part -> inferPattern ctx part) patterns) <| \( ids, eqs ) ->
             case ids of
                 [ id1, id2 ] ->
-                    finishEqns <|
+                    finish <|
                         TypeEquation.cons
                             ( type_
                             , Tuple2
@@ -1048,7 +1033,7 @@ inferPattern ctx patternNode =
                             eqs
 
                 [ id1, id2, id3 ] ->
-                    finishEqns <|
+                    finish <|
                         TypeEquation.cons
                             ( type_
                             , Tuple3
@@ -1080,21 +1065,21 @@ inferPattern ctx patternNode =
                 )
             <| \fields_ ->
             State.do State.getNextIdAndTick <| \recordId ->
-            finish
-                [ ( type_
-                  , ExtensibleRecord
+            finish <|
+                TypeEquation.single <|
+                    ( type_
+                    , ExtensibleRecord
                         { extensionTypevar = TypeI.id_ recordId
                         , fields = fields_
                         }
-                  , "Record pattern"
-                  )
-                ]
+                    , "Record pattern"
+                    )
 
         UnConsPattern p1 p2 ->
             State.do State.getNextIdAndTick <| \listItemId ->
             State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
             State.do (inferPattern ctx p2) <| \( id2, eqs2 ) ->
-            finishEqns <|
+            finish <|
                 TypeEquation.append eqs1
                     (TypeEquation.append eqs2
                         (TypeEquation.batch
@@ -1108,7 +1093,7 @@ inferPattern ctx patternNode =
         ListPattern patterns ->
             State.do State.getNextIdAndTick <| \listItemId ->
             State.do (inferMany (\el -> inferPattern ctx el) patterns) <| \( ids, eqs ) ->
-            finishEqns <|
+            finish <|
                 TypeEquation.append eqs
                     (TypeEquation.append
                         (TypeEquation.batch
@@ -1129,7 +1114,7 @@ inferPattern ctx patternNode =
 
         VarPattern var ->
             State.do (State.addBinding var (TypeI.mono type_)) <| \() ->
-            finish []
+            finish <| TypeEquation.empty
 
         NamedPattern customType args ->
             case
@@ -1145,7 +1130,7 @@ inferPattern ctx patternNode =
                     State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                     State.do State.getNextIdAndTick <| \resultId ->
                     State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
-                    finishEqns <|
+                    finish <|
                         TypeEquation.cons
                             ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
                             (TypeEquation.cons
@@ -1158,7 +1143,7 @@ inferPattern ctx patternNode =
                         State.do State.getNextIdAndTick <| \ctorId ->
                         State.do State.getNextIdAndTick <| \resultId ->
                         State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
-                        finishEqns <|
+                        finish <|
                             TypeEquation.cons
                                 ( TypeI.id_ ctorId, functionType argIds resultId, "NamedPattern: kernel ctor is a fn" )
                                 (TypeEquation.cons
@@ -1180,7 +1165,7 @@ inferPattern ctx patternNode =
                         State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                         State.do State.getNextIdAndTick <| \resultId ->
                         State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->
-                        finishEqns <|
+                        finish <|
                             TypeEquation.cons
                                 ( ctorType, functionType argIds resultId, "NamedPattern: constructor is a fn" )
                                 (TypeEquation.cons
@@ -1195,11 +1180,11 @@ inferPattern ctx patternNode =
             State.do (State.addBinding (Node.value varNameNode) (TypeI.mono type_)) <| \() ->
             State.do (State.aliasNodeId (Node.range varNameNode) patternId) <| \() ->
             State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
-            finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "AsPattern = inner" ) eqs1
+            finish <| TypeEquation.cons ( type_, TypeI.id_ id1, "AsPattern = inner" ) eqs1
 
         ParenthesizedPattern p1 ->
             State.do (inferPattern ctx p1) <| \( id1, eqs1 ) ->
-            finishEqns <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized pattern = inner" ) eqs1
+            finish <| TypeEquation.cons ( type_, TypeI.id_ id1, "Parenthesized pattern = inner" ) eqs1
 
 
 

@@ -581,9 +581,13 @@ importsByAlias imports =
         (\import_ acc ->
             case import_.alias_ of
                 Just alias ->
-                    Dict.update alias
-                        (\maybeModules ->
-                            Just (Maybe.withDefault [] maybeModules ++ [ import_.moduleId ])
+                    Dict.insert alias
+                        (case Dict.get alias acc of
+                            Just byAlias ->
+                                byAlias ++ [ import_.moduleId ]
+
+                            Nothing ->
+                                [ import_.moduleId ]
                         )
                         acc
 

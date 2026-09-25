@@ -73,12 +73,20 @@ isSegment =
 -}
 splitLastDot : String -> ( String, String )
 splitLastDot qualifiedName =
-    case List.reverse (fromDotted qualifiedName) of
+    case listDropBeforeLast (String.indexes "." qualifiedName) of
         [] ->
             ( "", qualifiedName )
 
-        [ single ] ->
-            ( "", single )
+        lastDotIndex :: _ ->
+            ( String.left lastDotIndex qualifiedName, String.dropLeft (lastDotIndex + 1) qualifiedName )
 
-        last :: rest ->
-            ( toString (List.reverse rest), last )
+
+listDropBeforeLast : List a -> List a
+listDropBeforeLast list =
+    case list of
+        _ :: ((_ :: _) as tail) ->
+            listDropBeforeLast tail
+
+        -- [] | [ _ ]
+        _ ->
+            list

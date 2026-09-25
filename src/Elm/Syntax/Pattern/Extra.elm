@@ -1,4 +1,4 @@
-module Elm.Syntax.Pattern.Extra exposing (insertVarNamesIntoSet, varNames)
+module Elm.Syntax.Pattern.Extra exposing (foldVarNames, insertVarNamesIntoSet, varNames)
 
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Pattern exposing (Pattern(..))
@@ -7,7 +7,8 @@ import List.ExtraExtra
 import Set exposing (Set)
 
 
-{-| Collect vars from a pattern
+{-| Collect vars from a pattern.
+Prefer `insertVarNamesIntoSet` or `varNamesFold` if you want anything other than a lis of names
 -}
 varNames : Pattern -> List VarName
 varNames pattern =
@@ -120,3 +121,64 @@ insertVarNamesIntoSet pattern acc =
 
         ParenthesizedPattern p1 ->
             insertVarNamesIntoSet (Node.value p1) acc
+
+
+foldVarNames : (String -> acc -> acc) -> acc -> Pattern -> acc
+foldVarNames reduce acc pattern =
+    case pattern of
+        VarPattern var ->
+            reduce var acc
+
+        AllPattern ->
+            acc
+
+        UnitPattern ->
+            acc
+
+        CharPattern _ ->
+            acc
+
+        StringPattern _ ->
+            acc
+
+        IntPattern _ ->
+            acc
+
+        HexPattern _ ->
+            acc
+
+        FloatPattern _ ->
+            acc
+
+        TuplePattern patterns ->
+            List.foldl
+                (\(Node.Node _ part) accAcrossParts -> foldVarNames reduce accAcrossParts part)
+                acc
+                patterns
+
+        RecordPattern fields ->
+            List.foldl
+                (\(Node.Node _ fieldName) accAcrossFields -> reduce fieldName accAcrossFields)
+                acc
+                fields
+
+        UnConsPattern p1 p2 ->
+            foldVarNames reduce (foldVarNames reduce acc (Node.value p2)) (Node.value p1)
+
+        ListPattern patterns ->
+            List.foldl
+                (\(Node.Node _ element) accAcrossElements -> foldVarNames reduce accAcrossElements element)
+                acc
+                patterns
+
+        NamedPattern _ patterns ->
+            List.foldl
+                (\(Node.Node _ payload) accAcrossPayloads -> foldVarNames reduce accAcrossPayloads payload)
+                acc
+                patterns
+
+        AsPattern p1 name ->
+            foldVarNames reduce (reduce (Node.value name) acc) (Node.value p1)
+
+        ParenthesizedPattern p1 ->
+            foldVarNames reduce acc (Node.value p1)

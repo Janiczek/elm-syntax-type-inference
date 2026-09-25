@@ -54,15 +54,24 @@ resolverFor moduleMapping deps selfPackage =
         searchOrder : List PackageName
         searchOrder =
             selfPackage
-                :: (Dict.get selfPackage deps
-                        |> Maybe.map .dependencies
-                        |> Maybe.withDefault []
+                :: (case Dict.get selfPackage deps of
+                        Just dep ->
+                            dep.dependencies
+
+                        Nothing ->
+                            []
                    )
 
         addModule : PackageName -> Elm.Docs.Module -> Dict String (List PackageName) -> Dict String (List PackageName)
         addModule pkgName mod acc =
-            Dict.update mod.name
-                (\existing -> Just (Maybe.withDefault [] existing ++ [ pkgName ]))
+            Dict.insert mod.name
+                (case Dict.get mod.name acc of
+                    Nothing ->
+                        [ pkgName ]
+
+                    Just byMod ->
+                        byMod ++ [ pkgName ]
+                )
                 acc
 
         ownersByModule : Dict String (List PackageName)
@@ -70,12 +79,12 @@ resolverFor moduleMapping deps selfPackage =
             searchOrder
                 |> List.foldl
                     (\pkgName accAcrossPks ->
-                        Dict.get pkgName deps
-                            |> Maybe.map
-                                (\pkg ->
-                                    List.foldl (\mod acc -> addModule pkgName mod acc) accAcrossPks pkg.modules
-                                )
-                            |> Maybe.withDefault accAcrossPks
+                        case Dict.get pkgName deps of
+                            Just pkg ->
+                                List.foldl (\mod acc -> addModule pkgName mod acc) accAcrossPks pkg.modules
+
+                            Nothing ->
+                                accAcrossPks
                     )
                     Dict.empty
 
@@ -180,18 +189,29 @@ fromDocsType resolver type_ =
                 (resolver moduleNameStr)
 
         Elm.Type.Record fields Nothing ->
-            fromDocsFields resolver fields
-                |> Result.map (\fields_ -> Record { fields = Dict.fromList fields_ })
+            dictFromDocsFields resolver fields
+                |> Result.map Record
 
         Elm.Type.Record fields (Just rowVar) ->
-            fromDocsFields resolver fields
+            dictFromDocsFields resolver fields
                 |> Result.map
                     (\resolvedFields ->
                         ExtensibleRecord
                             { extensionTypevar = TypeVar (TypeVar.parse rowVar)
-                            , fields = Dict.fromList resolvedFields
+                            , fields = resolvedFields
                             }
                     )
+
+
+dictFromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ErrorDetails (Dict String MonoType)
+dictFromDocsFields resolver fields =
+    Result.Extra.foldlWhileOk
+        (\( name, value ) acc ->
+            fromDocsType resolver value
+                |> Result.map (\valueType -> Dict.insert name valueType acc)
+        )
+        Dict.empty
+        fields
 
 
 fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ErrorDetails (List ( String, MonoType ))

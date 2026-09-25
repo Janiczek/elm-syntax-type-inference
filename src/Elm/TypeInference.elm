@@ -108,19 +108,18 @@ project currentPackage depEnv files =
                         key =
                             FileExtra.moduleName file
                     in
-                    case FullModuleName.fromModuleName key of
-                        Nothing ->
-                            ( acc, True, accModuleMapping )
+                    if FullModuleName.moduleNameIsFull key then
+                        let
+                            ( index, newModuleMapping ) =
+                                ModuleIndex.fromFile accModuleMapping file
+                        in
+                        ( { key = key, index = index, file = file } :: acc
+                        , accMissingModuleName
+                        , newModuleMapping
+                        )
 
-                        Just _ ->
-                            let
-                                ( index, newModuleMapping ) =
-                                    ModuleIndex.fromFile accModuleMapping file
-                            in
-                            ( { key = key, index = index, file = file } :: acc
-                            , accMissingModuleName
-                            , newModuleMapping
-                            )
+                    else
+                        ( acc, True, accModuleMapping )
                 )
                 ( [], False, dep.moduleMapping )
                 files
@@ -166,12 +165,9 @@ addReverseEdges index acc =
     index.imports
         |> List.foldl
             (\import_ innerAcc ->
-                Dict.update import_.moduleId
-                    (\maybeImporters ->
-                        Just
-                            (Set.insert index.moduleId
-                                (Maybe.withDefault Set.empty maybeImporters)
-                            )
+                Dict.insert import_.moduleId
+                    (Set.insert index.moduleId
+                        (Maybe.withDefault Set.empty (Dict.get import_.moduleId innerAcc))
                     )
                     innerAcc
             )
@@ -350,7 +346,14 @@ invalidate modulesById directlyAffected (Project p) =
         affected : Set ModuleId
         affected =
             importClosureHelp
-                (\id -> Dict.get id p.importedBy |> Maybe.map Set.toList |> Maybe.withDefault [])
+                (\id ->
+                    case Dict.get id p.importedBy of
+                        Just by ->
+                            Set.toList by
+
+                        Nothing ->
+                            []
+                )
                 (Set.toList directlyAffected)
                 Set.empty
 
@@ -401,89 +404,99 @@ addFile file (Project p) =
         moduleName =
             FileExtra.moduleName file
     in
-    case FullModuleName.fromModuleName moduleName of
-        Nothing ->
-            Err
-                { moduleName = moduleName
-                , declarationNames = []
-                , details = MissingModuleName
-                }
+    if FullModuleName.moduleNameIsFull moduleName then
+        let
+            ( newIndex, moduleMapping1 ) =
+                ModuleIndex.fromFile p.moduleMapping file
 
-        Just _ ->
-            let
-                ( newIndex, moduleMapping1 ) =
-                    ModuleIndex.fromFile p.moduleMapping file
+            id : ModuleId
+            id =
+                newIndex.moduleId
 
-                id : ModuleId
-                id =
-                    newIndex.moduleId
+            oldImportIds : Set ModuleId
+            oldImportIds =
+                case Dict.get id p.modulesById of
+                    Just old ->
+                        old.index.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
 
-                oldImportIds : Set ModuleId
-                oldImportIds =
-                    case Dict.get id p.modulesById of
-                        Just old ->
-                            Set.fromList (List.map .moduleId old.index.imports)
+                    Nothing ->
+                        Set.empty
 
-                        Nothing ->
-                            Set.empty
+            newImportIds : Set ModuleId
+            newImportIds =
+                newIndex.imports |> List.foldl (\im acc -> Set.insert im.moduleId acc) Set.empty
 
-                newImportIds : Set ModuleId
-                newImportIds =
-                    Set.fromList (List.map .moduleId newIndex.imports)
+            importedBy1 : Dict ModuleId (Set ModuleId)
+            importedBy1 =
+                oldImportIds
+                    |> Set.foldl
+                        (\importId acc ->
+                            if Set.member importId newImportIds then
+                                acc
 
-                importedBy1 : Dict ModuleId (Set ModuleId)
-                importedBy1 =
-                    Set.diff oldImportIds newImportIds
-                        |> Set.foldl
-                            (\importId acc ->
-                                Dict.update importId
-                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
-                                    acc
-                            )
-                            p.importedBy
+                            else
+                                case Dict.get importId acc of
+                                    Nothing ->
+                                        acc
 
-                importedBy2 : Dict ModuleId (Set ModuleId)
-                importedBy2 =
-                    Set.diff newImportIds oldImportIds
-                        |> Set.foldl
-                            (\importId acc ->
-                                Dict.update importId
-                                    (\maybeImporters ->
-                                        Just
-                                            (case maybeImporters of
-                                                Nothing ->
-                                                    Set.singleton id
+                                    Just by ->
+                                        Dict.insert importId
+                                            (by |> Set.remove id)
+                                            acc
+                        )
+                        p.importedBy
 
-                                                Just importers ->
-                                                    Set.insert id importers
-                                            )
+            importedBy2 : Dict ModuleId (Set ModuleId)
+            importedBy2 =
+                newImportIds
+                    |> Set.foldl
+                        (\importId acc ->
+                            if Set.member importId oldImportIds then
+                                acc
+
+                            else
+                                Dict.insert importId
+                                    (case Dict.get importId acc of
+                                        Nothing ->
+                                            Set.singleton id
+
+                                        Just importers ->
+                                            Set.insert id importers
                                     )
                                     acc
-                            )
-                            importedBy1
+                        )
+                        importedBy1
 
-                modulesById1 : Dict ModuleId ProjectModule
-                modulesById1 =
-                    Dict.insert id
-                        { key = moduleName
-                        , index = newIndex
-                        , file = file
-                        }
-                        p.modulesById
-            in
-            Ok
-                (invalidate modulesById1
-                    (Set.singleton id)
-                    (Project
-                        { moduleMapping = moduleMapping1
-                        , modulesById = modulesById1
-                        , importedBy = importedBy2
-                        , acc = p.acc
-                        , currentPackage = p.currentPackage
-                        , depEnv = p.depEnv
-                        }
-                    )
+            modulesById1 : Dict ModuleId ProjectModule
+            modulesById1 =
+                Dict.insert id
+                    { key = moduleName
+                    , index = newIndex
+                    , file = file
+                    }
+                    p.modulesById
+        in
+        Ok
+            (invalidate modulesById1
+                (Set.singleton id)
+                (Project
+                    { moduleMapping = moduleMapping1
+                    , modulesById = modulesById1
+                    , importedBy = importedBy2
+                    , acc = p.acc
+                    , currentPackage = p.currentPackage
+                    , depEnv = p.depEnv
+                    }
                 )
+            )
+
+    else
+        -- moduleName is not full
+        Err
+            { moduleName = moduleName
+            , declarationNames = []
+            , details = MissingModuleName
+            }
 
 
 {-| Remove a module from a `Project`.
@@ -514,9 +527,12 @@ removeFile moduleName ((Project p) as proj) =
                     m.index.imports
                         |> List.foldl
                             (\import_ acc ->
-                                Dict.update import_.moduleId
-                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
-                                    acc
+                                case Dict.get import_.moduleId acc of
+                                    Nothing ->
+                                        acc
+
+                                    Just by ->
+                                        Dict.insert import_.moduleId (by |> Set.remove id) acc
                             )
                             p.importedBy
             in
@@ -1003,7 +1019,7 @@ solveModule ctx typeAliases file =
                                         -- Only this module's own declarations
                                         -- are being ordered here; everything
                                         -- else is already in `globalEnv`.
-                                        if resolvedModule == ctx.thisIndex.moduleId && Dict.member resolvedName topLevelFunctions then
+                                        if ModuleIds.equal resolvedModule ctx.thisIndex.moduleId && Dict.member resolvedName topLevelFunctions then
                                             Just resolvedName
 
                                         else
@@ -1031,8 +1047,17 @@ solveModule ctx typeAliases file =
         |> State.traverseUnit
             (\group ->
                 group
-                    |> List.filterMap (\key -> Dict.get key topLevelFunctions)
-                    |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember inferCtx declNode fn)
+                    |> State.foldl
+                        (\key acc ->
+                            case Dict.get key topLevelFunctions of
+                                Just ( declNode, fn ) ->
+                                    Infer.topLevelMember inferCtx declNode fn
+                                        |> State.map (\member -> member :: acc)
+
+                                Nothing ->
+                                    State.pure acc
+                        )
+                        []
                     |> State.andThen
                         (\inferredMembers ->
                             inferredMembers
@@ -1094,7 +1119,7 @@ gatherTypeAliases ctx file =
                                 case Node.value typeAlias.typeAnnotation of
                                     TypeAnnotation.Record fields ->
                                         fields
-                                            |> State.traverse
+                                            |> State.traverseFastAndReverse
                                                 (\(Node _ ( _, Node _ fieldType )) ->
                                                     case TypeI.fromTypeAnnotation resolver fieldType of
                                                         Err fromTypeAnnotationError ->
@@ -1104,9 +1129,9 @@ gatherTypeAliases ctx file =
                                                             State.pure fieldValueType
                                                 )
                                             |> State.map
-                                                (\fieldTypes ->
-                                                    fieldTypes
-                                                        |> List.foldr (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
+                                                (\fieldTypesReverse ->
+                                                    fieldTypesReverse
+                                                        |> List.foldl (\fieldT acc -> Function { from = fieldT, to = acc }) aliasMono
                                                 )
                                             |> State.andThen
                                                 (\ctorType ->

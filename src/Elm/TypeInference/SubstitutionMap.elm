@@ -278,27 +278,22 @@ Ignores union-find ranks; they are only a merge heuristic, not needed for lookup
 -}
 findRoot : SubstitutionMap -> TypeVar -> ( TypeVar, SubstitutionMap )
 findRoot store var =
-    let
-        go : List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
-        go path current =
-            case getSlot current store of
-                Just (Link next) ->
-                    go (current :: path) next
+    findRootHelp store [] var
 
-                _ ->
-                    if List.isEmpty path then
-                        -- No chain walked; skip work
-                        ( current, store )
 
-                    else
-                        ( current
-                        , List.foldl
-                            (\pathVar acc -> insertSlot pathVar (Link current) acc)
-                            store
-                            path
-                        )
-    in
-    go [] var
+findRootHelp : SubstitutionMap -> List TypeVar -> TypeVar -> ( TypeVar, SubstitutionMap )
+findRootHelp store path current =
+    case getSlot current store of
+        Just (Link next) ->
+            findRootHelp store (current :: path) next
+
+        _ ->
+            ( current
+            , List.foldl
+                (\pathVar acc -> insertSlot pathVar (Link current) acc)
+                store
+                path
+            )
 
 
 {-| Bind a root variable to a non-variable type.
@@ -341,11 +336,16 @@ union a b store =
         mergedLetRank =
             min (letRankOf a store) (letRankOf b store)
     in
-    if unionFindRankA < unionFindRankB then
+    -- unionFindRankA < unionFindRankB
+    if unionFindRankA - unionFindRankB < 0 then
         insertSlot a (Link b) store
             |> setVarLetRank b mergedLetRank
 
-    else if unionFindRankB < unionFindRankA then
+    else
+    -- unionFindRankB < unionFindRankA
+    if
+        unionFindRankB - unionFindRankA < 0
+    then
         insertSlot b (Link a) store
             |> setVarLetRank a mergedLetRank
 
@@ -423,9 +423,9 @@ lowerLetRanksTo targetLetRank type_ store =
                 store
 
         Function { from, to } ->
-            store
-                |> lowerLetRanksTo targetLetRank from
-                |> lowerLetRanksTo targetLetRank to
+            lowerLetRanksTo targetLetRank
+                to
+                (lowerLetRanksTo targetLetRank from store)
 
         Int ->
             store
@@ -449,23 +449,25 @@ lowerLetRanksTo targetLetRank type_ store =
             store
 
         Tuple2 t1 t2 ->
-            store
-                |> lowerLetRanksTo targetLetRank t1
-                |> lowerLetRanksTo targetLetRank t2
+            lowerLetRanksTo targetLetRank
+                t2
+                (lowerLetRanksTo targetLetRank t1 store)
 
         Tuple3 t1 t2 t3 ->
-            store
-                |> lowerLetRanksTo targetLetRank t1
-                |> lowerLetRanksTo targetLetRank t2
-                |> lowerLetRanksTo targetLetRank t3
+            lowerLetRanksTo targetLetRank
+                t3
+                (lowerLetRanksTo targetLetRank
+                    t2
+                    (lowerLetRanksTo targetLetRank t1 store)
+                )
 
-        Record { fields } ->
+        Record fields ->
             lowerLetRanksInFieldsTo targetLetRank fields store
 
         ExtensibleRecord r ->
-            store
-                |> lowerLetRanksTo targetLetRank r.extensionTypevar
-                |> lowerLetRanksInFieldsTo targetLetRank r.fields
+            lowerLetRanksInFieldsTo targetLetRank
+                r.fields
+                (lowerLetRanksTo targetLetRank r.extensionTypevar store)
 
         UserDefinedType r ->
             List.foldl (\arg storeAcc -> lowerLetRanksTo targetLetRank arg storeAcc) store r.args
@@ -549,36 +551,38 @@ substituteMono store monoType =
                     , store
                     )
 
-                Just (Ground groundType) ->
-                    ( groundType
-                    , groundAndChanged
-                    , store
-                    )
-
-                Just (Bound bound) ->
-                    resolveBound store var bound
-
-                Just (Link _) ->
-                    let
-                        ( root, store1 ) =
-                            findRoot store var
-                    in
-                    case getSlot root store1 of
-                        Just (Bound bound) ->
-                            resolveBound store1 var bound
-
-                        Just (Ground groundType) ->
+                Just varSlot ->
+                    case varSlot of
+                        Ground groundType ->
                             ( groundType
                             , groundAndChanged
-                            , insertSlot var (Ground groundType) store1
+                            , store
                             )
 
-                        _ ->
-                            -- Unbound root: the best we can say is which var this one has merged into.
-                            ( TypeVar root
-                            , changedFlag
-                            , store1
-                            )
+                        Bound bound ->
+                            resolveBound store var bound
+
+                        Link _ ->
+                            let
+                                ( root, store1 ) =
+                                    findRoot store var
+                            in
+                            case getSlot root store1 of
+                                Just (Bound bound) ->
+                                    resolveBound store1 var bound
+
+                                Just (Ground groundType) ->
+                                    ( groundType
+                                    , groundAndChanged
+                                    , insertSlot var (Ground groundType) store1
+                                    )
+
+                                _ ->
+                                    -- Unbound root: the best we can say is which var this one has merged into.
+                                    ( TypeVar root
+                                    , changedFlag
+                                    , store1
+                                    )
 
         -- The rest are just recursion
         Function { from, to } ->
@@ -667,13 +671,13 @@ substituteMono store monoType =
             else
                 ( monoType, flags, s3 )
 
-        Record { fields } ->
+        Record fields ->
             let
                 ( fields_, flags, s1 ) =
                     substituteRecordFields store fields
             in
             if isChanged flags then
-                ( Record { fields = fields_ }, flags, s1 )
+                ( Record fields_, flags, s1 )
 
             else
                 ( monoType, flags, s1 )
@@ -843,24 +847,16 @@ substituteRecordFields store fields =
 
 substituteTypeArgs : SubstitutionMap -> List MonoType -> ( List MonoType, Flags, SubstitutionMap )
 substituteTypeArgs store args =
-    let
-        ( args_, flags, store1 ) =
-            List.foldr
-                (\type_ ( accArgs, accFlags, accSubst ) ->
-                    let
-                        ( type__, argFlags, accSubst1 ) =
-                            substituteMono accSubst type_
-                    in
-                    ( type__ :: accArgs, both accFlags argFlags, accSubst1 )
-                )
-                ( [], groundFlag, store )
-                args
-    in
-    if isChanged flags then
-        ( args_, flags, store1 )
-
-    else
-        ( args, flags, store1 )
+    List.foldr
+        (\type_ ( accArgs, accFlags, accSubst ) ->
+            let
+                ( type__, argFlags, accSubst1 ) =
+                    substituteMono accSubst type_
+            in
+            ( type__ :: accArgs, both accFlags argFlags, accSubst1 )
+        )
+        ( [], groundFlag, store )
+        args
 
 
 
