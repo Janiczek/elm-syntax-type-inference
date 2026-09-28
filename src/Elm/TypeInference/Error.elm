@@ -10,6 +10,7 @@ module Elm.TypeInference.Error exposing
 
 -}
 
+import Dict exposing (Dict)
 import Elm.Syntax.Expression exposing (Expression)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.ModuleName.Extra
@@ -43,8 +44,17 @@ type alias Error =
 
   - **`MissingModuleName`:** Raised when a `File` has an empty module name.
 
-  - **`ModuleNotFound`:** Raised when `Elm.TypeInference.inferModule` is called
+  - **`ModuleNotFound`:** Raised when `Elm.TypeInference.getType` is called
     with module that's not part of the indexed `Project`.
+
+  - **`RangeNotFound`:** Raised when `Elm.TypeInference.getType` is called
+    with a `Range` not corresponding to an AST node from the provided `File`s.
+
+  - **`NeedPackageSources`:** Raised by `Elm.TypeInference.init` when
+    extra dependency sources are needed to analyze whether a
+    `docs.json`-mentioned internal type is a record or a custom type.
+    Provide these files in `sourcesToResolveAmbiguity` in the next
+    `Elm.TypeInference.init` call.
 
   - **`VarNotFound`:**
 
@@ -139,6 +149,8 @@ type ErrorDetails
     | ImpossibleDocsType Elm.Type.Type
     | MissingModuleName
     | ModuleNotFound
+    | RangeNotFound
+    | NeedPackageSources (Dict String (List String))
       -- Var qualification errors
     | VarNotFound { usedIn : ModuleName, varName : VarName }
     | AmbiguousName { usedIn : ModuleName, varName : VarName, possibleModules : List ModuleName }
@@ -197,6 +209,17 @@ detailsToString details =
 
         ModuleNotFound ->
             "Module not found"
+
+        RangeNotFound ->
+            "Range not found"
+
+        NeedPackageSources needed ->
+            "Need package sources "
+                ++ record
+                    (needed
+                        |> Dict.toList
+                        |> List.map (\( pkg, paths ) -> ( pkg, list paths ))
+                    )
 
         VarNotFound r ->
             "Var not found "

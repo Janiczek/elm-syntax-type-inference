@@ -12,6 +12,7 @@ module Elm.TypeInference.Type.Internal exposing
     , id_
     , mapVarsMono
     , mono
+    , monoHasTypeVars
     , monoPublicKey
     , monoTypeVars
     , number_
@@ -21,6 +22,7 @@ module Elm.TypeInference.Type.Internal exposing
     )
 
 import Dict exposing (Dict)
+import Dict.Extra
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.Error exposing (ErrorDetails(..))
@@ -33,10 +35,6 @@ import Elm.TypeInference.TypeVar as TypeVar
         ( SuperType(..)
         , TypeVar
         , TypeVarStyle(..)
-        )
-import Elm.TypeInference.VarSet as VarSet
-    exposing
-        ( VarSet
         , superTypeTag
         )
 import Result.Extra
@@ -359,13 +357,12 @@ recurse f type_ =
 
 {-| Collect every type variable occurring in a monotype.
 
-Returns them backwards to later insert into VarSet backwards,
+Returns them backwards to later insert into TypeVar.deduplicate backwards,
 so that they're there in order of first appearance,
 SO THAT `normalize` can give us `a -> b -> a` instead of `b -> a -> b`.
 
-Used to decide which variables to quantify in `generalize` (those not already
-free in the environment) and in `State.generalize` (those above the current
-let-rank).
+Used to decide which variables to quantify in `closeOver` (all of them) and in
+`State.generalize` (those above the current let-rank).
 
 -}
 monoTypeVars : MonoType -> List TypeVar
@@ -437,6 +434,67 @@ monoTypeVarsHelp type_ acc =
                 |> monoTypeVarsHelp r.attributesExtension
 
 
+{-| `not (List.isEmpty (monoTypeVars type_))`, stopping at the first variable.
+-}
+monoHasTypeVars : MonoType -> Bool
+monoHasTypeVars type_ =
+    case type_ of
+        TypeVar _ ->
+            True
+
+        Function { from, to } ->
+            monoHasTypeVars from || monoHasTypeVars to
+
+        Int ->
+            False
+
+        Float ->
+            False
+
+        Char ->
+            False
+
+        String ->
+            False
+
+        Bool ->
+            False
+
+        List listItemType ->
+            monoHasTypeVars listItemType
+
+        Unit ->
+            False
+
+        Tuple2 t1 t2 ->
+            monoHasTypeVars t1 || monoHasTypeVars t2
+
+        Tuple3 t1 t2 t3 ->
+            monoHasTypeVars t1 || monoHasTypeVars t2 || monoHasTypeVars t3
+
+        Record { fields } ->
+            fieldsHaveTypeVars fields
+
+        ExtensibleRecord r ->
+            monoHasTypeVars r.extensionTypevar || fieldsHaveTypeVars r.fields
+
+        UserDefinedType r ->
+            List.any monoHasTypeVars r.args
+
+        WebGLShader r ->
+            monoHasTypeVars r.attributesExtension
+                || fieldsHaveTypeVars r.attributes
+                || monoHasTypeVars r.uniformsExtension
+                || fieldsHaveTypeVars r.uniforms
+                || monoHasTypeVars r.varyingsExtension
+                || fieldsHaveTypeVars r.varyings
+
+
+fieldsHaveTypeVars : Dict VarName MonoType -> Bool
+fieldsHaveTypeVars fields =
+    Dict.Extra.any (\_ fieldType -> monoHasTypeVars fieldType) fields
+
+
 monoTypeVarsInFieldsHelp : Dict VarName MonoType -> List TypeVar -> List TypeVar
 monoTypeVarsInFieldsHelp fields acc_ =
     Dict.foldr (\_ fieldType accAcrossFields -> monoTypeVarsHelp fieldType accAcrossFields) acc_ fields
@@ -460,29 +518,7 @@ decide what to close over.
 -}
 closeOver : MonoType -> Type
 closeOver monoType =
-    monoType
-        |> generalize VarSet.empty
-
-
-{-| Put bound vars into the Forall.
-
-    generalize {a} (a -> b)
-    --> Forall [b] (a -> b)
-
-Meaning `a` stays free (belongs to the environment) but `b` is bound.
-
--}
-generalize : VarSet -> MonoType -> Type
-generalize envFreeVars monoType =
-    let
-        boundIds : List TypeVar
-        boundIds =
-            VarSet.diff
-                (monoTypeVars monoType)
-                envFreeVars
-                |> VarSet.toList
-    in
-    Forall boundIds monoType
+    Forall (monoTypeVars monoType |> TypeVar.deduplicate) monoType
 
 
 {-| Rename IDs to be as minimal as possible.
@@ -502,9 +538,10 @@ normalize ((Forall boundVars monoType) as type_) =
     let
         allVars : List TypeVar
         allVars =
-            (VarSet.fromList boundVars).order
+            -- first-appearance order, like `monoTypeVars`
+            List.reverse boundVars
                 ++ monoTypeVars monoType
-                |> VarSet.toList
+                |> TypeVar.deduplicate
 
         -- eg. `number` and `comparable` get their own slot sequence independent of the `Normal` one
         usedNamesBySuper : Dict Int (Set String)
@@ -590,13 +627,13 @@ normalize ((Forall boundVars monoType) as type_) =
                     (\( ( style, super ), newVar ) ( genAcc, namedAcc ) ->
                         case style of
                             Generated theId ->
-                                ( Dict.insert (VarSet.genKeyFrom theId super) newVar genAcc
+                                ( Dict.insert (TypeVar.genKeyFrom theId super) newVar genAcc
                                 , namedAcc
                                 )
 
                             Named name ->
                                 ( genAcc
-                                , Dict.insert (VarSet.namedKeyFrom name super) newVar namedAcc
+                                , Dict.insert (TypeVar.namedKeyFrom name super) newVar namedAcc
                                 )
                     )
                     ( Dict.empty, Dict.empty )
@@ -606,7 +643,7 @@ normalize ((Forall boundVars monoType) as type_) =
             (\(( style, super ) as var) ->
                 case style of
                     Generated theId ->
-                        case Dict.get (VarSet.genKeyFrom theId super) substGen of
+                        case Dict.get (TypeVar.genKeyFrom theId super) substGen of
                             Nothing ->
                                 var
 
@@ -614,7 +651,7 @@ normalize ((Forall boundVars monoType) as type_) =
                                 newVar
 
                     Named name ->
-                        case Dict.get (VarSet.namedKeyFrom name super) substNamed of
+                        case Dict.get (TypeVar.namedKeyFrom name super) substNamed of
                             Nothing ->
                                 var
 
@@ -1014,7 +1051,7 @@ applyAnnotationNames : Dict Int TypeVar -> TypeVar -> TypeVar
 applyAnnotationNames mapping (( style, super ) as var) =
     case style of
         Generated theId ->
-            Dict.get (VarSet.genKeyFrom theId super) mapping
+            Dict.get (TypeVar.genKeyFrom theId super) mapping
                 |> Maybe.withDefault var
 
         Named _ ->
@@ -1032,7 +1069,7 @@ collectAnnotationNames annoMono inferredMono acc =
                 let
                     key : Int
                     key =
-                        VarSet.genKeyFrom inferredId inferredSuper
+                        TypeVar.genKeyFrom inferredId inferredSuper
 
                     wanted : TypeVar
                     wanted =
@@ -1179,7 +1216,7 @@ collectAnnotationArgs annos inferreds acc =
                     Nothing
 
 
-{-| A deduplication key for a normalized monotype inside a single `TypeLookupTable`.
+{-| A deduplication key for a normalized monotype inside a single module's lookup table.
 -}
 monoPublicKey : { alreadyNormalized : Bool } -> MonoType -> String
 monoPublicKey { alreadyNormalized } origMono =

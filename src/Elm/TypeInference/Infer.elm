@@ -21,6 +21,7 @@ import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.Expression as Expression exposing (Expression(..), LetDeclaration(..))
 import Elm.Syntax.Expression.Extra exposing (functionName, referencedNames)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Pattern.Extra
@@ -53,7 +54,24 @@ type alias Ctx =
     , index : ModuleLookup.Index
     , allowKernel : Bool
     , moduleMapping : ModuleIds.Mapping
+    , resolvedVars : Dict ( {- written -} ModuleName, VarName ) (Result ErrorDetails (Maybe ( PackageName, ModuleId )))
     }
+
+
+resolveVar : Ctx -> ModuleName -> VarName -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+resolveVar ctx qualifier name =
+    case Dict.get ( qualifier, name ) ctx.resolvedVars of
+        Just resolved ->
+            resolved
+
+        Nothing ->
+            ModuleLookup.moduleOfVar
+                ctx.moduleMapping
+                ctx.index
+                ctx.modules
+                ctx.thisModule
+                (FullModuleName.fromModuleName qualifier)
+                name
 
 
 unifyConfig : Ctx -> Unify.UnifyConfig
@@ -144,7 +162,19 @@ resolveGlobalVar ctx package moduleId name =
 -}
 lookupVarOrOperator : Ctx -> Maybe FullModuleName -> VarName -> StateM MonoType
 lookupVarOrOperator ctx maybeModuleName name =
-    State.do (ModuleLookup.findModuleOfVar ctx.moduleMapping ctx.index ctx.modules ctx.thisModule maybeModuleName name) <| \( package, moduleId ) ->
+    State.do
+        (ModuleLookup.wrapError
+            ctx.thisModule
+            name
+            (resolveVar ctx
+                (maybeModuleName
+                    |> Maybe.map FullModuleName.toModuleName
+                    |> Maybe.withDefault []
+                )
+                name
+            )
+        )
+    <| \( package, moduleId ) ->
     resolveGlobalVar ctx package moduleId name
 
 
@@ -442,15 +472,7 @@ inferExpr ctx exprNode =
                 finish [ ( type_, varType, "FunctionOrValue: var from env" ) ]
 
             else
-                case
-                    ModuleLookup.moduleOfVar
-                        ctx.moduleMapping
-                        ctx.index
-                        ctx.modules
-                        ctx.thisModule
-                        (FullModuleName.fromModuleName moduleName)
-                        varName
-                of
+                case resolveVar ctx moduleName varName of
                     Ok (Just ( package, moduleId )) ->
                         State.do (resolveGlobalVar ctx package moduleId varName) <| \varType ->
                         finish [ ( type_, varType, "FunctionOrValue: global/top-level var" ) ]
@@ -812,7 +834,6 @@ solveLetDeclarations ctx declarations =
         byIndex =
             Dict.fromList indexed
 
-        -- name -> index of the declaration binding it
         indexOfName : Dict VarName Int
         indexOfName =
             indexed
@@ -1132,15 +1153,7 @@ inferPattern ctx patternNode =
             finish []
 
         NamedPattern customType args ->
-            case
-                ModuleLookup.moduleOfVar
-                    ctx.moduleMapping
-                    ctx.index
-                    ctx.modules
-                    ctx.thisModule
-                    (FullModuleName.fromModuleName customType.moduleName)
-                    customType.name
-            of
+            case resolveVar ctx customType.moduleName customType.name of
                 Ok (Just ( package, moduleId )) ->
                     State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                     State.do State.getNextIdAndTick <| \resultId ->
@@ -1167,16 +1180,7 @@ inferPattern ctx patternNode =
                                 )
 
                     else
-                        State.do
-                            (ModuleLookup.findModuleOfVar
-                                ctx.moduleMapping
-                                ctx.index
-                                ctx.modules
-                                ctx.thisModule
-                                (FullModuleName.fromModuleName customType.moduleName)
-                                customType.name
-                            )
-                        <| \( package, moduleId ) ->
+                        State.do (ModuleLookup.wrapError ctx.thisModule customType.name (Ok Nothing)) <| \( package, moduleId ) ->
                         State.do (State.lookupGlobalEnv ctx.moduleMapping package moduleId customType.name) <| \ctorType ->
                         State.do State.getNextIdAndTick <| \resultId ->
                         State.do (inferMany (\arg -> inferPattern ctx arg) args) <| \( argIds, eqs ) ->

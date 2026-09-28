@@ -6,26 +6,27 @@ Infer types of [elm-syntax](https://package.elm-lang.org/packages/stil4m/elm-syn
 -- A contrived example, normally this would live split out
 -- inside `update` Msg handlers, state saved into Model, etc.
 
-Elm.TypeInference.dependencyEnv 
+Elm.TypeInference.init
     { directDependencies = ["elm/core"]
     , allDependencies = [...] -- Parsed from ~/.elm files
     , sourcesToResolveAmbiguity = Dict.empty
+    , projectPackageName = Just "my/package-name"
+    , projectFiles = Dict.fromList [ ( [ "MyModule", "Internal" ], parsedFile ) ]
     }
---> Ready depEnv
-
-Elm.TypeInference.project
-    (Just "my/package-name")
-    depEnv
-    parsedFiles
 --> Ok project
 
-Elm.TypeInference.inferModule
+Elm.TypeInference.getType
     ["MyModule","Internal"]
-    project
---> ( Ok myModuleInternalTLT, newProject )
-
-TypeLookupTable.get
     someRange
-    myModuleInternalTLT
---> ( Just someType, newTLT )
+    project
+--> ( Ok someType, newProject )
+
+Elm.TypeInference.addFile updatedFile project
+--> Ok newerProject
+
+Elm.TypeInference.removeFile ["MyModule","Internal"] project
+--> newerProject
 ```
+
+If `project` fails with `details = NeedPackageSources needed`, read and parse
+them and retry with them added to the `sourcesToResolveAmbiguity` field.

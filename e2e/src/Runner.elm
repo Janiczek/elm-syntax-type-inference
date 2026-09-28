@@ -6,27 +6,27 @@ Kind of a worst-case scenario (as the library is tailored towards lazy sparse us
 
 1.  Reads Elm project's source files and dependency docs.json files
 2.  Parses source code to `Elm.Syntax.File`s, `Elm.Docs.Module`s and `Elm.Project.Project`s
-3.  Builds an `Elm.TypeInference.DependencyEnv` for the project
-4.  Builds an `Elm.TypeInference.Project` for the project
-5.  Runs `Elm.TypeInference.inferModule` on every module
-6.  Resolves every type out of the resulting `TypeLookupTable`
-7.  Reports back via ports.
+3.  Builds an `Elm.TypeInference.Project` for the project (fetching package
+    sources on `NeedPackageSources`) -- timed as "project ms"
+4.  Runs `Elm.TypeInference.getAllTypes` on every module -- timed as
+    "all types ms"
+5.  Reports back via ports.
 
 -}
 
-import Bitwise
 import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Parser
 import Elm.Syntax.File exposing (File)
+import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Range exposing (Range)
-import Elm.TypeInference exposing (Dependency, DependencyEnv)
-import Elm.TypeInference.Error as Error
+import Elm.TypeInference exposing (Dependency, Project)
+import Elm.TypeInference.Error as Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.Type as Type
@@ -34,10 +34,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra
 import Parser
-import RangeLike exposing (RangeLike)
 import Set exposing (Set)
-import TypeLookupTable
-import TypeLookupTable.Internal exposing (TypeLookupTable(..))
 
 
 port result : Encode.Value -> Cmd msg
@@ -55,22 +52,19 @@ port requestPackageSources : Encode.Value -> Cmd msg
 port providePackageSources : (Decode.Value -> msg) -> Sub msg
 
 
-port inferenceStarted : Encode.Value -> Cmd msg
+port projectStarted : Encode.Value -> Cmd msg
 
 
-port inferenceStopped : Encode.Value -> Cmd msg
+port projectStopped : Encode.Value -> Cmd msg
 
 
-port beginInference : (Decode.Value -> msg) -> Sub msg
+port beginProject : (Decode.Value -> msg) -> Sub msg
 
 
-port resolutionStarted : Encode.Value -> Cmd msg
+port allTypesStopped : Encode.Value -> Cmd msg
 
 
-port resolutionStopped : Encode.Value -> Cmd msg
-
-
-port beginResolution : (Decode.Value -> msg) -> Sub msg
+port beginAllTypes : (Decode.Value -> msg) -> Sub msg
 
 
 type alias Model =
@@ -99,16 +93,16 @@ type alias Active =
 
 
 type alias PendingInference =
-    { depEnv : DependencyEnv
+    { project : Project
     , files : List File
     , sourcePaths : Dict ModuleName String
-    , currentPackage : Maybe String
     }
 
 
 type alias PendingTables =
     { sourcePaths : Dict ModuleName String
-    , tables : Dict ModuleName TypeLookupTable
+    , project : Project
+    , files : List File
     , summary : Encode.Value
     }
 
@@ -116,8 +110,8 @@ type alias PendingTables =
 type Msg
     = GotInferredTypesRequest Decode.Value
     | GotPackageSources Decode.Value
-    | GotBeginInference Decode.Value
-    | GotBeginResolution Decode.Value
+    | GotBeginProject Decode.Value
+    | GotBeginAllTypes Decode.Value
 
 
 type alias Flags =
@@ -207,7 +201,13 @@ update msg model =
                     ( model, inferredTypes "" )
 
                 Just pending ->
-                    ( model, inferredTypes (tablesToString pending.sourcePaths pending.tables) )
+                    let
+                        ( output, newProject ) =
+                            tablesToString pending.sourcePaths pending.files pending.project
+                    in
+                    ( { model | pending = Just { pending | project = newProject } }
+                    , inferredTypes output
+                    )
 
         GotPackageSources value ->
             case model.active of
@@ -218,13 +218,16 @@ update msg model =
                     case Decode.decodeValue (Decode.list providedPackageDecoder) value of
                         Err err ->
                             ( finished Nothing
-                            , result
-                                (Encode.object
-                                    [ ( "ok", Encode.bool False )
-                                    , ( "moduleCount", Encode.int (List.length active.files) )
-                                    , ( "error", Encode.string ("package sources decode error: " ++ Decode.errorToString err) )
-                                    ]
-                                )
+                            , Cmd.batch
+                                [ projectStopped Encode.null
+                                , result
+                                    (Encode.object
+                                        [ ( "ok", Encode.bool False )
+                                        , ( "moduleCount", Encode.int (List.length active.files) )
+                                        , ( "error", Encode.string ("package sources decode error: " ++ Decode.errorToString err) )
+                                        ]
+                                    )
+                                ]
                             )
 
                         Ok provided ->
@@ -249,24 +252,30 @@ update msg model =
                                         )
                                         active.dependencySources
                                         provided
-                            in
-                            step { active | dependencySources = merged }
 
-        GotBeginInference _ ->
+                                mergedActive : Active
+                                mergedActive =
+                                    { active | dependencySources = merged }
+                            in
+                            ( { model | active = Just mergedActive }
+                            , projectStarted Encode.null
+                            )
+
+        GotBeginProject _ ->
+            case model.active of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just active ->
+                    buildProjectStep active
+
+        GotBeginAllTypes _ ->
             case model.inference of
                 Nothing ->
                     ( model, Cmd.none )
 
                 Just pending ->
-                    runInference pending
-
-        GotBeginResolution _ ->
-            case model.pending of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just pending ->
-                    runResolution pending
+                    runAllTypes pending
 
 
 subscriptions : Model -> Sub Msg
@@ -274,8 +283,8 @@ subscriptions _ =
     Sub.batch
         [ requestInferredTypes GotInferredTypesRequest
         , providePackageSources GotPackageSources
-        , beginInference GotBeginInference
-        , beginResolution GotBeginResolution
+        , beginProject GotBeginProject
+        , beginAllTypes GotBeginAllTypes
         ]
 
 
@@ -346,142 +355,207 @@ run flagsValue =
                                     )
 
                                 [] ->
-                                    step
-                                        { directDependencies = flags.directDependencies
-                                        , allDependencies = allDependencies
-                                        , files = kept |> Dict.values |> List.map .file
-                                        , sourcePaths = Dict.map (\_ { path } -> path) kept
-                                        , dependencySources = Dict.empty
-                                        , currentPackage = flags.currentPackage
-                                        }
+                                    ( { active =
+                                            Just
+                                                { directDependencies = flags.directDependencies
+                                                , allDependencies = allDependencies
+                                                , files = kept |> Dict.values |> List.map .file
+                                                , sourcePaths = Dict.map (\_ { path } -> path) kept
+                                                , dependencySources = Dict.empty
+                                                , currentPackage = flags.currentPackage
+                                                }
+                                      , pending = Nothing
+                                      , inference = Nothing
+                                      }
+                                    , projectStarted Encode.null
+                                    )
 
 
-step : Active -> ( Model, Cmd Msg )
-step active =
+buildProjectStep : Active -> ( Model, Cmd Msg )
+buildProjectStep active =
+    let
+        projectFiles : Dict ModuleName File
+        projectFiles =
+            List.foldl
+                (\file acc -> Dict.insert (FileExtra.moduleName file) file acc)
+                Dict.empty
+                active.files
+    in
     case
-        Elm.TypeInference.dependencyEnv
+        Elm.TypeInference.init
             { directDependencies = active.directDependencies
             , allDependencies = active.allDependencies
             , sourcesToResolveAmbiguity = active.dependencySources
+            , projectPackageName = active.currentPackage
+            , projectFiles = projectFiles
             }
     of
-        Elm.TypeInference.Failed depEnvError ->
-            reportDepEnvError active.files depEnvError
+        Err err ->
+            case err.details of
+                NeedPackageSources needed ->
+                    ( { active = Just active, pending = Nothing, inference = Nothing }
+                    , requestPackageSources (Encode.dict identity (Encode.list Encode.string) needed)
+                    )
 
-        Elm.TypeInference.NeedPackageSources needed ->
-            ( { active = Just active, pending = Nothing, inference = Nothing }
-            , requestPackageSources (Encode.dict identity (Encode.list Encode.string) needed)
-            )
+                _ ->
+                    ( finished Nothing
+                    , Cmd.batch
+                        [ projectStopped Encode.null
+                        , result (projectErrorValue active.files err)
+                        ]
+                    )
 
-        Elm.TypeInference.Ready depEnv ->
+        Ok proj ->
             ( finished Nothing
                 |> (\model ->
                         { model
                             | inference =
                                 Just
-                                    { depEnv = depEnv
+                                    { project = proj
                                     , files = active.files
                                     , sourcePaths = active.sourcePaths
-                                    , currentPackage = active.currentPackage
                                     }
                         }
                    )
-            , inferenceStarted Encode.null
+            , projectStopped (Encode.bool True)
             )
 
 
-reportDepEnvError : List File -> Error.Error -> ( Model, Cmd Msg )
-reportDepEnvError files depEnvError =
-    ( finished Nothing
-    , result
-        (Encode.object
-            [ ( "ok", Encode.bool False )
-            , ( "moduleCount", Encode.int (List.length files) )
-            , ( "error", Encode.string (Error.toString depEnvError) )
-            ]
-        )
-    )
+projectErrorValue : List File -> Error -> Encode.Value
+projectErrorValue files err =
+    Encode.object
+        [ ( "ok", Encode.bool False )
+        , ( "moduleCount", Encode.int (List.length files) )
+        , ( "error", Encode.string (Error.toString err) )
+        ]
 
 
-runInference : PendingInference -> ( Model, Cmd Msg )
-runInference pending =
+{-| Phase two: pull a type out for every recorded range in every file.
+
+Uses the bulk `getAllTypes` path (one module-name resolution + one outer
+`tables` update per module).
+-}
+runAllTypes : PendingInference -> ( Model, Cmd Msg )
+runAllTypes pending =
     let
-        tablesAndErrors :
-            { tables : Dict ModuleName TypeLookupTable
-            , errors : Dict ModuleName Error.Error
-            }
-        tablesAndErrors =
-            case Elm.TypeInference.project pending.currentPackage pending.depEnv pending.files of
-                Err err ->
-                    { tables = Dict.empty
-                    , errors = Dict.singleton [] err
-                    }
+        collectFile : File -> ( Dict ModuleName Error, Int, Project ) -> ( Dict ModuleName Error, Int, Project )
+        collectFile file ( accErrors, accRangeCount, accProj ) =
+            let
+                fileModuleName : ModuleName
+                fileModuleName =
+                    FileExtra.moduleName file
+            in
+            case Elm.TypeInference.getAllTypes fileModuleName accProj of
+                ( Err getErr, nextProj ) ->
+                    ( Dict.insert fileModuleName getErr accErrors, accRangeCount, nextProj )
 
-                Ok proj0 ->
-                    Elm.TypeInference.inferModules pending.files proj0
-                        |> Tuple.first
+                ( Ok pairs, nextProj ) ->
+                    ( accErrors, accRangeCount + List.length pairs, nextProj )
+
+        ( collectedErrors, rangeCount, finalProject ) =
+            List.foldl collectFile ( Dict.empty, 0, pending.project ) pending.files
 
         summary : Encode.Value
         summary =
-            case Dict.values tablesAndErrors.errors of
-                [] ->
-                    Encode.object
-                        [ ( "ok", Encode.bool True )
-                        , ( "moduleCount", Encode.int (List.length pending.files) )
-                        , ( "tableCount", Encode.int (Dict.size tablesAndErrors.tables) )
-                        ]
+            Encode.object
+                ([ ( "ok", Encode.bool (Dict.isEmpty collectedErrors) )
+                 , ( "moduleCount", Encode.int (List.length pending.files) )
+                 , ( "tableCount", Encode.int (List.length pending.files - Dict.size collectedErrors) )
+                 , ( "rangeCount", Encode.int rangeCount )
+                 ]
+                    ++ (case Dict.values collectedErrors of
+                            [] ->
+                                []
 
-                _ ->
-                    Encode.object
-                        [ ( "ok", Encode.bool False )
-                        , ( "moduleCount", Encode.int (List.length pending.files) )
-                        , ( "tableCount", Encode.int (Dict.size tablesAndErrors.tables) )
-                        , ( "error", Encode.string (String.join "\n" (List.map Error.toString (Dict.values tablesAndErrors.errors))) )
-                        ]
+                            errs ->
+                                [ ( "error", Encode.string (String.join "\n" (List.map Error.toString errs))) ]
+                       )
+                )
     in
     ( finished
         (Just
             { sourcePaths = pending.sourcePaths
-            , tables = tablesAndErrors.tables
+            , project = finalProject
+            , files = pending.files
             , summary = summary
             }
         )
     , Cmd.batch
-        [ inferenceStopped Encode.null
-        , resolutionStarted Encode.null
+        [ allTypesStopped Encode.null
+        , result summary
         ]
     )
 
 
-{-| Phase two: pull every type out of the lazy tables.
+{-| Serialize one inferred type per recorded range line:
 
-Inference only hands back "range -> type variable"; the rest happens in `TypeLookupTable.get`.
+    src/Main.elm:60:1-60:31: Platform.Program Main.Flags Main.Model Main.Msg
 
 -}
-runResolution : PendingTables -> ( Model, Cmd Msg )
-runResolution pending =
-    ( finished (Just { pending | tables = Dict.map (\_ -> resolveWholeTable) pending.tables })
-    , Cmd.batch
-        [ resolutionStopped Encode.null
-        , result pending.summary
-        ]
-    )
+tablesToString : Dict ModuleName String -> List File -> Project -> ( String, Project )
+tablesToString paths files proj0 =
+    let
+        pathFor : ModuleName -> String
+        pathFor moduleName =
+            Dict.get moduleName paths
+                |> Maybe.withDefault (ModuleNameExtra.toString moduleName)
+
+        goFile : File -> ( List String, Project ) -> ( List String, Project )
+        goFile file ( accLines, proj ) =
+            let
+                fileModuleName : ModuleName
+                fileModuleName =
+                    FileExtra.moduleName file
+
+                prefix : String
+                prefix =
+                    pathFor fileModuleName
+            in
+            case Elm.TypeInference.getAllTypes fileModuleName proj of
+                ( Err _, nextProj ) ->
+                    ( accLines, nextProj )
+
+                ( Ok pairs, nextProj ) ->
+                    ( List.foldl
+                        (\( range, type_ ) innerLines ->
+                            lineFor prefix range type_ :: innerLines
+                        )
+                        accLines
+                        pairs
+                    , nextProj
+                    )
+
+        ( reversedLines, finalProj ) =
+            List.foldl goFile ( [], proj0 ) files
+
+        lines : List String
+        lines =
+            reversedLines
+                |> List.reverse
+                |> List.sort
+                |> List.Extra.unique
+    in
+    case lines of
+        [] ->
+            ( "", finalProj )
+
+        _ ->
+            ( String.join "\n" lines ++ "\n", finalProj )
 
 
-resolveWholeTable : TypeLookupTable -> TypeLookupTable
-resolveWholeTable table =
-    List.foldl
-        (\range acc -> Tuple.second (TypeLookupTable.get range acc))
-        table
-        (allNodeRanges table)
-
-
-allNodeRanges : TypeLookupTable -> List Range
-allNodeRanges (TLT tlt) =
-    tlt.nodeIds
-        |> Dict.keys
-        |> List.sortBy rangeSortKey
-        |> List.map rangeLikeToRange
+lineFor : String -> Range -> Type.Type -> String
+lineFor path range type_ =
+    path
+        ++ ":"
+        ++ String.fromInt range.start.row
+        ++ ":"
+        ++ String.fromInt range.start.column
+        ++ "-"
+        ++ String.fromInt range.end.row
+        ++ ":"
+        ++ String.fromInt range.end.column
+        ++ ": "
+        ++ Type.toString type_
 
 
 buildDependencies : List RawDependency -> Result String (List Dependency)
@@ -714,89 +788,3 @@ deadEndsToString deadEnds =
         |> List.map (\{ row, col } -> "line " ++ String.fromInt row ++ ", column " ++ String.fromInt col)
         |> List.Extra.unique
         |> String.join "; "
-
-
-{-| Serialize every inferred type in every module table, one per line:
-
-    src/Main.elm:60:1-60:31: Platform.Program Main.Flags Main.Model Main.Msg
-
--}
-tablesToString : Dict ModuleName String -> Dict ModuleName TypeLookupTable -> String
-tablesToString paths tables =
-    let
-        pathFor : ModuleName -> String
-        pathFor moduleName =
-            Dict.get moduleName paths
-                |> Maybe.withDefault (ModuleNameExtra.toString moduleName)
-
-        lines : List String
-        lines =
-            tables
-                |> Dict.toList
-                |> List.sortBy (\( moduleName, _ ) -> pathFor moduleName)
-                |> List.concatMap (\( moduleName, table ) -> tableToLines (pathFor moduleName) table)
-                |> List.Extra.unique
-    in
-    case lines of
-        [] ->
-            ""
-
-        _ ->
-            String.join "\n" lines ++ "\n"
-
-
-tableToLines : String -> TypeLookupTable -> List String
-tableToLines path table =
-    allNodeRanges table
-        |> List.filterMap
-            (\range ->
-                TypeLookupTable.get range table
-                    |> Tuple.first
-                    |> Maybe.map (lineFor path range)
-            )
-
-
-lineFor : String -> Range -> Type.Type -> String
-lineFor path range type_ =
-    path
-        ++ ":"
-        ++ String.fromInt range.start.row
-        ++ ":"
-        ++ String.fromInt range.start.column
-        ++ "-"
-        ++ String.fromInt range.end.row
-        ++ ":"
-        ++ String.fromInt range.end.column
-        ++ ": "
-        ++ Type.toString type_
-
-
-rangeLikeToRange : RangeLike -> Range
-rangeLikeToRange rangeLike =
-    let
-        ( startRow, startCol ) =
-            unpackPos (Tuple.first rangeLike)
-
-        ( endRow, endCol ) =
-            unpackPos (Tuple.second rangeLike)
-    in
-    { start = { row = startRow, column = startCol }
-    , end = { row = endRow, column = endCol }
-    }
-
-
-rangeSortKey : RangeLike -> List Int
-rangeSortKey ( start, end ) =
-    let
-        ( startRow, startCol ) =
-            unpackPos start
-
-        ( endRow, endCol ) =
-            unpackPos end
-    in
-    [ startRow, startCol, endRow, endCol ]
-
-
-unpackPos : Int -> ( Int, Int )
-unpackPos pos =
-    ( Bitwise.shiftRightBy 16 pos, Bitwise.and 0xFFFF pos )

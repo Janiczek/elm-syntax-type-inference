@@ -59,18 +59,24 @@ referencedModules deps =
         allModules =
             Dict.foldr (\_ { modules } acc -> List.append modules acc) [] deps
 
-        addNameIfUnique : String -> List String -> List String
-        addNameIfUnique name names =
-            if String.isEmpty name || List.member name names then
-                names
+        addNameIfUnique : String -> ( Set String, List String ) -> ( Set String, List String )
+        addNameIfUnique name (( seen, names ) as acc) =
+            if String.isEmpty name || Set.member name seen then
+                acc
 
             else
-                name :: names
+                ( Set.insert name seen
+                , name :: names
+                )
     in
-    List.foldl (\( name, _ ) acc -> addNameIfUnique name acc) [] (docsModuleRefs allModules)
+    List.foldl
+        (\( name, _ ) acc -> addNameIfUnique name acc)
+        ( Set.empty, [] )
+        (docsModuleRefs allModules)
         |> (\accWithoutModNames ->
                 List.foldl (\mod acc -> addNameIfUnique mod.name acc) accWithoutModNames allModules
            )
+        |> Tuple.second
 
 
 {-| Which packages' `docs.json` types use unknown modules, or types that
@@ -283,7 +289,7 @@ packageAliases :
     -> Result Error ( Dict GlobalKey TypeAlias, ModuleIds.Mapping )
 packageAliases moduleMapping deps package files =
     let
-        ( modules, moduleMapping1 ) =
+        ( indexedFilesReversed, moduleMappingAfterIndexing ) =
             files
                 |> List.foldl
                     (\file ( acc, accModuleMapping ) ->
@@ -291,9 +297,18 @@ packageAliases moduleMapping deps package files =
                             ( moduleIndex, newModuleMapping ) =
                                 ModuleIndex.fromFile accModuleMapping file
                         in
-                        ( Dict.insert moduleIndex.moduleId moduleIndex acc, newModuleMapping )
+                        ( ( file, moduleIndex ) :: acc
+                        , newModuleMapping
+                        )
                     )
-                    ( Dict.empty, moduleMapping )
+                    ( [], moduleMapping )
+
+        modules : Dict ModuleIds.ModuleId ModuleIndex.ModuleIndex
+        modules =
+            List.foldl
+                (\( _, moduleIndex ) acc -> Dict.insert moduleIndex.moduleId moduleIndex acc)
+                Dict.empty
+                indexedFilesReversed
 
         visiblePackages : List PackageName
         visiblePackages =
@@ -303,19 +318,16 @@ packageAliases moduleMapping deps package files =
         index =
             deps
                 |> Dict.filter (\name _ -> List.member name visiblePackages)
-                |> ModuleLookup.buildIndex moduleMapping1
+                |> ModuleLookup.buildIndex moduleMappingAfterIndexing
                 |> Tuple.first
     in
-    files
+    List.reverse indexedFilesReversed
         |> Result.Extra.foldlWhileOk
-            (\file dictAcrossFiles ->
+            (\( file, thisModule ) dictAcrossFiles ->
                 let
-                    ( thisModule, _ ) =
-                        ModuleIndex.fromFile moduleMapping1 file
-
                     resolver : TypeI.TypeResolver
                     resolver qualifier name =
-                        ModuleLookup.typeResolverFor moduleMapping1 index modules thisModule qualifier name
+                        ModuleLookup.typeResolverFor moduleMappingAfterIndexing index modules thisModule qualifier name
                             |> Result.map
                                 (\( owner, moduleId ) ->
                                     ( if owner == "" then
@@ -356,4 +368,4 @@ packageAliases moduleMapping deps package files =
                         dictAcrossFiles
             )
             Dict.empty
-        |> Result.map (\dict -> ( dict, moduleMapping1 ))
+        |> Result.map (\dict -> ( dict, moduleMappingAfterIndexing ))

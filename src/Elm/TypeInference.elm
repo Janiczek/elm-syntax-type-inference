@@ -1,7 +1,6 @@
 module Elm.TypeInference exposing
-    ( dependencyEnv, DependencyEnvOutcome(..), DependencyEnv, Dependency
-    , project, Project
-    , inferModule, inferModules
+    ( init, Project, Dependency
+    , getType, getAllTypes
     , addFile, removeFile
     )
 
@@ -9,27 +8,20 @@ module Elm.TypeInference exposing
 [`elm-syntax`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/)
 ASTs.
 
-Optimized for lazy queries `Range -> Maybe Type`.
-
 The process:
 
-  - Convert `elm.json` and dependencies' `elm.json` + `docs.json` into
-    [`DependencyEnv`](#DependencyEnv).
-  - Load the
-    [`File`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-File#File)s
-    into a [`Project`](#Project).
-  - (When it's clear you need it) Infer a module with
-    [`inferModule`](#inferModule), producing [`TypeLookupTable`](TypeLookupTable#TypeLookupTable).
-  - (When it's clear you need it) Get a [`Type`](Elm-TypeInference-Type#Type)
-    for a given AST
+  - Load project and dependency data into a [`Project`](#Project) with [`init`](#init).
+  - Get a [`Type`](Elm-TypeInference-Type#Type) for a given AST
     [`Node`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-Node#Node)'s
-    [`Range`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-Range#Range) with [`get`](TypeLookupTable#get).
+    [`Range`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-Range#Range)
+    with [`getType`](#getType). The computed data is cached into a new version
+    of the [`Project`](#Project).
+  - Let the `Project` know about changed or deleted files with
+    [`addFile`](#addFile) and [`removeFile`](#removeFile).
 
-@docs dependencyEnv, DependencyEnvOutcome, DependencyEnv, Dependency
+@docs init, Project, Dependency
 
-@docs project, Project
-
-@docs inferModule, inferModules
+@docs getType, getAllTypes
 
 @docs addFile, removeFile
 
@@ -46,6 +38,7 @@ import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node(..))
+import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.Syntax.Type as SyntaxType
 import Elm.Syntax.TypeAnnotation as TypeAnnotation
@@ -61,7 +54,7 @@ import Elm.TypeInference.ModuleLookup as ModuleLookup
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (GlobalKey, StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
-import Elm.TypeInference.Type exposing (PackageName, VarName)
+import Elm.TypeInference.Type exposing (PackageName, Type, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeResolver)
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify exposing (TypeAlias)
@@ -69,16 +62,18 @@ import List.ExtraExtra
 import RangeLike
 import Result.Extra
 import Set exposing (Set)
-import TypeLookupTable exposing (TypeLookupTable)
-import TypeLookupTable.Internal
 
 
 
 -- PROJECT INDEXING
 
 
-{-| An indexed project: every file has been assigned a `ModuleId` and its
-imports resolved, but nothing has been solved yet. Cheap to build.
+{-| An indexed project: every file's imports are resolved, but nothing has
+been solved yet. Cheap to build.
+
+Keep sources up to date incrementally with [`addFile`](#addFile) and
+[`removeFile`](#removeFile).
+
 -}
 type Project
     = Project
@@ -91,74 +86,117 @@ type Project
         }
 
 
-{-| Analyze the import graph of the project source code, producing a [`Project`](#Project).
+type alias LookupTable =
+    { nodeIds : Dict RangeLike.RangeLike TypeI.Id
+    , subst : SubstitutionMap.SubstitutionMap
+    , moduleMapping : ModuleIds.Mapping
+    , cache : Array.Array (Maybe Type)
+    , pool : Dict String Type
+    , annotationFor : Dict TypeI.Id MonoType
+    }
+
+
+{-| Build a [`Project`](#Project) from dependencies and project sources.
+
+  - `directDependencies`: names of the packages listed in the project's
+    `elm.json` (e.g. `"elm/core"`).
+  - `allDependencies`: type information for every dependency in the closure,
+    parsed from each dependency's `elm.json` and `docs.json`.
+  - `sourcesToResolveAmbiguity`: Elm sources from dependencies' `ELM_HOME`
+    needed to disambiguate hidden types. Start with `Dict.empty`; if you get
+    `Err` with `details = NeedPackageSources needed`, read and parse those
+    files and retry with them supplied.
+  - `projectPackageName`: the project's own package name (`Just` for packages,
+    `Nothing` for applications).
+  - `projectFiles`: the project's Elm sources, keyed by module name.
+
 -}
-project : Maybe PackageName -> DependencyEnv -> List File -> Result Error Project
-project currentPackage depEnv files =
-    -- Index files, assign ModuleIds, build the import graph.
-    let
-        (DependencyEnv dep) =
-            depEnv
+init :
+    { directDependencies : List PackageName
+    , allDependencies : List Dependency
+    , sourcesToResolveAmbiguity : Dict PackageName (List File)
+    , projectPackageName : Maybe PackageName
+    , projectFiles : Dict ModuleName File
+    }
+    -> Result Error Project
+init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPackageName, projectFiles } =
+    case
+        buildDependencyEnv
+            directDependencies
+            allDependencies
+            sourcesToResolveAmbiguity
+    of
+        Err err ->
+            Err err
 
-        ( modulesReversed, missingModuleName, moduleMapping ) =
-            List.foldl
-                (\file ( acc, accMissingModuleName, accModuleMapping ) ->
-                    let
-                        key : ModuleName
-                        key =
-                            FileExtra.moduleName file
-                    in
-                    case FullModuleName.fromModuleName key of
-                        Nothing ->
-                            ( acc, True, accModuleMapping )
+        Ok dep ->
+            let
+                files : List File
+                files =
+                    Dict.values projectFiles
 
-                        Just _ ->
+                ( modulesReversed, missingModuleName, moduleMapping ) =
+                    List.foldl
+                        (\file ( acc, accMissingModuleName, accModuleMapping ) ->
                             let
-                                ( index, newModuleMapping ) =
-                                    ModuleIndex.fromFile accModuleMapping file
+                                key : ModuleName
+                                key =
+                                    FileExtra.moduleName file
                             in
-                            ( { key = key, index = index, file = file } :: acc
-                            , accMissingModuleName
-                            , newModuleMapping
-                            )
-                )
-                ( [], False, dep.moduleMapping )
-                files
-    in
-    if missingModuleName then
-        Err
-            { moduleName = [ "<Missing>" ]
-            , declarationNames = []
-            , details = MissingModuleName
-            }
+                            case FullModuleName.fromModuleName key of
+                                Nothing ->
+                                    ( acc, True, accModuleMapping )
 
-    else
-        let
-            modulesById : Dict ModuleId ProjectModule
-            modulesById =
-                modulesReversed
-                    |> List.foldl
-                        (\m acc -> Dict.insert m.index.moduleId m acc)
-                        Dict.empty
-
-            importedBy : Dict ModuleId (Set ModuleId)
-            importedBy =
-                modulesReversed
-                    |> List.foldl (\m acc -> addReverseEdges m.index acc) Dict.empty
-        in
-        Ok
-            (Project
-                { currentPackage = currentPackage
-                , depEnv = depEnv
-                , moduleMapping = moduleMapping
-                , modulesById = modulesById
-                , importedBy = importedBy
-                , acc =
-                    { tables = Dict.empty
-                    , interfaces = Dict.empty
+                                Just _ ->
+                                    let
+                                        ( index, newModuleMapping ) =
+                                            ModuleIndex.fromFile accModuleMapping file
+                                    in
+                                    ( { key = key, index = index, file = file } :: acc
+                                    , accMissingModuleName
+                                    , newModuleMapping
+                                    )
+                        )
+                        ( [], False, dep.moduleMapping )
+                        files
+            in
+            if missingModuleName then
+                Err
+                    { moduleName = [ "<Missing>" ]
+                    , declarationNames = []
+                    , details = MissingModuleName
                     }
-                }
-            )
+
+            else
+                let
+                    modulesById : Dict ModuleId ProjectModule
+                    modulesById =
+                        modulesReversed
+                            |> List.foldl
+                                (\m acc -> Dict.insert m.index.moduleId m acc)
+                                Dict.empty
+
+                    importedBy : Dict ModuleId (Set ModuleId)
+                    importedBy =
+                        modulesReversed
+                            |> List.foldl (\m acc -> addReverseEdges m.index acc) Dict.empty
+                in
+                Ok
+                    (Project
+                        { currentPackage = projectPackageName
+                        , depEnv = dep
+                        , moduleMapping = moduleMapping
+                        , modulesById = modulesById
+                        , importedBy = importedBy
+                        , acc =
+                            { tables = Dict.empty
+                            , interfaces = Dict.empty
+                            , sccsInTopoOrder = Nothing
+                            , values = dep.globalEnv
+                            , aliases = dep.typeAliases
+                            }
+                        }
+                    )
 
 
 addReverseEdges : ModuleIndex -> Dict ModuleId (Set ModuleId) -> Dict ModuleId (Set ModuleId)
@@ -220,14 +258,28 @@ importClosureHelp edges queue visited =
 inferNodes : Set ModuleId -> Project -> Project
 inferNodes nodes (Project p) =
     let
+        sccsInTopoOrder : List (List ModuleId)
+        sccsInTopoOrder =
+            case p.acc.sccsInTopoOrder of
+                Just cached ->
+                    cached
+
+                Nothing ->
+                    SCC.stronglyConnectedComponents
+                        (Dict.keys p.modulesById)
+                        (\node -> firstPartyImportsOf p.modulesById node)
+
         newAcc : ProjectAcc
         newAcc =
-            SCC.stronglyConnectedComponents (Set.toList nodes) (\node -> firstPartyImportsOf p.modulesById node)
+            sccsInTopoOrder
                 |> List.foldl
-                    (\list acc ->
+                    (\component acc ->
                         List.foldl
                             (\id subAcc ->
-                                if Dict.member id p.acc.interfaces then
+                                if not (Set.member id nodes) then
+                                    subAcc
+
+                                else if Dict.member id subAcc.interfaces then
                                     subAcc
 
                                 else
@@ -239,12 +291,18 @@ inferNodes nodes (Project p) =
                                             subAcc
                             )
                             acc
-                            list
+                            component
                     )
                     p.acc
     in
     Project
-        { acc = newAcc
+        { acc =
+            { tables = newAcc.tables
+            , interfaces = newAcc.interfaces
+            , sccsInTopoOrder = Just sccsInTopoOrder
+            , values = newAcc.values
+            , aliases = newAcc.aliases
+            }
         , currentPackage = p.currentPackage
         , depEnv = p.depEnv
         , moduleMapping = p.moduleMapping
@@ -253,18 +311,37 @@ inferNodes nodes (Project p) =
         }
 
 
-{-| Infer types in the given module.
+{-| Get the [`Type`](Elm-TypeInference-Type#Type) for a given source
+[`Range`](https://package.elm-lang.org/packages/stil4m/elm-syntax/latest/Elm-Syntax-Range#Range).
+
+The computed data is cached into a new version of the [`Project`](#Project),
+save it into your model to speed up future `getType` calls.
+
 -}
-inferModule : ModuleName -> Project -> ( Result Error TypeLookupTable, Project )
-inferModule moduleName ((Project p) as proj) =
-    let
-        target : Maybe ProjectModule
-        target =
-            FullModuleName.fromModuleName moduleName
-                |> Maybe.andThen (\full -> ModuleIds.getId full p.moduleMapping)
-                |> Maybe.andThen (\id -> Dict.get id p.modulesById)
-    in
-    case target of
+getType : ModuleName -> Range -> Project -> ( Result Error Type, Project )
+getType moduleName range proj =
+    case moduleData moduleName proj of
+        Nothing ->
+            ( Err
+                { moduleName = moduleName
+                , declarationNames = []
+                , details = ModuleNotFound
+                }
+            , proj
+            )
+
+        Just m ->
+            lookupRange moduleName range m (ensureInferred m proj)
+
+
+{-| Mostly a test helper.
+
+Returns [`Type`](Elm-TypeInference-Type#Type)s of all AST nodes in the project.
+
+-}
+getAllTypes : ModuleName -> Project -> ( Result Error (List ( Range, Type )), Project )
+getAllTypes moduleName proj =
+    case moduleData moduleName proj of
         Nothing ->
             ( Err
                 { moduleName = moduleName
@@ -277,69 +354,230 @@ inferModule moduleName ((Project p) as proj) =
         Just m ->
             let
                 (Project newP) =
-                    inferNodes
-                        (importClosure (\modId -> firstPartyImportsOf p.modulesById modId) m.index.moduleId)
-                        proj
+                    ensureInferred m proj
             in
-            ( case Dict.get m.key newP.acc.tables of
-                Just result ->
-                    result
-
+            case Dict.get m.key newP.acc.tables of
                 Nothing ->
-                    Err
+                    ( Err
                         { moduleName = moduleName
                         , declarationNames = []
                         , details = ModuleNotFound
                         }
-            , Project newP
-            )
+                    , Project newP
+                    )
+
+                Just (Err err) ->
+                    ( Err err
+                    , Project newP
+                    )
+
+                Just (Ok tlt) ->
+                    let
+                        folded :
+                            { pairs : List ( Range, Type )
+                            , table : LookupTable
+                            }
+                        folded =
+                            Dict.foldl
+                                (\rangeLike id acc ->
+                                    case Array.get id acc.table.cache |> Maybe.andThen identity of
+                                        Just cached ->
+                                            { pairs = ( RangeLike.toRange rangeLike, cached ) :: acc.pairs
+                                            , table = acc.table
+                                            }
+
+                                        Nothing ->
+                                            let
+                                                ( pubType, newTable ) =
+                                                    resolveIdToPublicType id acc.table
+                                            in
+                                            { pairs = ( RangeLike.toRange rangeLike, pubType ) :: acc.pairs
+                                            , table = newTable
+                                            }
+                                )
+                                { pairs = []
+                                , table = tlt
+                                }
+                                tlt.nodeIds
+                    in
+                    ( Ok (List.reverse folded.pairs)
+                    , Project
+                        { acc =
+                            { tables = Dict.insert m.key (Ok folded.table) newP.acc.tables
+                            , interfaces = newP.acc.interfaces
+                            , sccsInTopoOrder = newP.acc.sccsInTopoOrder
+                            , values = newP.acc.values
+                            , aliases = newP.acc.aliases
+                            }
+                        , currentPackage = newP.currentPackage
+                        , depEnv = newP.depEnv
+                        , moduleMapping = newP.moduleMapping
+                        , modulesById = newP.modulesById
+                        , importedBy = newP.importedBy
+                        }
+                    )
 
 
-{-| Helper. Run [`inferModule`](#inferModules) for each of the given modules,
-collecting successes and errors into separate `Dict`s.
+{-| Find a project module by name.
 -}
-inferModules :
-    List File
-    -> Project
-    ->
-        ( { tables : Dict ModuleName TypeLookupTable
-          , errors : Dict ModuleName Error
-          }
-        , Project
-        )
-inferModules files proj0 =
-    files
-        |> List.foldl
-            (\file ( acc, proj ) ->
-                let
-                    moduleName : ModuleName
-                    moduleName =
-                        FileExtra.moduleName file
-                in
-                case inferModule moduleName proj of
-                    ( Ok table, newProj ) ->
-                        ( { errors = acc.errors
-                          , tables = Dict.insert moduleName table acc.tables
-                          }
-                        , newProj
-                        )
+moduleData : ModuleName -> Project -> Maybe ProjectModule
+moduleData moduleName (Project p) =
+    FullModuleName.fromModuleName moduleName
+        |> Maybe.andThen (\full -> ModuleIds.getId full p.moduleMapping)
+        |> Maybe.andThen (\id -> Dict.get id p.modulesById)
 
-                    ( Err err, newProj ) ->
-                        ( { tables = acc.tables
-                          , errors = Dict.insert moduleName err acc.errors
-                          }
-                        , newProj
-                        )
+
+{-| Make sure a module's import closure is inferred - compute it if missing.
+-}
+ensureInferred : ProjectModule -> Project -> Project
+ensureInferred m ((Project p) as proj) =
+    if Dict.member m.index.moduleId p.acc.interfaces then
+        proj
+
+    else
+        let
+            closure : Set ModuleId
+            closure =
+                importClosure (\modId -> firstPartyImportsOf p.modulesById modId) m.index.moduleId
+        in
+        if Set.foldl (\id acc -> acc && Dict.member id p.acc.interfaces) True closure then
+            proj
+
+        else
+            inferNodes closure proj
+
+
+{-| Resolve one `Id` to a `Type` and cache the result.
+-}
+resolveIdToPublicType : TypeI.Id -> LookupTable -> ( Type, LookupTable )
+resolveIdToPublicType id tlt =
+    let
+        ( monoType0, _, subst1 ) =
+            SubstitutionMap.substituteMono tlt.subst (TypeI.id_ id)
+
+        monoType : MonoType
+        monoType =
+            case Dict.get id tlt.annotationFor of
+                Nothing ->
+                    monoType0
+
+                Just annoMono ->
+                    monoType0
+                        |> TypeI.renameToAnnotation annoMono
+                        |> Maybe.withDefault monoType0
+
+        key : String
+        key =
+            TypeI.monoPublicKey { alreadyNormalized = False } monoType
+
+        ( pubType, pool1 ) =
+            case Dict.get key tlt.pool of
+                Just canonical ->
+                    ( canonical, tlt.pool )
+
+                Nothing ->
+                    let
+                        fresh : Type
+                        fresh =
+                            TypeI.toPublicType tlt.moduleMapping { alreadyNormalized = False } monoType
+                    in
+                    ( fresh, Dict.insert key fresh tlt.pool )
+    in
+    ( pubType
+    , { nodeIds = tlt.nodeIds
+      , subst = subst1
+      , moduleMapping = tlt.moduleMapping
+      , cache = arraySetGrowing Nothing id (Just pubType) tlt.cache
+      , pool = pool1
+      , annotationFor = tlt.annotationFor
+      }
+    )
+
+
+{-| Look up one range in an already-inferred project, caching the resolved type.
+-}
+lookupRange : ModuleName -> Range -> ProjectModule -> Project -> ( Result Error Type, Project )
+lookupRange moduleName range m ((Project p) as proj) =
+    case Dict.get m.key p.acc.tables of
+        Nothing ->
+            ( Err
+                { moduleName = moduleName
+                , declarationNames = []
+                , details = ModuleNotFound
+                }
+            , proj
             )
-            ( { tables = Dict.empty
-              , errors = Dict.empty
-              }
-            , proj0
+
+        Just (Err err) ->
+            ( Err err
+            , proj
             )
 
+        Just (Ok tlt) ->
+            let
+                rangeLike : RangeLike.RangeLike
+                rangeLike =
+                    RangeLike.fromRange range
+            in
+            case Dict.get rangeLike tlt.nodeIds of
+                Nothing ->
+                    ( Err
+                        { moduleName = moduleName
+                        , declarationNames = []
+                        , details = RangeNotFound
+                        }
+                    , proj
+                    )
+
+                Just id ->
+                    case Array.get id tlt.cache |> Maybe.andThen identity of
+                        Just cached ->
+                            ( Ok cached
+                            , proj
+                            )
+
+                        Nothing ->
+                            let
+                                ( pubType, newTable ) =
+                                    resolveIdToPublicType id tlt
+                            in
+                            ( Ok pubType
+                            , Project
+                                { acc =
+                                    { tables = Dict.insert m.key (Ok newTable) p.acc.tables
+                                    , interfaces = p.acc.interfaces
+                                    , sccsInTopoOrder = p.acc.sccsInTopoOrder
+                                    , values = p.acc.values
+                                    , aliases = p.acc.aliases
+                                    }
+                                , currentPackage = p.currentPackage
+                                , depEnv = p.depEnv
+                                , moduleMapping = p.moduleMapping
+                                , modulesById = p.modulesById
+                                , importedBy = p.importedBy
+                                }
+                            )
 
 
--- EDITING A PROJECT
+{-| `Array.set` no-ops when the index is out of bounds.
+This function grows the array instead.
+
+Kept inline instead of in Array.ExtraExtra: somehow it's ~4% slower there - weird!
+This sits on the hottest path in the library.
+
+-}
+arraySetGrowing : a -> Int -> a -> Array.Array a -> Array.Array a
+arraySetGrowing default index value array =
+    let
+        indexMinusLength : Int
+        indexMinusLength =
+            index - Array.length array
+    in
+    if indexMinusLength < 0 then
+        Array.set index value array
+
+    else
+        Array.push value (Array.append array (Array.repeat indexMinusLength default))
 
 
 {-| Remove each module (transitively) reachable from the supplied modules.
@@ -358,8 +596,23 @@ invalidate modulesById directlyAffected (Project p) =
         interfaces =
             Set.foldl Dict.remove p.acc.interfaces affected
 
-        tables : Dict ModuleName (Result Error TypeLookupTable)
-        tables =
+        ( valuesWithoutAffected, aliasesWithoutAffected ) =
+            affected
+                |> Set.foldl
+                    (\id ( valuesAcc, aliasesAcc ) ->
+                        case Dict.get id p.acc.interfaces of
+                            Just interface ->
+                                ( Dict.foldl (\name _ inner -> Dict.remove ( id, "", name ) inner) valuesAcc interface.exposedValues
+                                , Dict.foldl (\key _ inner -> Dict.remove key inner) aliasesAcc interface.ownTypeAliases
+                                )
+
+                            Nothing ->
+                                ( valuesAcc, aliasesAcc )
+                    )
+                    ( p.acc.values, p.acc.aliases )
+
+        tablesWithoutAffected : Dict ModuleName (Result Error LookupTable)
+        tablesWithoutAffected =
             affected
                 |> Set.foldl
                     (\id acc ->
@@ -374,8 +627,11 @@ invalidate modulesById directlyAffected (Project p) =
     in
     Project
         { acc =
-            { tables = tables
+            { tables = tablesWithoutAffected
             , interfaces = interfaces
+            , sccsInTopoOrder = Nothing
+            , values = valuesWithoutAffected
+            , aliases = aliasesWithoutAffected
             }
         , currentPackage = p.currentPackage
         , depEnv = p.depEnv
@@ -387,11 +643,8 @@ invalidate modulesById directlyAffected (Project p) =
 
 {-| Make `Project` aware of a new or changed file.
 
-**NOTE:** In addition to persisting the returned `Project`, you need to also
-throw away the `TypeLookupTable` for this module that came from the old
-`Project`. They have type inference data based on the old file's source code.
-Instead run `inferModule` again on the new `Project` to get a new
-`TypeLookupTable`.
+The module and everything that (transitively) imports it is invalidated
+behind the scenes and will be re-inferred lazily by [`getType`](#getType).
 
 -}
 addFile : File -> Project -> Result Error Project
@@ -431,8 +684,8 @@ addFile file (Project p) =
                 newImportIds =
                     Set.fromList (List.map .moduleId newIndex.imports)
 
-                importedBy1 : Dict ModuleId (Set ModuleId)
-                importedBy1 =
+                importedByWithoutOldImports : Dict ModuleId (Set ModuleId)
+                importedByWithoutOldImports =
                     Set.diff oldImportIds newImportIds
                         |> Set.foldl
                             (\importId acc ->
@@ -442,8 +695,8 @@ addFile file (Project p) =
                             )
                             p.importedBy
 
-                importedBy2 : Dict ModuleId (Set ModuleId)
-                importedBy2 =
+                importedByWithNewImports : Dict ModuleId (Set ModuleId)
+                importedByWithNewImports =
                     Set.diff newImportIds oldImportIds
                         |> Set.foldl
                             (\importId acc ->
@@ -460,10 +713,10 @@ addFile file (Project p) =
                                     )
                                     acc
                             )
-                            importedBy1
+                            importedByWithoutOldImports
 
-                modulesById1 : Dict ModuleId ProjectModule
-                modulesById1 =
+                modulesByIdWithFile : Dict ModuleId ProjectModule
+                modulesByIdWithFile =
                     Dict.insert id
                         { key = moduleName
                         , index = newIndex
@@ -472,12 +725,12 @@ addFile file (Project p) =
                         p.modulesById
             in
             Ok
-                (invalidate modulesById1
+                (invalidate modulesByIdWithFile
                     (Set.singleton id)
                     (Project
                         { moduleMapping = moduleMapping1
-                        , modulesById = modulesById1
-                        , importedBy = importedBy2
+                        , modulesById = modulesByIdWithFile
+                        , importedBy = importedByWithNewImports
                         , acc = p.acc
                         , currentPackage = p.currentPackage
                         , depEnv = p.depEnv
@@ -488,9 +741,8 @@ addFile file (Project p) =
 
 {-| Remove a module from a `Project`.
 
-**NOTE:** In addition to persisting the returned `Project`, you need to also
-throw away the `TypeLookupTable` for this module that came from the old
-`Project`.
+Everything that (transitively) imported it is invalidated behind the scenes
+and will be re-inferred lazily by [`getType`](#getType).
 
 -}
 removeFile : ModuleName -> Project -> Project
@@ -505,12 +757,12 @@ removeFile moduleName ((Project p) as proj) =
 
         Just ( id, m ) ->
             let
-                modulesById1 : Dict ModuleId ProjectModule
-                modulesById1 =
+                modulesByIdWithoutFile : Dict ModuleId ProjectModule
+                modulesByIdWithoutFile =
                     Dict.remove id p.modulesById
 
-                importedBy1 : Dict ModuleId (Set ModuleId)
-                importedBy1 =
+                importedByWithoutFile : Dict ModuleId (Set ModuleId)
+                importedByWithoutFile =
                     m.index.imports
                         |> List.foldl
                             (\import_ acc ->
@@ -523,8 +775,8 @@ removeFile moduleName ((Project p) as proj) =
             invalidate p.modulesById
                 (Set.singleton id)
                 (Project
-                    { modulesById = modulesById1
-                    , importedBy = importedBy1
+                    { modulesById = modulesByIdWithoutFile
+                    , importedBy = importedByWithoutFile
                     , acc = p.acc
                     , depEnv = p.depEnv
                     , currentPackage = p.currentPackage
@@ -533,13 +785,7 @@ removeFile moduleName ((Project p) as proj) =
                 )
 
 
-
--- DEPENDENCIES
-
-
-{-| Input to [`dependencyEnv`](#dependencyEnv).
-
-A dependency package with its type information, parsed from the dependency's
+{-| A dependency package with its type information, parsed from the dependency's
 `elm.json` (via
 [`Elm.Project.decoder`](https://package.elm-lang.org/packages/elm/project-metadata-utils/latest/Elm-Project#decoder))
 and `docs.json` (via `elm/project-metadata-utils`
@@ -557,132 +803,127 @@ type alias Dependency =
     }
 
 
-{-| Data parsed from dependencies' `docs.json` files.
-
-This cache doesn't change as user's project code changes - only invalidate it
-and [`Project`](#Project) when `elm.json` changes.
-
--}
-type DependencyEnv
-    = DependencyEnv
-        { globalEnv : Dict GlobalKey TypeI.Type
-        , typeAliases : Dict GlobalKey TypeAlias
-        , index : ModuleLookup.Index
-        , moduleMapping : ModuleIds.Mapping
-        }
+type alias DependencyEnv =
+    { globalEnv : Dict GlobalKey TypeI.Type
+    , typeAliases : Dict GlobalKey TypeAlias
+    , index : ModuleLookup.Index
+    , moduleMapping : ModuleIds.Mapping
+    }
 
 
-{-| Possible outcomes of running [`dependencyEnv`](#dependencyEnv).
-
-An example `NeedPackageSources`:
+{-| Returns error `NeedPackageSources needed` when dependencies' `docs.json`
+types mention modules whose shapes need the packages' Elm sources. An example
+`needed`:
 
     Dict.fromList
         [ ( "example/css", [ "src/Css/Internal.elm" ] ) ]
 
 -}
-type DependencyEnvOutcome
-    = Ready DependencyEnv
-    | NeedPackageSources (Dict PackageName (List String))
-    | Failed Error
-
-
-{-| Build a [`DependencyEnv`](#DependencyEnv).
-
-Initially you can run with `sourcesToResolveAmbiguity = Dict.empty`. If you get
-`NeedPackageSources` back, read and parse those Elm files from the dependencies
-in your `ELM_HOME` (usually `~/.elm`) and supply them in
-`sourcesToResolveAmbiguity` in the next call.
-
--}
-dependencyEnv :
-    { directDependencies : List PackageName
-    , allDependencies : List Dependency
-    , sourcesToResolveAmbiguity : Dict PackageName (List File)
-    }
-    -> DependencyEnvOutcome
-dependencyEnv { directDependencies, allDependencies, sourcesToResolveAmbiguity } =
+buildDependencyEnv :
+    List PackageName
+    -> List Dependency
+    -> Dict PackageName (List File)
+    -> Result Error DependencyEnv
+buildDependencyEnv directDependencies allDependencies sourcesToResolveAmbiguity =
     let
         deps : Dependencies
         deps =
             Dependencies.fromList allDependencies
 
+        reachable : Set PackageName
+        reachable =
+            reachablePackages deps directDependencies
+
+        reachableDependencies : List Dependency
+        reachableDependencies =
+            List.filter (\pkg -> Set.member pkg.name reachable) allDependencies
+
+        reachableDeps : Dependencies
+        reachableDeps =
+            Dependencies.fromList reachableDependencies
+
+        needed : Dict PackageName (List String)
+        needed =
+            DependencySources.neededSources reachableDeps sourcesToResolveAmbiguity
+                |> Dict.fromList
+    in
+    if Dict.isEmpty needed then
+        buildDependencyEnvHelp
+            directDependencies
+            sourcesToResolveAmbiguity
+            deps
+            reachableDependencies
+            reachableDeps
+
+    else
+        Err
+            { moduleName = []
+            , declarationNames = []
+            , details = NeedPackageSources needed
+            }
+
+
+buildDependencyEnvHelp :
+    List PackageName
+    -> Dict PackageName (List File)
+    -> Dependencies
+    -> List Dependency
+    -> Dependencies
+    -> Result Error DependencyEnv
+buildDependencyEnvHelp directDependencies sourcesToResolveAmbiguity deps reachableDependencies reachableDeps =
+    let
         directVisibleDeps : Dependencies
         directVisibleDeps =
-            allDependencies
+            reachableDependencies
                 |> List.filter (\pkg -> List.member pkg.name directDependencies)
                 |> Dependencies.fromList
 
         depModuleNames : List FullModuleName
         depModuleNames =
-            (allDependencies
+            (reachableDependencies
                 |> List.ExtraExtra.fastConcatMap (\pkg -> List.map (\m -> FullModuleName.fromDotted m.name) pkg.modules)
             )
-                ++ (DependencySources.referencedModules deps
+                ++ (DependencySources.referencedModules reachableDeps
                         |> List.map FullModuleName.fromDotted
                    )
 
-        moduleMapping0 : ModuleIds.Mapping
-        moduleMapping0 =
+        moduleMappingWithDepNames : ModuleIds.Mapping
+        moduleMappingWithDepNames =
             List.foldl (\name acc -> ModuleIds.intern name acc |> Tuple.second) ModuleIds.empty depModuleNames
 
-        ( depIndex, moduleMapping1 ) =
-            ModuleLookup.buildIndex moduleMapping0 directVisibleDeps
+        ( depIndex, moduleMappingWithDepIndex ) =
+            ModuleLookup.buildIndex moduleMappingWithDepNames directVisibleDeps
 
         baseEnv : Result Error DependencyEnv
         baseEnv =
-            (State.do (Dependencies.register moduleMapping1 deps) <| \( depAliases, moduleMapping2 ) ->
+            (State.do (Dependencies.register moduleMappingWithDepIndex reachableDeps) <| \( depAliases, moduleMappingWithDepAliases ) ->
             State.do State.getGlobalEnv <| \globalEnv ->
             State.pure <|
-                DependencyEnv
-                    { globalEnv = globalEnv
-                    , typeAliases = depAliases
-                    , index = depIndex
-                    , moduleMapping = moduleMapping2
-                    }
+                { globalEnv = globalEnv
+                , typeAliases = depAliases
+                , index = depIndex
+                , moduleMapping = moduleMappingWithDepAliases
+                }
             )
                 |> State.run State.empty
                 |> Tuple.first
     in
     case baseEnv of
         Err err ->
-            Failed err
+            Err err
 
-        Ok (DependencyEnv env) ->
-            let
-                reachable : Set PackageName
-                reachable =
-                    reachablePackages deps directDependencies
+        Ok env ->
+            case DependencySources.aliases env.moduleMapping deps sourcesToResolveAmbiguity of
+                Err err ->
+                    Err err
 
-                needed : Dict PackageName (List String)
-                needed =
-                    DependencySources.neededSources deps sourcesToResolveAmbiguity
-                        |> List.foldl
-                            (\( pkg, names ) acc ->
-                                if Set.member pkg reachable then
-                                    Dict.insert pkg names acc
-
-                                else
-                                    acc
-                            )
-                            Dict.empty
-            in
-            if Dict.isEmpty needed then
-                case DependencySources.aliases env.moduleMapping deps sourcesToResolveAmbiguity of
-                    Err err ->
-                        Failed err
-
-                    Ok ( sourceAliases, moduleMapping2 ) ->
-                        Ready
-                            (DependencyEnv
-                                { globalEnv = env.globalEnv
-                                , index = env.index
-                                , typeAliases = Dict.union sourceAliases env.typeAliases
-                                , moduleMapping = moduleMapping2
-                                }
-                            )
-
-            else
-                NeedPackageSources needed
+                Ok ( sourceAliases, moduleMapping2 ) ->
+                    Ok
+                        { globalEnv = env.globalEnv
+                        , index = env.index
+                        , typeAliases = Dict.union sourceAliases env.typeAliases
+                        , moduleMapping = moduleMapping2
+                        }
 
 
 reachablePackages : Dependencies -> List PackageName -> Set PackageName
@@ -709,16 +950,12 @@ reachablePackagesHelp deps queue seen =
                         reachablePackagesHelp deps (rest ++ pkg.dependencies) (Set.insert name seen)
 
 
-
--- PER-MODULE INFERENCE (internal)
-
-
 {-| What one module contributes to the modules that import it.
 -}
 type alias ModuleInterface =
     { moduleIndex : ModuleIndex
-    , values : Dict VarName TypeI.Type
-    , typeAliases : Dict GlobalKey TypeAlias
+    , exposedValues : Dict VarName TypeI.Type
+    , ownTypeAliases : Dict GlobalKey TypeAlias
     }
 
 
@@ -730,8 +967,11 @@ type alias ProjectModule =
 
 
 type alias ProjectAcc =
-    { tables : Dict ModuleName (Result Error TypeLookupTable)
+    { tables : Dict ModuleName (Result Error LookupTable)
     , interfaces : Dict ModuleId ModuleInterface
+    , sccsInTopoOrder : Maybe (List (List ModuleId))
+    , values : Dict GlobalKey TypeI.Type
+    , aliases : Dict GlobalKey TypeAlias
     }
 
 
@@ -752,10 +992,27 @@ inferOne currentPackage depEnv moduleMapping m acc =
                     )
                     Dict.empty
     in
-    case inferModule_ currentPackage depEnv moduleMapping imported m.index m.file of
+    case
+        inferModule_
+            currentPackage
+            depEnv
+            moduleMapping
+            acc.values
+            acc.aliases
+            imported
+            m.index
+            m.file
+    of
         Ok { table, interface } ->
             { tables = Dict.insert m.key (Ok table) acc.tables
             , interfaces = Dict.insert m.index.moduleId interface acc.interfaces
+            , sccsInTopoOrder = acc.sccsInTopoOrder
+            , values =
+                Dict.foldl
+                    (\name scheme inner -> Dict.insert ( m.index.moduleId, "", name ) scheme inner)
+                    acc.values
+                    interface.exposedValues
+            , aliases = Dict.union interface.ownTypeAliases acc.aliases
             }
 
         Err err ->
@@ -763,30 +1020,25 @@ inferOne currentPackage depEnv moduleMapping m acc =
             , interfaces =
                 Dict.insert m.index.moduleId
                     { moduleIndex = m.index
-                    , values = Dict.empty
-                    , typeAliases = Dict.empty
+                    , exposedValues = Dict.empty
+                    , ownTypeAliases = Dict.empty
                     }
                     acc.interfaces
+            , sccsInTopoOrder = acc.sccsInTopoOrder
+            , values = acc.values
+            , aliases = acc.aliases
             }
 
 
-
--- THE CORE
-
-
-{-| Everything a single module's inference needs, derived once from the
-`DependencyEnv` and the imported interfaces.
--}
 type alias ModuleCtx =
     { thisIndex : ModuleIndex
     , modules : Dict ModuleId ModuleIndex
     , resolver : TypeResolver
     , index : ModuleLookup.Index
     , moduleMapping : ModuleIds.Mapping
-    , -- what this module passes on to its own importers
-      inheritedAliases : Dict GlobalKey TypeAlias
-    , depTypeAliases : Dict GlobalKey TypeAlias
-    , globalEnv : Dict GlobalKey TypeI.Type
+    , -- project-wide (see `ProjectAcc`): dependencies + already inferred modules
+      aliases : Dict GlobalKey TypeAlias
+    , values : Dict GlobalKey TypeI.Type
     , allowKernel : Bool
     }
 
@@ -802,43 +1054,35 @@ allowsKernel currentPackage =
                 || String.startsWith "elm-explorations/" name
 
 
-moduleCtx : Maybe PackageName -> DependencyEnv -> ModuleIds.Mapping -> Dict ModuleId ModuleInterface -> ModuleIndex -> ModuleCtx
-moduleCtx currentPackage (DependencyEnv depEnv) moduleMapping importedInterfaces thisIndex =
+moduleCtx :
+    Maybe PackageName
+    -> DependencyEnv
+    -> ModuleIds.Mapping
+    -> Dict GlobalKey TypeI.Type
+    -> Dict GlobalKey TypeAlias
+    -> Dict ModuleId ModuleInterface
+    -> ModuleIndex
+    -> ModuleCtx
+moduleCtx currentPackage depEnv moduleMapping values aliases importedInterfaces thisIndex =
     let
         modules : Dict ModuleId ModuleIndex
         modules =
             importedInterfaces
                 |> Dict.map (\_ interface -> interface.moduleIndex)
                 |> Dict.insert thisIndex.moduleId thisIndex
-
-        imported :
-            { inheritedAliases : Dict GlobalKey TypeAlias
-            , globalEnv : Dict GlobalKey TypeI.Type
-            }
-        imported =
-            Dict.foldl
-                (\moduleId interface acc ->
-                    { inheritedAliases = Dict.union interface.typeAliases acc.inheritedAliases
-                    , globalEnv =
-                        Dict.foldl
-                            (\name scheme inner -> Dict.insert ( moduleId, "", name ) scheme inner)
-                            acc.globalEnv
-                            interface.values
-                    }
-                )
-                { inheritedAliases = Dict.empty
-                , globalEnv = depEnv.globalEnv
-                }
-                importedInterfaces
     in
     { thisIndex = thisIndex
     , modules = modules
-    , resolver = ModuleLookup.typeResolverFor moduleMapping depEnv.index modules thisIndex
+    , resolver =
+        ModuleLookup.typeResolverFor
+            moduleMapping
+            depEnv.index
+            modules
+            thisIndex
     , index = depEnv.index
     , moduleMapping = moduleMapping
-    , inheritedAliases = imported.inheritedAliases
-    , depTypeAliases = depEnv.typeAliases
-    , globalEnv = imported.globalEnv
+    , aliases = aliases
+    , values = values
     , allowKernel = allowsKernel currentPackage
     }
 
@@ -847,21 +1091,31 @@ inferModule_ :
     Maybe PackageName
     -> DependencyEnv
     -> ModuleIds.Mapping
+    -> Dict GlobalKey TypeI.Type
+    -> Dict GlobalKey TypeAlias
     -> Dict ModuleId ModuleInterface
     -> ModuleIndex
     -> File
-    -> Result Error { table : TypeLookupTable, interface : ModuleInterface }
-inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex file =
+    -> Result Error { table : LookupTable, interface : ModuleInterface }
+inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfaces thisIndex file =
     let
         ctx : ModuleCtx
         ctx =
-            moduleCtx currentPackage depEnv moduleMapping importedInterfaces thisIndex
+            moduleCtx
+                currentPackage
+                depEnv
+                moduleMapping
+                values
+                aliases
+                importedInterfaces
+                thisIndex
     in
     (State.do (gatherTypeAliases ctx file) <| \outgoingAliases ->
     let
+        -- `outgoingAliases` are only this module's own (small)
         typeAliases : Dict GlobalKey TypeAlias
         typeAliases =
-            Dict.union outgoingAliases ctx.depTypeAliases
+            Dict.union outgoingAliases ctx.aliases
     in
     State.do (registerConstructorsAndPorts ctx file) <| \() ->
     State.do (registerEffectMagic ctx) <| \() ->
@@ -869,7 +1123,7 @@ inferModule_ currentPackage depEnv moduleMapping importedInterfaces thisIndex fi
     State.do (moduleResult ctx file outgoingAliases) <| \result ->
     State.pure result
     )
-        |> State.run (State.init ctx.globalEnv)
+        |> State.run (State.init ctx.values)
         |> Tuple.first
 
 
@@ -879,10 +1133,11 @@ moduleResult :
     -> Dict GlobalKey TypeAlias
     ->
         StateM
-            { table : TypeLookupTable
+            { table : LookupTable
             , interface : ModuleInterface
             }
 moduleResult ctx file outgoingAliases =
+    State.do State.createdIdCount <| \nextId ->
     State.do State.getNodeIds <| \nodeIds ->
     State.do State.getSubst <| \substitutionMap ->
     State.do State.getGlobalEnv <| \globalEnv ->
@@ -932,24 +1187,20 @@ moduleResult ctx file outgoingAliases =
     in
     State.pure
         { table =
-            TypeLookupTable.Internal.TLT
-                { nodeIds = nodeIds
-                , subst = SubstitutionMap.forLookup substitutionMap
-                , moduleMapping = ctx.moduleMapping
-                , cache = Array.empty
-                , pool = Dict.empty
-                , annotationFor = annotationFor
-                }
+            { nodeIds = nodeIds
+            , subst = SubstitutionMap.forLookup substitutionMap
+            , moduleMapping = ctx.moduleMapping
+            , -- We preallocate so `getAllTypes` never needs to grow the array.
+              cache = Array.repeat nextId Nothing
+            , pool = Dict.empty
+            , annotationFor = annotationFor
+            }
         , interface =
             { moduleIndex = ctx.thisIndex
-            , values = exposedValues
-            , typeAliases = outgoingAliases
+            , exposedValues = exposedValues
+            , ownTypeAliases = outgoingAliases
             }
         }
-
-
-
--- SOLVING ONE MODULE'S TOP-LEVEL DECLARATIONS
 
 
 solveModule :
@@ -975,35 +1226,77 @@ solveModule ctx typeAliases file =
                     )
                     Dict.empty
 
+        referencedNamesByFunction : Dict VarName (List ( ModuleName, VarName ))
+        referencedNamesByFunction =
+            topLevelFunctions
+                |> Dict.map
+                    (\_ ( _, fn ) ->
+                        Elm.Syntax.Expression.Extra.referencedNames (Node.value (Node.value fn.declaration).expression)
+                            |> List.map (\( maybeModuleName, varName ) -> ( Maybe.withDefault [] maybeModuleName, varName ))
+                    )
+
+        resolvedVars : Dict ( ModuleName, VarName ) (Result ErrorDetails (Maybe ( PackageName, ModuleId )))
+        resolvedVars =
+            Dict.foldl
+                (\_ refs acc ->
+                    List.foldl
+                        (\(( qualifier, varName ) as ref) inner ->
+                            if Dict.member ref inner then
+                                inner
+
+                            else
+                                Dict.insert ref
+                                    (ModuleLookup.moduleOfVar
+                                        ctx.moduleMapping
+                                        ctx.index
+                                        ctx.modules
+                                        ctx.thisIndex
+                                        (FullModuleName.fromModuleName qualifier)
+                                        varName
+                                    )
+                                    inner
+                        )
+                        acc
+                        refs
+                )
+                Dict.empty
+                referencedNamesByFunction
+
         edges : VarName -> List VarName
         edges key =
-            case Dict.get key topLevelFunctions of
+            case Dict.get key referencedNamesByFunction of
                 Nothing ->
                     []
 
-                Just ( _, fn ) ->
-                    Elm.Syntax.Expression.Extra.referencedNames (Node.value (Node.value fn.declaration).expression)
+                Just refs ->
+                    refs
                         -- Resolve operator aliases to the underlying functions
                         |> List.filterMap
-                            (\( maybeModuleName, varName ) ->
-                                case ModuleLookup.moduleOfVar ctx.moduleMapping ctx.index ctx.modules ctx.thisIndex (Maybe.andThen FullModuleName.fromModuleName maybeModuleName) varName of
-                                    Ok (Just ( "", moduleId )) ->
+                            (\(( _, varName ) as ref) ->
+                                case Dict.get ref resolvedVars of
+                                    Just (Ok (Just ( "", moduleId ))) ->
                                         let
                                             ( resolvedModule, resolvedName ) =
                                                 case
-                                                    ModuleLookup.resolveOperatorFunction ctx.moduleMapping ctx.modules moduleId varName
-                                                        |> Result.withDefault Nothing
+                                                    ModuleLookup.resolveOperatorFunction
+                                                        ctx.moduleMapping
+                                                        ctx.modules
+                                                        moduleId
+                                                        varName
                                                 of
-                                                    Just resolved ->
+                                                    Ok (Just resolved) ->
                                                         resolved
 
-                                                    Nothing ->
+                                                    Ok Nothing ->
+                                                        ( moduleId, varName )
+
+                                                    Err _ ->
                                                         ( moduleId, varName )
                                         in
-                                        -- Only this module's own declarations
-                                        -- are being ordered here; everything
-                                        -- else is already in `globalEnv`.
-                                        if resolvedModule == ctx.thisIndex.moduleId && Dict.member resolvedName topLevelFunctions then
+                                        if
+                                            (resolvedModule == ctx.thisIndex.moduleId)
+                                                && Dict.member resolvedName topLevelFunctions
+                                        then
                                             Just resolvedName
 
                                         else
@@ -1025,6 +1318,7 @@ solveModule ctx typeAliases file =
             , index = ctx.index
             , allowKernel = ctx.allowKernel
             , moduleMapping = ctx.moduleMapping
+            , resolvedVars = resolvedVars
             }
     in
     sccs
@@ -1131,7 +1425,7 @@ gatherTypeAliases ctx file =
                     _ ->
                         State.pure accAcrossDeclarations
             )
-            ctx.inheritedAliases
+            Dict.empty
 
 
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()
@@ -1141,10 +1435,18 @@ registerConstructorsAndPorts ctx file =
             (\(Node _ declNode) ->
                 case declNode of
                     Declaration.CustomTypeDeclaration customType ->
-                        registerCustomType ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName customType
+                        registerCustomType
+                            ctx.resolver
+                            ctx.thisIndex.moduleId
+                            ctx.thisIndex.moduleName
+                            customType
 
                     Declaration.PortDeclaration sig ->
-                        registerPort ctx.resolver ctx.thisIndex.moduleId ctx.thisIndex.moduleName sig
+                        registerPort
+                            ctx.resolver
+                            ctx.thisIndex.moduleId
+                            ctx.thisIndex.moduleName
+                            sig
 
                     _ ->
                         State.pureUnit

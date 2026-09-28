@@ -2,6 +2,7 @@ module TypeInferenceTests exposing (suite)
 
 import Dict exposing (Dict)
 import Elm.Docs
+import Elm.Syntax.Declaration as Declaration
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Module as Module
@@ -25,17 +26,16 @@ import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
 import Tests.Elm.TypeInference.Helpers
     exposing
         ( TestError(..)
-        , buildDepEnv
+        , buildMainModuleProject
+        , buildProject
         , getDeclType
         , getDeclTypeWithDeps
         , getDeclTypeWithDirectAndDeps
         , getDeclTypeWithPackage
         , getExprType
         , getExprTypeWithDeps
-        , inferMainModule
         , parseModules
         )
-import TypeLookupTable
 
 
 suite : Test
@@ -488,73 +488,84 @@ subexpressionsSuite : Test
 subexpressionsSuite =
     Test.describe "subexpressions"
         [ Test.test "the `2` in `main = [1.0, 2]` is a Float" <| \() ->
-        """module Main exposing (main)
+        case
+            """module Main exposing (main)
 
 main = [1.0, 2]"""
-                    |> inferMainModule
-                    |> Result.map
-                        (Tuple.second
-                            >> TypeLookupTable.get
-                                { start = { row = 3, column = 14 }
-                                , end = { row = 3, column = 15 }
-                                }
-                            >> Tuple.first
-                        )
-                    |> Expect.equal (Ok (Just Float))
+                        |> buildMainModuleProject
+                of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, proj ) ->
+                        Elm.TypeInference.getType [ "Main" ]
+                            { start = { row = 3, column = 14 }
+                            , end = { row = 3, column = 15 }
+                            }
+                            proj
+                            |> Tuple.first
+                            |> Result.mapError CouldntInfer
+                            |> Expect.equal (Ok Float)
         , Test.test "a top-level function reports its function type, not its body's" <| \() ->
-        """module Main exposing (main)
+        case
+            """module Main exposing (main)
 
 main x = x"""
-                    |> inferMainModule
-                    |> Result.map
-                        (Tuple.second
-                            >> TypeLookupTable.get
-                                { start = { row = 3, column = 1 }
-                                , end = { row = 3, column = 11 }
-                                }
-                            >> Tuple.first
-                            >> Maybe.map Type.toString
-                        )
-                    |> Expect.equal (Ok (Just "a -> a"))
+                        |> buildMainModuleProject
+                of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, proj ) ->
+                        Elm.TypeInference.getType [ "Main" ]
+                            { start = { row = 3, column = 1 }
+                            , end = { row = 3, column = 11 }
+                            }
+                            proj
+                            |> Tuple.first
+                            |> Result.mapError CouldntInfer
+                            |> Result.map Type.toString
+                            |> Expect.equal (Ok "a -> a")
         ]
 
 
 rangeContractSuite : Test
 rangeContractSuite =
-    Test.describe "TypeLookupTable ranges"
+    Test.describe "getType ranges"
         [ Test.test "exact declaration range hits, shifted range misses" <| \() ->
         --     123456789
         --     main = 1
         --     ^^^^^^^^ exact declaration range (cols 1-9): hits
         --      ^^^^^^^ shifted by one column (cols 2-9): misses
         let
+            source : String
             source =
                 """module Main exposing (main)
 
 main = 1"""
                 in
-                case inferMainModule source of
+                case buildMainModuleProject source of
                     Err err ->
                         Expect.fail ("Should infer: " ++ Debug.toString err)
 
-                    Ok ( _, table ) ->
+                    Ok ( _, proj ) ->
                         Expect.all
                             [ \_ ->
-                                TypeLookupTable.get
+                                Elm.TypeInference.getType [ "Main" ]
                                     { start = { row = 3, column = 1 }
                                     , end = { row = 3, column = 9 }
                                     }
-                                    table
+                                    proj
                                     |> Tuple.first
-                                    |> Expect.notEqual Nothing
+                                    |> Expect.ok
                             , \_ ->
-                                TypeLookupTable.get
+                                Elm.TypeInference.getType [ "Main" ]
                                     { start = { row = 3, column = 2 }
                                     , end = { row = 3, column = 9 }
                                     }
-                                    table
+                                    proj
                                     |> Tuple.first
-                                    |> Expect.equal Nothing
+                                    |> expectRangeNotFound
                             ]
                             ()
         , Test.test "record-literal field-name nodes carry the field value's type" <| \() ->
@@ -564,34 +575,35 @@ main = 1"""
         --              ^             field `a` (cols 10-11)
         --                     ^      field `b` (cols 17-18; value `'x'` is cols 21-24)
         let
+            source : String
             source =
                 """module Main exposing (main)
 
 main = { a = 1, b = 'x' }"""
                 in
-                case source |> inferMainModule of
+                case source |> buildMainModuleProject of
                     Err err ->
                         Expect.fail ("Should infer: " ++ Debug.toString err)
 
-                    Ok ( _, table ) ->
+                    Ok ( _, proj ) ->
                         Expect.all
                             [ \_ ->
-                                TypeLookupTable.get
+                                Elm.TypeInference.getType [ "Main" ]
                                     { start = { row = 3, column = 10 }
                                     , end = { row = 3, column = 11 }
                                     }
-                                    table
+                                    proj
                                     |> Tuple.first
-                                    |> isNumberLike
-                                    |> Expect.equal True
+                                    |> Result.map isNumberLikeResult
+                                    |> Expect.equal (Ok True)
                             , \_ ->
-                                TypeLookupTable.get
+                                Elm.TypeInference.getType [ "Main" ]
                                     { start = { row = 3, column = 17 }
                                     , end = { row = 3, column = 18 }
                                     }
-                                    table
+                                    proj
                                     |> Tuple.first
-                                    |> Expect.equal (Just Char)
+                                    |> Expect.equal (Ok Char)
                             ]
                             ()
         , Test.test "record-update field-name nodes carry the field value's type" <| \() ->
@@ -600,24 +612,25 @@ main = { a = 1, b = 'x' }"""
         --     main rec = { rec | a = 1 }
         --                        ^       field `a` (cols 20-21; value `1` is col 24)
         let
+            source : String
             source =
                 """module Main exposing (main)
 
 main rec = { rec | a = 1 }"""
                 in
-                case source |> inferMainModule of
+                case source |> buildMainModuleProject of
                     Err err ->
                         Expect.fail ("Should infer: " ++ Debug.toString err)
 
-                    Ok ( _, table ) ->
-                        TypeLookupTable.get
+                    Ok ( _, proj ) ->
+                        Elm.TypeInference.getType [ "Main" ]
                             { start = { row = 3, column = 20 }
                             , end = { row = 3, column = 21 }
                             }
-                            table
+                            proj
                             |> Tuple.first
-                            |> isNumberLike
-                            |> Expect.equal True
+                            |> Result.map isNumberLikeResult
+                            |> Expect.equal (Ok True)
         , Test.test "signature node and signature name node share the declared type" <| \() ->
         --     00000000011
         --     12345678901
@@ -626,34 +639,35 @@ main rec = { rec | a = 1 }"""
         --     ^^^^       signature name node (row 3, cols 1-5)
         --     main = 1
         let
+            source : String
             source =
                 """module Main exposing (main)
 
 main : Int
 main = 1"""
                 in
-                case source |> inferMainModule of
+                case source |> buildMainModuleProject of
                     Err err ->
                         Expect.fail ("Should infer: " ++ Debug.toString err)
 
-                    Ok ( _, table ) ->
+                    Ok ( _, proj ) ->
                         Expect.all
                             [ \_ ->
-                                TypeLookupTable.get
+                                Elm.TypeInference.getType [ "Main" ]
                                     { start = { row = 3, column = 1 }
                                     , end = { row = 3, column = 11 }
                                     }
-                                    table
+                                    proj
                                     |> Tuple.first
-                                    |> Expect.equal (Just Int)
+                                    |> Expect.equal (Ok Int)
                             , \_ ->
-                                TypeLookupTable.get
+                                Elm.TypeInference.getType [ "Main" ]
                                     { start = { row = 3, column = 1 }
                                     , end = { row = 3, column = 5 }
                                     }
-                                    table
+                                    proj
                                     |> Tuple.first
-                                    |> Expect.equal (Just Int)
+                                    |> Expect.equal (Ok Int)
                             ]
                             ()
         , Test.test "custom-type declaration nodes have no entry" <| \() ->
@@ -661,42 +675,72 @@ main = 1"""
         --     123456789012345
         --     type Box = Box
         --     ^^^^^^^^^^^^^^ declaration node (row 3, cols 1-15): misses
-        """module Main exposing (main)
+        case
+            """module Main exposing (main)
 
 type Box = Box
 
 main = 1"""
-                    |> inferMainModule
-                    |> Result.map
-                        (Tuple.second
-                            >> TypeLookupTable.get
-                                { start = { row = 3, column = 1 }
-                                , end = { row = 3, column = 15 }
-                                }
-                            >> Tuple.first
-                        )
-                    |> Expect.equal (Ok Nothing)
+                        |> buildMainModuleProject
+                of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, proj ) ->
+                        Elm.TypeInference.getType [ "Main" ]
+                            { start = { row = 3, column = 1 }
+                            , end = { row = 3, column = 15 }
+                            }
+                            proj
+                            |> Tuple.first
+                            |> Result.mapError .details
+                            |> Expect.equal (Err RangeNotFound)
         , Test.test "type-alias declaration nodes have no entry" <| \() ->
         --     00000000011111111112222222222
         --     12345678901234567890123456789
         --     type alias Foo = { a : Int }
         --     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ declaration node (row 3, cols 1-29): misses
-        """module Main exposing (main)
+        case
+            """module Main exposing (main)
 
 type alias Foo = { a : Int }
 
 main = 1"""
-                    |> inferMainModule
-                    |> Result.map
-                        (Tuple.second
-                            >> TypeLookupTable.get
-                                { start = { row = 3, column = 1 }
-                                , end = { row = 3, column = 29 }
-                                }
-                            >> Tuple.first
-                        )
-                    |> Expect.equal (Ok Nothing)
+                        |> buildMainModuleProject
+                of
+                    Err err ->
+                        Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                    Ok ( _, proj ) ->
+                        Elm.TypeInference.getType [ "Main" ]
+                            { start = { row = 3, column = 1 }
+                            , end = { row = 3, column = 29 }
+                            }
+                            proj
+                            |> Tuple.first
+                            |> Result.mapError .details
+                            |> Expect.equal (Err RangeNotFound)
         ]
+
+
+expectRangeNotFound : Result Error a -> Expect.Expectation
+expectRangeNotFound result =
+    case result of
+        Err err ->
+            Expect.equal err.details RangeNotFound
+
+        Ok _ ->
+            Expect.fail ("Expected RangeNotFound, got Ok: " ++ Debug.toString result)
+
+
+isNumberLikeResult : Type -> Bool
+isNumberLikeResult type_ =
+    case type_ of
+        Type.TypeVar name ->
+            String.startsWith "number" name
+
+        _ ->
+            False
 
 
 publicBoundarySuite : Test
@@ -786,16 +830,6 @@ publicSurfaceLeakSuite =
         )
 
 
-isNumberLike : Maybe Type -> Bool
-isNumberLike maybeType =
-    case maybeType of
-        Just (Type.TypeVar name) ->
-            String.startsWith "number" name
-
-        _ ->
-            False
-
-
 largeInputsSuite : Test
 largeInputsSuite =
     Test.describe "large inputs"
@@ -811,7 +845,7 @@ main =
     ]
 """
                 )
-                    |> inferMainModule
+                    |> buildMainModuleProject
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
         , Test.test "a large list of large records doesn't blow the stack" <| \() ->
@@ -834,7 +868,7 @@ main =
     ]
 """
                 )
-                    |> inferMainModule
+                    |> buildMainModuleProject
                     |> Result.map (always ())
                     |> Expect.equal (Ok ())
         ]
@@ -897,7 +931,7 @@ main =
             |> Expect.equal (Ok "a -> ( ( a, a ), ( a, a ) )")
         , Test.test "doubling chain up to n = 4 (256 leaves) still infers quickly" <| \() ->
         doublingChainSource 4
-            |> inferMainModule
+            |> buildMainModuleProject
             |> Result.map (always ())
             |> Expect.equal (Ok ())
         ]
@@ -1725,6 +1759,76 @@ main = List.Extra.last
                 getDeclTypeWithDirectAndDeps
                     [ "elmcraft/core-extra", "folkertdev/one-true-path-experiment" ]
                     [ coreExtra, listExtra, onePathExperiment ]
+                    modules
+                    [ "Main" ]
+                    "main"
+                    |> Result.map (always ())
+                    |> Expect.equal (Ok ())
+        , Test.test "unreachable packages are pruned before registering deps (P1: same module in reachable and unreachable packages isn't ambiguous, and broken unreachable docs don't fail the build)" <| \() ->
+        let
+            reachablePkg : Dependency
+            reachablePkg =
+                { name = "author/reachable"
+                , dependencies = []
+                , modules =
+                    [ { name = "Shared"
+                      , comment = ""
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "greet"
+                              , comment = ""
+                              , tipe = Elm.Type.Type "Basics.Int" []
+                              }
+                            ]
+                      , binops = []
+                      }
+                    ]
+                }
+
+            unreachablePkg : Dependency
+            unreachablePkg =
+                { name = "author/unreachable"
+                , dependencies = []
+                , modules =
+                    [ { name = "Shared"
+                      , comment = ""
+                      , unions = []
+                      , aliases = []
+                      , values =
+                            [ { name = "greet"
+                              , comment = ""
+                              , tipe =
+                                    -- 4-tuples are impossible in docs.json;
+                                    -- registering this package must fail,
+                                    -- so reaching `Ok` proves it was pruned.
+                                    Elm.Type.Tuple
+                                        [ Elm.Type.Type "Basics.Int" []
+                                        , Elm.Type.Type "Basics.Int" []
+                                        , Elm.Type.Type "Basics.Int" []
+                                        , Elm.Type.Type "Basics.Int" []
+                                        ]
+                              }
+                            ]
+                      , binops = []
+                      }
+                    ]
+                }
+
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ]
+                    """
+module Main exposing (main)
+
+import Shared
+
+main = Shared.greet
+"""
+                in
+                getDeclTypeWithDirectAndDeps
+                    [ "author/reachable" ]
+                    [ reachablePkg, unreachablePkg ]
                     modules
                     [ "Main" ]
                     "main"
@@ -3968,7 +4072,7 @@ effectSuite =
 
 
 
--- LAZY PROJECT (Project / inferModule)
+-- LAZY PROJECT (Project / getType)
 
 
 lazyProjectFixture : Dict ModuleName String
@@ -4019,129 +4123,176 @@ lazyProjectFixture =
 
 {-| `Main` imports `B` which imports `A`; `Broken` isn't imported by anyone.
 -}
+lazyProjectFiles : Result TestError (Dict ModuleName File)
+lazyProjectFiles =
+    parseModules lazyProjectFixture
+
+
 lazyProject : Result TestError Elm.TypeInference.Project
 lazyProject =
-    parseModules lazyProjectFixture
+    lazyProjectFiles
         |> Result.andThen
             (\files ->
-                buildDepEnv [] []
-                    |> Result.andThen
-                        (\depEnv ->
-                            Elm.TypeInference.project Nothing depEnv files
-                                |> Result.mapError CouldntInfer
-                        )
+                buildProject Nothing [] [] files
             )
+
+
+{-| Find a top-level function declaration's `Range` in parsed files.
+-}
+lazyDeclRange : Dict ModuleName File -> ModuleName -> String -> Maybe Range
+lazyDeclRange files moduleName declName =
+    Dict.get moduleName files
+        |> Maybe.andThen
+            (\file ->
+                file.declarations
+                    |> List.filterMap
+                        (\(Node.Node range decl) ->
+                            case decl of
+                                Declaration.FunctionDeclaration fn ->
+                                    let
+                                        name : String
+                                        name =
+                                            fn.declaration |> Node.value |> .name |> Node.value
+                                    in
+                                    if name == declName then
+                                        Just range
+
+                                    else
+                                        Nothing
+
+                                _ ->
+                                    Nothing
+                        )
+                    |> List.head
+            )
+
+
+withLazyProject : (Dict ModuleName File -> Elm.TypeInference.Project -> Expect.Expectation) -> Expect.Expectation
+withLazyProject toExpectation =
+    case ( lazyProjectFiles, lazyProject ) of
+        ( Ok files, Ok proj ) ->
+            toExpectation files proj
+
+        ( Err err, _ ) ->
+            Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
+
+        ( _, Err err ) ->
+            Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+
+
+lazyGetType : Dict ModuleName File -> Elm.TypeInference.Project -> ModuleName -> String -> ( Result Error Type, Elm.TypeInference.Project )
+lazyGetType files proj moduleName declName =
+    case lazyDeclRange files moduleName declName of
+        Nothing ->
+            ( Err
+                { moduleName = moduleName
+                , declarationNames = []
+                , details = RangeNotFound
+                }
+            , proj
+            )
+
+        Just range ->
+            Elm.TypeInference.getType moduleName range proj
 
 
 lazyProjectSuite : Test
 lazyProjectSuite =
-    Test.describe "Lazy per-module preparation (Project / inferModule)"
-        [ Test.test "inferModule succeeds for a module whose closure type-checks, even though an unrelated module in the project fails to" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj ->
-                Elm.TypeInference.inferModule [ "Main" ] proj
+    Test.describe "Lazy per-module inference (Project / getType)"
+        [ Test.test "getType succeeds for a module whose closure type-checks, even though an unrelated module in the project fails to" <| \() ->
+        withLazyProject
+            (\files proj ->
+                lazyGetType files proj [ "Main" ] "main"
                     |> Tuple.first
                     |> Expect.ok
-        , Test.test "inferModule surfaces the target module's own error" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj ->
-                Elm.TypeInference.inferModule [ "Broken" ] proj
+            )
+        , Test.test "getType surfaces the target module's own error" <| \() ->
+        withLazyProject
+            (\files proj ->
+                lazyGetType files proj [ "Broken" ] "bad"
                     |> Tuple.first
                     |> Expect.err
-        , Test.test "inferModule on a module not in the project fails with ModuleNotFound" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj ->
-                case Elm.TypeInference.inferModule [ "DoesNotExist" ] proj |> Tuple.first of
+            )
+        , Test.test "getType on a module not in the project fails with ModuleNotFound" <| \() ->
+        withLazyProject
+            (\_ proj ->
+                case Elm.TypeInference.getType [ "DoesNotExist" ] dummyRange proj |> Tuple.first of
                     Err error ->
                         Expect.equal error.details ModuleNotFound
 
                     Ok _ ->
                         Expect.fail "Expected an error"
-        , Test.test "inferModule threads the updated Project: preparing a leaf first doesn't prevent preparing its importer next" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj0 ->
+            )
+        , Test.test "getType threads the updated Project: querying a leaf first doesn't prevent querying its importer next" <| \() ->
+        withLazyProject
+            (\files proj0 ->
                 let
                     ( aResult, proj1 ) =
-                        Elm.TypeInference.inferModule [ "A" ] proj0
+                        lazyGetType files proj0 [ "A" ] "value"
 
                     ( mainResult, _ ) =
-                        Elm.TypeInference.inferModule [ "Main" ] proj1
+                        lazyGetType files proj1 [ "Main" ] "main"
                 in
                 Expect.all
                     [ \() -> aResult |> Expect.ok
                     , \() -> mainResult |> Expect.ok
                     ]
                     ()
-        , Test.test "preparing the same module twice is idempotent" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj0 ->
+            )
+        , Test.test "querying the same module twice is idempotent" <| \() ->
+        withLazyProject
+            (\files proj0 ->
                 let
                     ( firstResult, proj1 ) =
-                        Elm.TypeInference.inferModule [ "Main" ] proj0
+                        lazyGetType files proj0 [ "Main" ] "main"
 
                     ( secondResult, _ ) =
-                        Elm.TypeInference.inferModule [ "Main" ] proj1
+                        lazyGetType files proj1 [ "Main" ] "main"
                 in
                 Expect.all
                     [ \() -> firstResult |> Expect.ok
                     , \() -> secondResult |> Expect.ok
                     ]
                     ()
-        , Test.test "preparing every module of a project, in any order, yields the same set of successes/failures" <| \() ->
-        case ( parseModules lazyProjectFixture, buildDepEnv [] [] ) of
-            ( Ok files, Ok depEnv ) ->
+            )
+        , Test.test "querying every module of a project, in any order, yields the same set of successes/failures" <| \() ->
+        case lazyProjectFiles of
+            Err err ->
+                Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
+
+            Ok files ->
                 let
-                    prepareAllInOrder : List ModuleName -> ( List ModuleName, List ModuleName )
-                    prepareAllInOrder moduleNames =
-                        case Elm.TypeInference.project Nothing depEnv files of
+                    queryAllInOrder : List ( ModuleName, String ) -> ( List ( ModuleName, String ), List ( ModuleName, String ) )
+                    queryAllInOrder decls =
+                        case buildProject Nothing [] [] files of
                             Err _ ->
                                 ( [], [] )
 
                             Ok proj0 ->
-                                moduleNames
+                                decls
                                     |> List.foldl
-                                        (\moduleName ( oks, errs, proj ) ->
-                                            case Elm.TypeInference.inferModule moduleName proj of
+                                        (\( moduleName, declName ) ( oks, errs, proj ) ->
+                                            case lazyGetType files proj moduleName declName of
                                                 ( Ok _, newProj ) ->
-                                                    ( moduleName :: oks, errs, newProj )
+                                                    ( ( moduleName, declName ) :: oks, errs, newProj )
 
                                                 ( Err _, newProj ) ->
-                                                    ( oks, moduleName :: errs, newProj )
+                                                    ( oks, ( moduleName, declName ) :: errs, newProj )
                                         )
                                         ( [], [], proj0 )
                                     |> (\( oks, errs, _ ) -> ( List.sort oks, List.sort errs ))
 
-                    forwardOrder : List ModuleName
+                    forwardOrder : List ( ModuleName, String )
                     forwardOrder =
-                        [ [ "A" ], [ "B" ], [ "Main" ], [ "Broken" ] ]
+                        [ ( [ "A" ], "value" ), ( [ "B" ], "fromA" ), ( [ "Main" ], "main" ), ( [ "Broken" ], "bad" ) ]
                 in
-                prepareAllInOrder forwardOrder
-                    |> Expect.equal (prepareAllInOrder (List.reverse forwardOrder))
-
-            _ ->
-                Expect.fail "Couldn't parse fixture or build dependency env"
-        , Test.test "addFile clears a stale error: fixing a broken module lets it succeed on the next inferModule call" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj0 ->
+                queryAllInOrder forwardOrder
+                    |> Expect.equal (queryAllInOrder (List.reverse forwardOrder))
+        , Test.test "addFile clears a stale error: fixing a broken module lets it succeed on the next getType call" <| \() ->
+        withLazyProject
+            (\files proj0 ->
                 let
+                    brokenSource : String
                     brokenSource =
                         """module Broken exposing (bad)
 
@@ -4154,15 +4305,15 @@ bad =
                             Err err ->
                                 Expect.fail ("Couldn't parse replacement Broken: " ++ Debug.toString err)
 
-                            Ok files ->
-                                case List.head files of
+                            Ok replacementFiles ->
+                                case Dict.get [ "Broken" ] replacementFiles of
                                     Nothing ->
                                         Expect.fail "Couldn't find the parsed replacement Broken file"
 
                                     Just brokenFile ->
                                         let
                                             ( beforeResult, proj1 ) =
-                                                Elm.TypeInference.inferModule [ "Broken" ] proj0
+                                                lazyGetType files proj0 [ "Broken" ] "bad"
                                         in
                                         case Elm.TypeInference.addFile brokenFile proj1 of
                                             Err err ->
@@ -4170,21 +4321,24 @@ bad =
 
                                             Ok proj2 ->
                                                 let
+                                                    newFiles : Dict ModuleName File
+                                                    newFiles =
+                                                        Dict.insert [ "Broken" ] brokenFile files
+
                                                     ( afterResult, _ ) =
-                                                        Elm.TypeInference.inferModule [ "Broken" ] proj2
+                                                        lazyGetType newFiles proj2 [ "Broken" ] "bad"
                                                 in
                                                 Expect.all
                                                     [ \() -> beforeResult |> Expect.err
                                                     , \() -> afterResult |> Expect.ok
                                                     ]
                                                     ()
+                    )
         , Test.test "addFile invalidates importers: changing an imported module's exposed type flips its importer's result" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj0 ->
+        withLazyProject
+            (\files proj0 ->
                 let
+                    aSource : String
                     aSource =
                         """module A exposing (value)
 
@@ -4197,15 +4351,15 @@ value =
                             Err err ->
                                 Expect.fail ("Couldn't parse replacement A: " ++ Debug.toString err)
 
-                            Ok files ->
-                                case List.head files of
+                            Ok replacementFiles ->
+                                case Dict.get [ "A" ] replacementFiles of
                                     Nothing ->
                                         Expect.fail "Couldn't find the parsed replacement A file"
 
                                     Just aFile ->
                                         let
                                             ( beforeResult, proj1 ) =
-                                                Elm.TypeInference.inferModule [ "Main" ] proj0
+                                                lazyGetType files proj0 [ "Main" ] "main"
                                         in
                                         case Elm.TypeInference.addFile aFile proj1 of
                                             Err err ->
@@ -4213,26 +4367,74 @@ value =
 
                                             Ok proj2 ->
                                                 let
+                                                    newFiles : Dict ModuleName File
+                                                    newFiles =
+                                                        Dict.insert [ "A" ] aFile files
+
                                                     ( afterResult, _ ) =
-                                                        Elm.TypeInference.inferModule [ "Main" ] proj2
+                                                        lazyGetType newFiles proj2 [ "Main" ] "main"
                                                 in
                                                 Expect.all
                                                     [ \() -> beforeResult |> Expect.ok
                                                     , \() -> afterResult |> Expect.err
                                                     ]
                                                     ()
-        , Test.test "addFile fails with MissingModuleName for a file with an empty module name" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+                    )
+        , Test.test "addFile invalidates importers: an imported module that starts failing doesn't leave its old exposed types behind" <| \() ->
+        withLazyProject
+            (\files proj0 ->
+                let
+                    aSource : String
+                    aSource =
+                        """module A exposing (value)
 
-            Ok proj0 ->
+value : Int
+value =
+    "now broken"
+"""
+                        in
+                        case parseModules (Dict.singleton [ "A" ] aSource) of
+                            Err err ->
+                                Expect.fail ("Couldn't parse replacement A: " ++ Debug.toString err)
+
+                            Ok replacementFiles ->
+                                case Dict.get [ "A" ] replacementFiles of
+                                    Nothing ->
+                                        Expect.fail "Couldn't find the parsed replacement A file"
+
+                                    Just aFile ->
+                                        let
+                                            ( beforeResult, proj1 ) =
+                                                lazyGetType files proj0 [ "B" ] "fromA"
+                                        in
+                                        case Elm.TypeInference.addFile aFile proj1 of
+                                            Err err ->
+                                                Expect.fail ("addFile failed: " ++ Debug.toString err)
+
+                                            Ok proj2 ->
+                                                let
+                                                    newFiles : Dict ModuleName File
+                                                    newFiles =
+                                                        Dict.insert [ "A" ] aFile files
+
+                                                    ( afterResult, _ ) =
+                                                        lazyGetType newFiles proj2 [ "B" ] "fromA"
+                                                in
+                                                Expect.all
+                                                    [ \() -> beforeResult |> Expect.ok
+                                                    , \() -> afterResult |> Expect.err
+                                                    ]
+                                                    ()
+                    )
+        , Test.test "addFile fails with MissingModuleName for a file with an empty module name" <| \() ->
+        withLazyProject
+            (\_ proj0 ->
                 case parseModules (Dict.singleton [ "A" ] "module A exposing (value)\n\nvalue : Int\nvalue =\n    1\n") of
                     Err err ->
                         Expect.fail ("Couldn't parse A: " ++ Debug.toString err)
 
-                    Ok files ->
-                        case List.head files of
+                    Ok replacementFiles ->
+                        case Dict.get [ "A" ] replacementFiles of
                             Nothing ->
                                 Expect.fail "Couldn't find the parsed A file"
 
@@ -4243,40 +4445,37 @@ value =
 
                                     Ok _ ->
                                         Expect.fail "Expected an error"
-        , Test.test "removeFile invalidates importers: removing an imported module breaks its importers on the next inferModule call" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj0 ->
+            )
+        , Test.test "removeFile invalidates importers: removing an imported module breaks its importers on the next getType call" <| \() ->
+        withLazyProject
+            (\files proj0 ->
                 let
                     ( beforeResult, proj1 ) =
-                        Elm.TypeInference.inferModule [ "Main" ] proj0
+                        lazyGetType files proj0 [ "Main" ] "main"
 
                     proj2 : Elm.TypeInference.Project
                     proj2 =
                         Elm.TypeInference.removeFile [ "A" ] proj1
 
                     ( afterResult, _ ) =
-                        Elm.TypeInference.inferModule [ "Main" ] proj2
+                        lazyGetType files proj2 [ "Main" ] "main"
                 in
                 Expect.all
                     [ \() -> beforeResult |> Expect.ok
                     , \() -> afterResult |> Expect.err
                     ]
                     ()
+            )
         , Test.test "removeFile is a no-op for a module that isn't in the project" <| \() ->
-        case lazyProject of
-            Err err ->
-                Expect.fail ("Couldn't build project: " ++ Debug.toString err)
-
-            Ok proj0 ->
+        withLazyProject
+            (\files proj0 ->
                 Elm.TypeInference.removeFile [ "DoesNotExist" ] proj0
-                    |> Elm.TypeInference.inferModule [ "Main" ]
-                    |> Tuple.first
+                    |> (\proj -> lazyGetType files proj [ "Main" ] "main" |> Tuple.first)
                     |> Expect.ok
+            )
         , Test.test "addFile invalidates modules that were already pending on the newly-added name" <| \() ->
         let
+            needsCSource : String
             needsCSource =
                 """module NeedsC exposing (result)
 
@@ -4287,14 +4486,18 @@ result =
     C.thing
 """
                 in
-                case ( parseModules (Dict.singleton [ "NeedsC" ] needsCSource), buildDepEnv [] [] ) of
-                    ( Ok files, Ok depEnv ) ->
-                        case Elm.TypeInference.project Nothing depEnv files of
+                case parseModules (Dict.singleton [ "NeedsC" ] needsCSource) of
+                    Err err ->
+                        Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
+
+                    Ok needsCFiles ->
+                        case buildProject Nothing [] [] needsCFiles of
                             Err err ->
                                 Expect.fail ("Couldn't build project: " ++ Debug.toString err)
 
                             Ok proj0 ->
                                 let
+                                    cSource : String
                                     cSource =
                                         """module C exposing (thing)
 
@@ -4308,14 +4511,14 @@ thing =
                                         Expect.fail ("Couldn't parse C: " ++ Debug.toString err)
 
                                     Ok cFiles ->
-                                        case List.head cFiles of
+                                        case Dict.get [ "C" ] cFiles of
                                             Nothing ->
                                                 Expect.fail "Couldn't find the parsed C file"
 
                                             Just cFile ->
                                                 let
                                                     ( beforeResult, proj1 ) =
-                                                        Elm.TypeInference.inferModule [ "NeedsC" ] proj0
+                                                        lazyGetType needsCFiles proj0 [ "NeedsC" ] "result"
                                                 in
                                                 case Elm.TypeInference.addFile cFile proj1 of
                                                     Err err ->
@@ -4323,18 +4526,61 @@ thing =
 
                                                     Ok proj2 ->
                                                         let
+                                                            allFiles : Dict ModuleName File
+                                                            allFiles =
+                                                                Dict.union cFiles needsCFiles
+
                                                             ( afterResult, _ ) =
-                                                                Elm.TypeInference.inferModule [ "NeedsC" ] proj2
+                                                                lazyGetType allFiles proj2 [ "NeedsC" ] "result"
                                                         in
                                                         Expect.all
                                                             [ \() -> beforeResult |> Expect.err
                                                             , \() -> afterResult |> Expect.ok
                                                             ]
                                                             ()
+        , Test.test "getAllTypes agrees with per-range getType" <| \() ->
+        withLazyProject
+            (\_ proj0 ->
+                case Elm.TypeInference.getAllTypes [ "Main" ] proj0 of
+                    ( Err err, _ ) ->
+                        Expect.fail ("getAllTypes failed: " ++ Debug.toString err)
 
-                    _ ->
-                        Expect.fail "Couldn't parse fixture or build dependency env"
+                    ( Ok pairs, proj1 ) ->
+                        let
+                            checkPair : ( Range, Type ) -> (() -> Expect.Expectation)
+                            checkPair ( range, bulkType ) =
+                                \() ->
+                                    case Elm.TypeInference.getType [ "Main" ] range proj1 |> Tuple.first of
+                                        Ok sparseType ->
+                                            Expect.equal (Type.toString sparseType) (Type.toString bulkType)
+
+                                        Err err ->
+                                            Expect.fail ("sparse getType failed: " ++ Debug.toString err)
+                        in
+                        Expect.all
+                            ((\() -> Expect.equal True (not (List.isEmpty pairs)))
+                                :: List.map checkPair pairs
+                            )
+                            ()
+            )
+        , Test.test "getAllTypes on a missing module fails with ModuleNotFound" <| \() ->
+        withLazyProject
+            (\_ proj ->
+                case Elm.TypeInference.getAllTypes [ "DoesNotExist" ] proj |> Tuple.first of
+                    Err error ->
+                        Expect.equal error.details ModuleNotFound
+
+                    Ok _ ->
+                        Expect.fail "Expected an error"
+            )
         ]
+
+
+dummyRange : Range
+dummyRange =
+    { start = { row = 1, column = 1 }
+    , end = { row = 1, column = 1 }
+    }
 
 
 withEmptyModuleName : File -> File

@@ -1,4 +1,4 @@
-module RangeLike exposing (RangeLike, fromRange)
+module RangeLike exposing (RangeLike, fromRange, toRange)
 
 {-| -}
 
@@ -22,3 +22,19 @@ fromRange { start, end } =
     ( Bitwise.shiftLeftBy 16 start.row + start.column
     , Bitwise.shiftLeftBy 16 end.row + end.column
     )
+
+
+{-| Inverse of `fromRange`.
+-}
+toRange : RangeLike -> Range
+toRange ( start, end ) =
+    { start = unpackPos start
+    , end = unpackPos end
+    }
+
+
+unpackPos : Int -> { row : Int, column : Int }
+unpackPos pos =
+    { row = Bitwise.shiftRightBy 16 pos
+    , column = Bitwise.and 0xFFFF pos
+    }

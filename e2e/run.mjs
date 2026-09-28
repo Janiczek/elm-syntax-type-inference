@@ -391,31 +391,30 @@ function runLazy(flags, versions) {
   let rounds = 0;
 
   // Benchmark state.
-  //   `inferenceStarted`..`inferenceStopped`   -- Elm.TypeInference.inferProject
-  //   `resolutionStarted`..`resolutionStopped` -- TypeLookupTable.get on every node
-  let inferenceStart = null;
-  let inferenceStop = null;
-  let resolutionStart = null;
-  let resolutionStop = null;
+  //   `projectStarted`..`projectStopped`     -- Elm.TypeInference.init
+  //   `projectStopped`..`allTypesStopped`    -- Elm.TypeInference.getAllTypes on every module
+  let projectStart = null;
+  let projectStop = null;
+  let awaitingAllTypes = false;
+  let allTypesStop = null;
   let finalResult = null;
   const outcome = new Promise((resolve) => {
     const cleanup = () => {
       app.ports.result.unsubscribe(onResult);
       app.ports.requestPackageSources.unsubscribe(onSourcesRequest);
-      app.ports.inferenceStarted.unsubscribe(onInferenceStarted);
-      app.ports.inferenceStopped.unsubscribe(onInferenceStopped);
-      app.ports.resolutionStarted.unsubscribe(onResolutionStarted);
-      app.ports.resolutionStopped.unsubscribe(onResolutionStopped);
+      app.ports.projectStarted.unsubscribe(onProjectStarted);
+      app.ports.projectStopped.unsubscribe(onProjectStopped);
+      app.ports.allTypesStopped.unsubscribe(onAllTypesStopped);
     };
     const maybeFinish = () => {
       // `result` may arrive before the phase-end ports, wait for all of them.
-      const timed = inferenceStart === null || (inferenceStop !== null && resolutionStop !== null);
+      const timed = projectStart === null || (projectStop !== null && (!awaitingAllTypes || allTypesStop !== null));
       if (finalResult !== null && timed) {
         cleanup();
         resolve({
           result: finalResult,
-          inferenceMs: inferenceStop !== null ? inferenceStop - inferenceStart : null,
-          resolutionMs: resolutionStop !== null ? resolutionStop - resolutionStart : null,
+          projectMs: projectStop !== null ? projectStop - projectStart : null,
+          allTypesMs: awaitingAllTypes && allTypesStop !== null ? allTypesStop - projectStop : 0,
         });
       }
     };
@@ -443,8 +442,8 @@ function runLazy(flags, versions) {
             ok: false,
             error: `could not load package sources for: ${JSON.stringify(requests)}`,
           },
-          inferenceMs: null,
-          resolutionMs: null,
+          projectMs: null,
+          allTypesMs: null,
         });
         return;
       }
@@ -464,35 +463,35 @@ function runLazy(flags, versions) {
         cleanup();
         resolve({
           result: { ok: false, error: formatError(e) },
-          inferenceMs: null,
-          resolutionMs: null,
+          projectMs: null,
+          allTypesMs: null,
         });
       });
     };
-    const onInferenceStarted = () => {
-      inferenceStart = nowMs();
-      inferenceStop = null;
-      app.ports.beginInference.send(null);
+    const onProjectStarted = () => {
+      projectStart = nowMs();
+      projectStop = null;
+      awaitingAllTypes = false;
+      app.ports.beginProject.send(null);
     };
-    const onInferenceStopped = () => {
-      inferenceStop = nowMs();
+    const onProjectStopped = (ok) => {
+      projectStop = nowMs();
+      if (ok === true) {
+        awaitingAllTypes = true;
+        allTypesStop = null;
+        app.ports.beginAllTypes.send(null);
+      }
       maybeFinish();
     };
-    const onResolutionStarted = () => {
-      resolutionStart = nowMs();
-      resolutionStop = null;
-      app.ports.beginResolution.send(null);
-    };
-    const onResolutionStopped = () => {
-      resolutionStop = nowMs();
+    const onAllTypesStopped = () => {
+      allTypesStop = nowMs();
       maybeFinish();
     };
     app.ports.result.subscribe(onResult);
     app.ports.requestPackageSources.subscribe(onSourcesRequest);
-    app.ports.inferenceStarted.subscribe(onInferenceStarted);
-    app.ports.inferenceStopped.subscribe(onInferenceStopped);
-    app.ports.resolutionStarted.subscribe(onResolutionStarted);
-    app.ports.resolutionStopped.subscribe(onResolutionStopped);
+    app.ports.projectStarted.subscribe(onProjectStarted);
+    app.ports.projectStopped.subscribe(onProjectStopped);
+    app.ports.allTypesStopped.subscribe(onAllTypesStopped);
   });
   return { app, outcome };
 }
@@ -546,13 +545,13 @@ async function runTest(name) {
 
     const start = process.hrtime.bigint();
     const { app, outcome } = runLazy(flags, versions);
-    const { result, inferenceMs, resolutionMs } = await outcome;
+    const { result, projectMs, allTypesMs } = await outcome;
     const wallSeconds = Number(process.hrtime.bigint() - start) / 1e9;
-    const inferenceSeconds = inferenceMs !== null ? inferenceMs / 1000 : wallSeconds;
-    const resolutionSeconds = resolutionMs !== null ? resolutionMs / 1000 : 0;
+    const projectSeconds = projectMs !== null ? projectMs / 1000 : wallSeconds;
+    const allTypesSeconds = allTypesMs !== null ? allTypesMs / 1000 : 0;
 
     const passed = result.ok === (expected.expect === "pass");
-    const report = { name, expected, result, passed, inferenceSeconds, resolutionSeconds };
+    const report = { name, expected, result, passed, projectSeconds, allTypesSeconds };
     printReport(report);
 
     // Outside benchmarked time: only on success ask Elm to serialize
@@ -580,7 +579,7 @@ async function runTest(name) {
     // e.g. dependency solver found no valid solution
     // report as failure and let the suite continue.
     const result = { ok: false, error: formatError(e) };
-    const report = { name, expected, result, passed: false, inferenceSeconds: 0, resolutionSeconds: 0 };
+    const report = { name, expected, result, passed: false, projectSeconds: 0, allTypesSeconds: 0 };
     printReport(report);
     return report;
   }
@@ -591,11 +590,11 @@ function csvEscape(value) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-function printReport({ name, expected, result, passed, inferenceSeconds, resolutionSeconds }) {
+function printReport({ name, expected, result, passed, projectSeconds, allTypesSeconds }) {
   const actual = result.ok ? "pass" : "fail";
-  const totalSeconds = inferenceSeconds + resolutionSeconds;
-  const inferenceMs = inferenceSeconds * 1000;
-  const resolutionMs = resolutionSeconds * 1000;
+  const totalSeconds = projectSeconds + allTypesSeconds;
+  const projectMs = projectSeconds * 1000;
+  const allTypesMs = allTypesSeconds * 1000;
   const totalMs = totalSeconds * 1000;
   if (config.csv) {
     const rawError = result.ok ? "" : (result.error ?? "");
@@ -607,16 +606,20 @@ function printReport({ name, expected, result, passed, inferenceSeconds, resolut
         actual,
         passed,
         totalMs.toFixed(2),
-        inferenceMs.toFixed(2),
-        resolutionMs.toFixed(2),
+        projectMs.toFixed(2),
+        allTypesMs.toFixed(2),
         error,
       ].map(csvEscape).join(",")
     );
     return;
   }
   const suffix = passed ? "" : `  (expected: ${expected.expect}, actual: ${actual})`;
-  const split = `${inferenceMs.toFixed(2)}ms infer + ${resolutionMs.toFixed(2)}ms resolve`;
+  const split = `${projectMs.toFixed(2)}ms project + ${allTypesMs.toFixed(2)}ms all-types`;
   console.log(`${name} ${passed ? "✓ PASS" : "✗ FAIL"} (${totalMs.toFixed(2)}ms = ${split})${suffix}`);
+
+  if (result.rangeCount !== undefined) {
+    console.log(`    ranges=${result.rangeCount}`);
+  }
 
   if (!result.ok && result.error) {
     console.log(`    error: ${result.error}`);
@@ -625,7 +628,7 @@ function printReport({ name, expected, result, passed, inferenceSeconds, resolut
 
 function printCsvHeader() {
   if (config.csv && !config.asShard) {
-    console.log("test,expected,actual,passed,total ms,inference ms,resolution ms,error");
+    console.log("test,expected,actual,passed,total ms,project ms,all types ms,error");
   }
 }
 
@@ -672,8 +675,8 @@ async function main() {
         expected: { expect: "?" },
         result: { ok: false, error: formatError(e) },
         passed: false,
-        inferenceSeconds: 0,
-        resolutionSeconds: 0,
+        projectSeconds: 0,
+        allTypesSeconds: 0,
       });
     }
   }

@@ -32,8 +32,7 @@ import Elm.TypeInference.Type.Internal as TypeI
         , MonoType(..)
         , Type(..)
         )
-import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar, TypeVarStyle(..))
-import Elm.TypeInference.VarSet as VarSet exposing (NamedKey)
+import Elm.TypeInference.TypeVar as TypeVar exposing (NamedKey, TypeVar, TypeVarStyle(..))
 
 
 type alias SubstitutionMap =
@@ -62,7 +61,7 @@ empty =
     }
 
 
-{-| Prepare for TypeLookupTable: drop state `substitute*` doesn't need.
+{-| Prepare for lookup: drop state `substitute*` doesn't need.
 -}
 forLookup : SubstitutionMap -> SubstitutionMap
 forLookup store =
@@ -103,7 +102,7 @@ getSlot ( style, super ) store =
                 |> Maybe.andThen identity
 
         Named name ->
-            Dict.get (VarSet.namedKeyFrom name super) store.slotsNamed
+            Dict.get (TypeVar.namedKeyFrom name super) store.slotsNamed
 
 
 insertSlot : TypeVar -> Slot -> SubstitutionMap -> SubstitutionMap
@@ -118,7 +117,7 @@ insertSlot ( style, super ) slot store =
             }
 
         Named name ->
-            { slotsNamed = Dict.insert (VarSet.namedKeyFrom name super) slot store.slotsNamed
+            { slotsNamed = Dict.insert (TypeVar.namedKeyFrom name super) slot store.slotsNamed
             , slotsGen = store.slotsGen
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
@@ -138,7 +137,7 @@ removeSlot ( style, super ) store =
             }
 
         Named name ->
-            { slotsNamed = Dict.remove (VarSet.namedKeyFrom name super) store.slotsNamed
+            { slotsNamed = Dict.remove (TypeVar.namedKeyFrom name super) store.slotsNamed
             , slotsGen = store.slotsGen
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
@@ -158,7 +157,7 @@ memberSlot ( style, super ) store =
                     False
 
         Named name ->
-            Dict.member (VarSet.namedKeyFrom name super) store.slotsNamed
+            Dict.member (TypeVar.namedKeyFrom name super) store.slotsNamed
 
 
 getRank : TypeVar -> SubstitutionMap -> Int
@@ -169,7 +168,7 @@ getRank ( style, super ) store =
                 |> Maybe.withDefault 0
 
         Named name ->
-            Dict.get (VarSet.namedKeyFrom name super) store.unionFindRanksNamed
+            Dict.get (TypeVar.namedKeyFrom name super) store.unionFindRanksNamed
                 |> Maybe.withDefault 0
 
 
@@ -185,7 +184,7 @@ insertRank ( style, super ) rank store =
             }
 
         Named name ->
-            { unionFindRanksNamed = Dict.insert (VarSet.namedKeyFrom name super) rank store.unionFindRanksNamed
+            { unionFindRanksNamed = Dict.insert (TypeVar.namedKeyFrom name super) rank store.unionFindRanksNamed
             , slotsGen = store.slotsGen
             , slotsNamed = store.slotsNamed
             , unionFindRanksGen = store.unionFindRanksGen

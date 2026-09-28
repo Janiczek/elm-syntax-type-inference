@@ -207,8 +207,8 @@ fromDocsFields resolver fields =
 register : ModuleIds.Mapping -> Dependencies -> StateM ( Dict ( ModuleId, PackageName, VarName ) TypeAlias, ModuleIds.Mapping )
 register moduleMapping deps =
     let
-        moduleMapping1 : ModuleIds.Mapping
-        moduleMapping1 =
+        moduleMappingWithAllPackageModules : ModuleIds.Mapping
+        moduleMappingWithAllPackageModules =
             deps
                 |> Dict.foldl
                     (\_ item accAcrossDeps ->
@@ -227,10 +227,10 @@ register moduleMapping deps =
         |> State.foldl
             (\( pkgName, pkg ) dict ->
                 State.map (\registeredPackage -> Dict.union registeredPackage dict)
-                    (registerPackage moduleMapping1 deps pkgName pkg)
+                    (registerPackage moduleMappingWithAllPackageModules deps pkgName pkg)
             )
             Dict.empty
-        |> State.map (\dict -> ( dict, moduleMapping1 ))
+        |> State.map (\dict -> ( dict, moduleMappingWithAllPackageModules ))
 
 
 registerPackage :

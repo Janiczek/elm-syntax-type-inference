@@ -7,8 +7,7 @@
     "exposed-modules": [
         "Elm.TypeInference",
         "Elm.TypeInference.Error",
-        "Elm.TypeInference.Type",
-        "TypeLookupTable"
+        "Elm.TypeInference.Type"
     ],
     "elm-version": "0.19.1 <= v < 0.20.0",
     "dependencies": {

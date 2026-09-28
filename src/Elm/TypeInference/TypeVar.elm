@@ -1,14 +1,21 @@
 module Elm.TypeInference.TypeVar exposing
-    ( SuperType(..)
+    ( GenKey
+    , NamedKey
+    , SuperType(..)
     , TypeVar
     , TypeVarStyle(..)
+    , genKeyFrom
+    , deduplicate
+    , namedKeyFrom
     , parse
+    , superTypeTag
     , toString
     )
 
 {-| -}
 
 import List.Extra
+import Set exposing (Set)
 
 
 {-|
@@ -115,3 +122,94 @@ superTypeToString super =
 
         CompAppend ->
             "compappend"
+
+
+{-| `comparable` encoding of a generated `TypeVar`: `id * 5 + superTypeTag`.
+-}
+type alias GenKey =
+    Int
+
+
+{-| `comparable` encoding of a named `TypeVar`: `(superTypeTag, name)`.
+-}
+type alias NamedKey =
+    ( Int, String )
+
+
+{-|
+
+    genKeyFrom 5 Number --> 5 * 5 + 1 == 26
+
+-}
+genKeyFrom : Int -> SuperType -> GenKey
+genKeyFrom theId superType =
+    theId * 5 + superTypeTag superType
+
+
+{-|
+
+    namedKeyFrom "hello" Comparable --> (2, "hello")
+
+-}
+namedKeyFrom : String -> SuperType -> NamedKey
+namedKeyFrom name superType =
+    ( superTypeTag superType, name )
+
+
+superTypeTag : SuperType -> Int
+superTypeTag superType =
+    case superType of
+        Normal ->
+            0
+
+        Number ->
+            1
+
+        Comparable ->
+            2
+
+        Appendable ->
+            3
+
+        CompAppend ->
+            4
+
+
+{-| Order-preserving dedupe.
+-}
+deduplicate : List TypeVar -> List TypeVar
+deduplicate vars =
+    deduplicateHelp Set.empty Set.empty vars []
+
+
+deduplicateHelp : Set GenKey -> Set NamedKey -> List TypeVar -> List TypeVar -> List TypeVar
+deduplicateHelp seenGen seenNamed remaining acc =
+    case remaining of
+        [] ->
+            List.reverse acc
+
+        (( style, super ) as var) :: rest ->
+            case style of
+                Generated theId ->
+                    let
+                        k : GenKey
+                        k =
+                            genKeyFrom theId super
+                    in
+                    if Set.member k seenGen then
+                        deduplicateHelp seenGen seenNamed rest acc
+
+                    else
+                        deduplicateHelp (Set.insert k seenGen) seenNamed rest (var :: acc)
+
+                Named name ->
+                    let
+                        k : NamedKey
+                        k =
+                            namedKeyFrom name super
+                    in
+                    if Set.member k seenNamed then
+                        deduplicateHelp seenGen seenNamed rest acc
+
+                    else
+                        deduplicateHelp seenGen (Set.insert k seenNamed) rest (var :: acc)

@@ -1,10 +1,10 @@
 module Elm.TypeInference.ModuleLookup exposing
     ( Index
     , buildIndex
-    , findModuleOfVar
     , moduleOfVar
     , resolveOperatorFunction
     , typeResolverFor
+    , wrapError
     )
 
 {-| -}
@@ -204,23 +204,21 @@ moduleOfVar moduleMapping index modules thisModule maybeModuleName varName =
             qualifiedVar moduleMapping index modules thisModule qualifier varName
 
 
-{-| StateM wrapper around moduleOfVar
+{-| Wraps pure `moduleOfVar` result into `StateM` for `State.do` chains.
+Wraps error details in Error.
+Doesn't do anything with State otherwise.
 -}
-findModuleOfVar :
-    ModuleIds.Mapping
-    -> Index
-    -> Dict ModuleId ModuleIndex
-    -> ModuleIndex
-    -> Maybe FullModuleName
+wrapError :
+    ModuleIndex
     -> VarName
+    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
     -> StateM ( PackageName, ModuleId )
-findModuleOfVar moduleMapping index modules thisModule maybeModuleName varName =
-    case moduleOfVar moduleMapping index modules thisModule maybeModuleName varName of
+wrapError thisModule varName resolved =
+    case resolved of
         Ok (Just result) ->
             State.pure result
 
         Ok Nothing ->
-            -- Var not found
             let
                 moduleName : ModuleName
                 moduleName =
@@ -539,37 +537,33 @@ qualifiedModuleDefinesByName moduleMapping index modules qualifier varName =
 
 dedupeOwners : List ( PackageName, ModuleId ) -> List ( PackageName, ModuleId )
 dedupeOwners pairs =
-    List.foldl
-        (\( package, mod ) ( seen, acc ) ->
-            let
-                key : ( PackageName, ModuleId )
-                key =
-                    ( package, mod )
-            in
-            if List.member key seen then
-                ( seen, acc )
-
-            else
-                ( key :: seen, acc ++ [ ( package, mod ) ] )
-        )
-        ( [], [] )
-        pairs
-        |> Tuple.second
+    deduplicate pairs
 
 
 dedupeModuleIds : List ModuleId -> List ModuleId
 dedupeModuleIds names =
-    List.foldl
-        (\mod ( seen, acc ) ->
-            if List.member mod seen then
-                ( seen, acc )
+    deduplicate names
+
+
+{-| Drop repeats, keeping first occurrences in order.
+-}
+deduplicate : List comparable -> List comparable
+deduplicate items =
+    deduplicateHelp items Set.empty []
+
+
+deduplicateHelp : List comparable -> Set comparable -> List comparable -> List comparable
+deduplicateHelp items seen acc =
+    case items of
+        [] ->
+            List.reverse acc
+
+        item :: rest ->
+            if Set.member item seen then
+                deduplicateHelp rest seen acc
 
             else
-                ( mod :: seen, acc ++ [ mod ] )
-        )
-        ( [], [] )
-        names
-        |> Tuple.second
+                deduplicateHelp rest (Set.insert item seen) (item :: acc)
 
 
 dependencyModuleDefines : ModuleIds.Mapping -> Index -> ModuleId -> VarName -> Result ErrorDetails (Maybe PackageName)
@@ -664,16 +658,7 @@ qualifierCandidates moduleMapping thisModule qualifier =
 
         aliasCandidates : List ModuleId
         aliasCandidates =
-            List.foldl
-                (\candidate acc ->
-                    if List.member candidate acc then
-                        acc
-
-                    else
-                        acc ++ [ candidate ]
-                )
-                []
-                (aliasedModules ++ implicitAlias)
+            deduplicate (aliasedModules ++ implicitAlias)
 
         literalAvailable : Bool
         literalAvailable =

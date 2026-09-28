@@ -6,6 +6,7 @@ module Elm.TypeInference.State exposing
     , addGlobalBinding
     , aliasNodeId
     , andThen
+    , createdIdCount
     , do
     , empty
     , error
@@ -51,7 +52,6 @@ import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, S
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType, Type(..))
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar, TypeVarStyle(..))
-import Elm.TypeInference.VarSet as VarSet
 import RangeLike exposing (RangeLike)
 
 
@@ -76,9 +76,8 @@ type alias State =
          a new ID, they'll automatically increment.
       -}
       nextId : Id
-    , {- Type ID for each AST node of the module being inferred. Ends up being
-         its TypeLookupTable. Inference runs one module at a time, so we don't
-         need to specify the module name.
+    , {- Type ID for each AST node of the module being inferred. Inference runs
+         one module at a time, so we don't need to specify the module name.
       -}
       nodeIds : Dict RangeLike Id
     , {- Types for lexical bindings: lambda args, let..in, case branch patterns.
@@ -308,16 +307,18 @@ test_initFull env =
 
 getNextIdAndTick : StateM Id
 getNextIdAndTick =
-    \state ->
-        ( Ok state.nextId
-        , { nextId = state.nextId + 1
-          , nodeIds = state.nodeIds
-          , lexicalEnv = state.lexicalEnv
-          , globalEnv = state.globalEnv
-          , subst = SubstitutionMap.stampIdAtLetRank state.nextId state.letRank state.subst
-          , letRank = state.letRank
-          }
-        )
+    \state -> ( Ok state.nextId, tickNextId state )
+
+
+tickNextId : State -> State
+tickNextId state =
+    { nextId = state.nextId + 1
+    , nodeIds = state.nodeIds
+    , lexicalEnv = state.lexicalEnv
+    , globalEnv = state.globalEnv
+    , subst = SubstitutionMap.stampIdAtLetRank state.nextId state.letRank state.subst
+    , letRank = state.letRank
+    }
 
 
 {-| Run `action` one let-rank deeper, then restore the let-rank.
@@ -357,6 +358,11 @@ setIdToCurrentLetRank id =
 
 
 -- NODE IDS
+
+
+createdIdCount : StateM Id
+createdIdCount =
+    \state -> ( Ok state.nextId, state )
 
 
 getNodeIds : StateM (Dict RangeLike Id)
@@ -606,42 +612,67 @@ instantiate (Forall boundVars monoType) =
             pure monoType
 
         _ ->
-            do (traverse (\var -> map (\id -> ( var, id )) getNextIdAndTick) boundVars) <| \varIds ->
-            let
-                ( renamingGen, renamingNamed ) =
-                    varIds
-                        |> List.foldl
-                            (\( ( style, super ), freshId ) ( genAcc, namedAcc ) ->
-                                case style of
-                                    Generated theId ->
-                                        ( Dict.insert (VarSet.genKeyFrom theId super)
-                                            ( TypeVar.Generated freshId, super )
-                                            genAcc
-                                        , namedAcc
-                                        )
+            \state0 ->
+                let
+                    ( renaming, state1 ) =
+                        freshRenaming boundVars [] state0
+                in
+                ( Ok (TypeI.mapVarsMono (\var -> lookupRenaming var renaming) monoType)
+                , state1
+                )
 
-                                    Named name ->
-                                        ( genAcc
-                                        , Dict.insert (VarSet.namedKeyFrom name super)
-                                            ( TypeVar.Generated freshId, super )
-                                            namedAcc
-                                        )
-                            )
-                            ( Dict.empty, Dict.empty )
-            in
-            monoType
-                |> TypeI.mapVarsMono
-                    (\(( style, super ) as var) ->
-                        case style of
-                            Generated theId ->
-                                Dict.get (VarSet.genKeyFrom theId super) renamingGen
-                                    |> Maybe.withDefault var
 
-                            Named name ->
-                                Dict.get (VarSet.namedKeyFrom name super) renamingNamed
-                                    |> Maybe.withDefault var
-                    )
-                |> pure
+{-| Creates new Generated var for each provided var. (Manually ticks instead of
+threading `getNextIdAndTick` for speed.)
+
+Uses an association list instead of a Dict for speed (Dict would have been worth
+it at ~8 typevars, unlikely to happen in typical Elm code).
+
+-}
+freshRenaming : List TypeVar -> List ( TypeVar, TypeVar ) -> State -> ( List ( TypeVar, TypeVar ), State )
+freshRenaming vars acc state =
+    case vars of
+        [] ->
+            ( acc, state )
+
+        (( _, super ) as var) :: rest ->
+            freshRenaming rest (( var, ( Generated state.nextId, super ) ) :: acc) (tickNextId state)
+
+
+lookupRenaming : TypeVar -> List ( TypeVar, TypeVar ) -> TypeVar
+lookupRenaming var renaming =
+    case renaming of
+        [] ->
+            var
+
+        ( bound, fresh ) :: rest ->
+            if sameTypeVar var bound then
+                fresh
+
+            else
+                lookupRenaming var rest
+
+
+{-| 2-4x faster than (==).
+-}
+sameTypeVar : TypeVar -> TypeVar -> Bool
+sameTypeVar ( style1, super1 ) ( style2, super2 ) =
+    case style1 of
+        Generated id1 ->
+            case style2 of
+                Generated id2 ->
+                    id1 == id2 && super1 == super2
+
+                Named _ ->
+                    False
+
+        Named name1 ->
+            case style2 of
+                Named name2 ->
+                    name1 == name2 && super1 == super2
+
+                Generated _ ->
+                    False
 
 
 generalize : MonoType -> StateM Type
@@ -654,7 +685,7 @@ generalize monoType =
             boundIds : List TypeVar
             boundIds =
                 TypeI.monoTypeVars substitutedMono
-                    |> VarSet.toList
+                    |> TypeVar.deduplicate
                     |> List.filter
                         (\var -> SubstitutionMap.letRankOf var state1.subst > state1.letRank)
         in

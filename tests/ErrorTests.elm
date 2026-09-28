@@ -1,6 +1,6 @@
 module ErrorTests exposing (suite)
 
-import Dict
+import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Module as Module
@@ -17,7 +17,7 @@ import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
 import Tests.Elm.TypeInference.Helpers
     exposing
         ( TestError(..)
-        , buildDepEnv
+        , buildProject
         , getDeclType
         , getDeclTypeWithDeps
         , getDeclTypeWithPackage
@@ -226,28 +226,31 @@ missingModuleNameTest =
                     Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
 
                 Ok files ->
-                    case buildDepEnv [] [] of
+                    let
+                        filesWithMissingName : Dict ModuleName File
+                        filesWithMissingName =
+                            files
+                                |> Dict.values
+                                |> List.head
+                                |> Maybe.map withEmptyModuleName
+                                |> Maybe.map (\file -> Dict.singleton [ "Main" ] file)
+                                |> Maybe.withDefault Dict.empty
+                    in
+                    case
+                        Elm.TypeInference.init
+                            { directDependencies = []
+                            , allDependencies = []
+                            , sourcesToResolveAmbiguity = Dict.empty
+                            , projectPackageName = Nothing
+                            , projectFiles = filesWithMissingName
+                            }
+                    of
                         Err err ->
-                            Expect.fail ("Couldn't build dependency env: " ++ Debug.toString err)
+                            Error.toString err
+                                |> Expect.equal "Missing module name (in <Missing>)"
 
-                        Ok depEnv ->
-                            let
-                                -- A file with an empty module name.
-                                filesWithMissingName : List File
-                                filesWithMissingName =
-                                    files
-                                        |> List.head
-                                        |> Maybe.map withEmptyModuleName
-                                        |> Maybe.map List.singleton
-                                        |> Maybe.withDefault []
-                            in
-                            case Elm.TypeInference.project Nothing depEnv filesWithMissingName of
-                                Err err ->
-                                    Error.toString err
-                                        |> Expect.equal "Missing module name (in <Missing>)"
-
-                                Ok _ ->
-                                    Expect.fail "Expected a MissingModuleName error"
+                        Ok _ ->
+                            Expect.fail "Expected a MissingModuleName error"
 
 
 withEmptyModuleName : File -> File
@@ -302,23 +305,25 @@ moduleNotFoundTest =
                     Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
 
                 Ok files ->
-                    case buildDepEnv [] [] of
+                    case buildProject Nothing [] [] files of
                         Err err ->
-                            Expect.fail ("Couldn't build dependency env: " ++ Debug.toString err)
+                            Expect.fail ("Couldn't build project: " ++ Debug.toString err)
 
-                        Ok depEnv ->
-                            case Elm.TypeInference.project Nothing depEnv files of
+                        Ok proj ->
+                            case Elm.TypeInference.getType [ "DoesNotExist" ] dummyRange proj |> Tuple.first of
                                 Err err ->
-                                    Expect.fail ("Couldn't build project: " ++ Debug.toString err)
+                                    Error.toString err
+                                        |> Expect.equal "Module not found (in DoesNotExist)"
 
-                                Ok proj ->
-                                    case Elm.TypeInference.inferModule [ "DoesNotExist" ] proj |> Tuple.first of
-                                        Err err ->
-                                            Error.toString err
-                                                |> Expect.equal "Module not found (in DoesNotExist)"
+                                Ok _ ->
+                                    Expect.fail "Expected a ModuleNotFound error"
 
-                                        Ok _ ->
-                                            Expect.fail "Expected a ModuleNotFound error"
+
+dummyRange : Range
+dummyRange =
+    { start = { row = 1, column = 1 }
+    , end = { row = 1, column = 1 }
+    }
 
 
 typeMismatchTest : Test

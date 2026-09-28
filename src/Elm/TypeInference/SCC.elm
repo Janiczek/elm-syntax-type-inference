@@ -216,17 +216,18 @@ runFrames edges frames acc =
 
 splitOffComponent : comparable -> List comparable -> ( List comparable, List comparable )
 splitOffComponent v stack =
+    splitOffComponentHelp v stack []
+
+
+splitOffComponentHelp : comparable -> List comparable -> List comparable -> ( List comparable, List comparable )
+splitOffComponentHelp v stack acc =
     case stack of
         [] ->
-            ( [], [] )
+            ( List.reverse acc, [] )
 
         x :: rest ->
             if x == v then
-                ( [ x ], rest )
+                ( List.reverse (x :: acc), rest )
 
             else
-                let
-                    ( component, remaining ) =
-                        splitOffComponent v rest
-                in
-                ( x :: component, remaining )
+                splitOffComponentHelp v rest (x :: acc)
