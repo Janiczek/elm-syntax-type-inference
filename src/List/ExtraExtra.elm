@@ -7,7 +7,7 @@ module List.ExtraExtra exposing
 {-| -}
 
 
-{-| This particular variant doesn't preserve the order like List.concatMap would, but it's marginally faster. We've adjusted the code using it.
+{-| Same result as `List.concatMap` (order is preserved).
 
 <https://github.com/jfmengels/elm-benchmarks/blob/main/src/ListOrderingExploration/ListConcatMap.elm>
 <https://github.com/jfmengels/elm-benchmarks/blob/main/src/ListOrderingExploration/ListConcatMap-Results-Chrome.png>
