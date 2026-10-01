@@ -25,7 +25,6 @@ import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal exposing (TypeResolver)
 import List.ExtraExtra
 import Result.Extra
-import Result.ExtraExtra
 import Set exposing (Set)
 import String.ExtraExtra
 
@@ -202,10 +201,12 @@ moduleOfVar :
 moduleOfVar moduleMapping index modules thisModule maybeModuleName varName =
     case maybeModuleName of
         Nothing ->
-            Result.ExtraExtra.firstJustLazy
-                [ \() -> unqualifiedVarInThisModule thisModule varName
-                , \() -> unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName
-                ]
+            case unqualifiedVarInThisModule thisModule varName of
+                Ok Nothing ->
+                    unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName
+
+                found ->
+                    found
 
         Just qualifier ->
             qualifiedVar moduleMapping index modules thisModule qualifier varName
@@ -725,7 +726,7 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
 
                 else
                     thisModule.imports
-                        |> List.filterMap
+                        |> List.ExtraExtra.findLastMap
                             (\import_ ->
                                 if not (ModuleIndex.importExposesType import_ typeName) then
                                     Nothing
@@ -742,8 +743,6 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                                         Nothing ->
                                             dependencyModuleDefinesType wrappedIndex import_.moduleId typeName
                             )
-                        |> List.reverse
-                        |> List.head
 
             else
                 Dict.get unaliasedId modules
@@ -780,14 +779,7 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                             , possiblePackages = matchingPackages
                             }
     in
-    candidates
-        |> List.ExtraExtra.fastConcatMap
-            (\candidate ->
-                [ \() -> Ok (firstParty candidate)
-                , \() -> dependency candidate
-                ]
-            )
-        |> Result.ExtraExtra.firstJustLazy
+    firstJustInCandidates firstParty dependency candidates
         |> Result.map
             (\resolved ->
                 case resolved of
@@ -829,3 +821,27 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                         in
                         Result.map (\id -> ( "", id )) defaultId
             )
+
+
+firstJustInCandidates :
+    (ModuleId -> Maybe ( PackageName, ModuleId ))
+    -> (ModuleId -> Result ResolverAmbiguity (Maybe ( PackageName, ModuleId )))
+    -> List ModuleId
+    -> Result ResolverAmbiguity (Maybe ( PackageName, ModuleId ))
+firstJustInCandidates firstParty dependency candidates =
+    case candidates of
+        [] ->
+            Ok Nothing
+
+        candidate :: rest ->
+            case firstParty candidate of
+                (Just _) as found ->
+                    Ok found
+
+                Nothing ->
+                    case dependency candidate of
+                        Ok Nothing ->
+                            firstJustInCandidates firstParty dependency rest
+
+                        found ->
+                            found
