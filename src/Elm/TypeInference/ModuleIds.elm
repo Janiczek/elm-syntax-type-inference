@@ -204,8 +204,12 @@ getName moduleId moduleMapping =
 
 getNameForDisplay : ModuleId -> Mapping -> FullModuleName
 getNameForDisplay moduleId moduleMapping =
-    Dict.get moduleId moduleMapping.byId
-        |> Maybe.withDefault fullModuleNameUnknownId
+    case Dict.get moduleId moduleMapping.byId of
+        Just name ->
+            name
+
+        Nothing ->
+            fullModuleNameUnknownId
 
 
 fullModuleNameUnknownId : FullModuleName

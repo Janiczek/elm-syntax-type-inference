@@ -37,6 +37,7 @@ import Elm.Syntax.File exposing (File)
 import Elm.Syntax.File.Extra as FileExtra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.Signature exposing (Signature)
@@ -143,19 +144,18 @@ init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPa
                                 key =
                                     FileExtra.moduleName file
                             in
-                            case FullModuleName.fromModuleName key of
-                                Nothing ->
-                                    ( acc, True, accModuleMapping )
+                            if ModuleNameExtra.isNotEmpty key then
+                                let
+                                    ( index, newModuleMapping ) =
+                                        ModuleIndex.fromFile accModuleMapping file
+                                in
+                                ( { key = key, index = index, file = file } :: acc
+                                , accMissingModuleName
+                                , newModuleMapping
+                                )
 
-                                Just _ ->
-                                    let
-                                        ( index, newModuleMapping ) =
-                                            ModuleIndex.fromFile accModuleMapping file
-                                    in
-                                    ( { key = key, index = index, file = file } :: acc
-                                    , accMissingModuleName
-                                    , newModuleMapping
-                                    )
+                            else
+                                ( acc, True, accModuleMapping )
                         )
                         ( [], False, dep.moduleMapping )
                         files
@@ -204,14 +204,12 @@ addReverseEdges index acc =
     index.imports
         |> List.foldl
             (\import_ innerAcc ->
-                Dict.update import_.moduleId
-                    (\maybeImporters ->
-                        Just
-                            (Set.insert index.moduleId
-                                (Maybe.withDefault Set.empty maybeImporters)
-                            )
-                    )
-                    innerAcc
+                case Dict.get import_.moduleId innerAcc of
+                    Just importers ->
+                        Dict.insert import_.moduleId (Set.insert index.moduleId importers) innerAcc
+
+                    Nothing ->
+                        Dict.insert import_.moduleId (Set.singleton index.moduleId) innerAcc
             )
             acc
 
@@ -462,9 +460,12 @@ resolveIdToPublicType id tlt =
                     monoType0
 
                 Just annoMono ->
-                    monoType0
-                        |> TypeI.renameToAnnotation annoMono
-                        |> Maybe.withDefault monoType0
+                    case TypeI.renameToAnnotation annoMono monoType0 of
+                        Just renamed ->
+                            renamed
+
+                        Nothing ->
+                            monoType0
 
         key : String
         key =
@@ -588,7 +589,14 @@ invalidate modulesById directlyAffected (Project p) =
         affected : Set ModuleId
         affected =
             importClosureHelp
-                (\id -> Dict.get id p.importedBy |> Maybe.map Set.toList |> Maybe.withDefault [])
+                (\id ->
+                    case Dict.get id p.importedBy of
+                        Just importers ->
+                            Set.toList importers
+
+                        Nothing ->
+                            []
+                )
                 (Set.toList directlyAffected)
                 Set.empty
 
@@ -654,15 +662,15 @@ addFile file (Project p) =
         moduleName =
             FileExtra.moduleName file
     in
-    case FullModuleName.fromModuleName moduleName of
-        Nothing ->
+    case moduleName of
+        [] ->
             Err
                 { moduleName = moduleName
                 , declarationNames = []
                 , details = MissingModuleName
                 }
 
-        Just _ ->
+        _ :: _ ->
             let
                 ( newIndex, moduleMapping1 ) =
                     ModuleIndex.fromFile p.moduleMapping file
@@ -689,9 +697,12 @@ addFile file (Project p) =
                     Set.diff oldImportIds newImportIds
                         |> Set.foldl
                             (\importId acc ->
-                                Dict.update importId
-                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
-                                    acc
+                                case Dict.get importId acc of
+                                    Just by ->
+                                        Dict.insert importId (Set.remove id by) acc
+
+                                    Nothing ->
+                                        acc
                             )
                             p.importedBy
 
@@ -700,18 +711,12 @@ addFile file (Project p) =
                     Set.diff newImportIds oldImportIds
                         |> Set.foldl
                             (\importId acc ->
-                                Dict.update importId
-                                    (\maybeImporters ->
-                                        Just
-                                            (case maybeImporters of
-                                                Nothing ->
-                                                    Set.singleton id
+                                case Dict.get importId acc of
+                                    Nothing ->
+                                        Dict.insert importId (Set.singleton id) acc
 
-                                                Just importers ->
-                                                    Set.insert id importers
-                                            )
-                                    )
-                                    acc
+                                    Just importers ->
+                                        Dict.insert importId (Set.insert id importers) acc
                             )
                             importedByWithoutOldImports
 
@@ -766,9 +771,12 @@ removeFile moduleName ((Project p) as proj) =
                     m.index.imports
                         |> List.foldl
                             (\import_ acc ->
-                                Dict.update import_.moduleId
-                                    (\maybeBy -> maybeBy |> Maybe.map (\by -> by |> Set.remove id))
-                                    acc
+                                case Dict.get import_.moduleId acc of
+                                    Just by ->
+                                        Dict.insert import_.moduleId (Set.remove id by) acc
+
+                                    Nothing ->
+                                        acc
                             )
                             p.importedBy
             in
@@ -1232,7 +1240,15 @@ solveModule ctx typeAliases file =
                 |> Dict.map
                     (\_ ( _, fn ) ->
                         Elm.Syntax.Expression.Extra.referencedNames (Node.value (Node.value fn.declaration).expression)
-                            |> List.map (\( maybeModuleName, varName ) -> ( Maybe.withDefault [] maybeModuleName, varName ))
+                            |> List.map
+                                (\( maybeModuleName, varName ) ->
+                                    case maybeModuleName of
+                                        Just moduleName ->
+                                            ( moduleName, varName )
+
+                                        Nothing ->
+                                            ( [], varName )
+                                )
                     )
 
         resolvedVars : Dict ( ModuleName, VarName ) (Result ErrorDetails (Maybe ( PackageName, ModuleId )))

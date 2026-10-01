@@ -101,14 +101,12 @@ addCtorParents moduleId mod acc =
         (\union inner ->
             List.foldl
                 (\( ctor, _ ) innerDict ->
-                    Dict.update moduleId
-                        (\maybeCtors ->
-                            maybeCtors
-                                |> Maybe.withDefault Dict.empty
-                                |> Dict.insert ctor union.name
-                                |> Just
-                        )
-                        innerDict
+                    case Dict.get moduleId innerDict of
+                        Just ctors ->
+                            Dict.insert moduleId (Dict.insert ctor union.name ctors) innerDict
+
+                        Nothing ->
+                            Dict.insert moduleId (Dict.singleton ctor union.name) innerDict
                 )
                 inner
                 union.tags
@@ -122,14 +120,12 @@ addRecordAliases moduleId mod acc =
     List.foldl
         (\alias inner ->
             if isRecordAlias alias then
-                Dict.update moduleId
-                    (\maybeSet ->
-                        maybeSet
-                            |> Maybe.withDefault Set.empty
-                            |> Set.insert alias.name
-                            |> Just
-                    )
-                    inner
+                case Dict.get moduleId inner of
+                    Just set ->
+                        Dict.insert moduleId (Set.insert alias.name set) inner
+
+                    Nothing ->
+                        Dict.insert moduleId (Set.singleton alias.name) inner
 
             else
                 inner
@@ -145,21 +141,32 @@ addName :
     -> NameIndex
     -> NameIndex
 addName moduleId packageName name acc =
-    Dict.update moduleId
-        (\maybeInner ->
-            Maybe.withDefault Dict.empty maybeInner
-                |> Dict.update name
-                    (\maybeOwners -> Just (Maybe.withDefault [] maybeOwners ++ [ packageName ]))
-                |> Just
-        )
-        acc
+    case Dict.get moduleId acc of
+        Just inner ->
+            case Dict.get name inner of
+                Just owners ->
+                    Dict.insert moduleId (Dict.insert name (owners ++ [ packageName ]) inner) acc
+
+                Nothing ->
+                    Dict.insert moduleId (Dict.insert name [ packageName ] inner) acc
+
+        Nothing ->
+            Dict.insert moduleId (Dict.singleton name [ packageName ]) acc
 
 
 ownersOf : NameIndex -> ModuleId -> VarName -> List PackageName
 ownersOf index moduleId name =
-    Dict.get moduleId index
-        |> Maybe.andThen (\vars -> Dict.get name vars)
-        |> Maybe.withDefault []
+    case Dict.get moduleId index of
+        Just vars ->
+            case Dict.get name vars of
+                Just owners ->
+                    owners
+
+                Nothing ->
+                    []
+
+        Nothing ->
+            []
 
 
 emptyIndex : Index
@@ -395,9 +402,12 @@ dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
                     viaRecordAlias : Bool
                     viaRecordAlias =
                         Set.member varName e.opaqueTypes
-                            && (Dict.get import_.moduleId idx.recordAliases
-                                    |> Maybe.withDefault Set.empty
-                                    |> Set.member varName
+                            && (case Dict.get import_.moduleId idx.recordAliases of
+                                    Just aliases ->
+                                        Set.member varName aliases
+
+                                    Nothing ->
+                                        False
                                )
 
                     viaOpenUnion : Bool
@@ -677,20 +687,27 @@ qualifierCandidates moduleMapping thisModule qualifier =
                 ModuleIds.getId (FullModuleName.fromModuleName_ qualifier) moduleMapping
     in
     if List.isEmpty aliasCandidates then
-        case ( literalAvailable, literalId ) of
-            ( True, Just lid ) ->
-                [ lid ]
+        if literalAvailable then
+            case literalId of
+                Just lid ->
+                    [ lid ]
 
-            _ ->
-                []
+                Nothing ->
+                    []
 
-    else
-        case ( literalAvailable, literalId ) of
-            ( True, Just literalId_ ) ->
+        else
+            []
+
+    else if literalAvailable then
+        case literalId of
+            Just literalId_ ->
                 aliasCandidates ++ [ literalId_ ]
 
-            _ ->
+            Nothing ->
                 aliasCandidates
+
+    else
+        aliasCandidates
 
 
 typeResolverFor : ModuleIds.Mapping -> Index -> Dict ModuleId ModuleIndex -> ModuleIndex -> TypeResolver

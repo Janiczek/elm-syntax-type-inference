@@ -164,12 +164,20 @@ getRank : TypeVar -> SubstitutionMap -> Int
 getRank ( style, super ) store =
     case style of
         Generated theId ->
-            Array.get theId store.unionFindRanksGen
-                |> Maybe.withDefault 0
+            case Array.get theId store.unionFindRanksGen of
+                Just rank ->
+                    rank
+
+                Nothing ->
+                    0
 
         Named name ->
-            Dict.get (TypeVar.namedKeyFrom name super) store.unionFindRanksNamed
-                |> Maybe.withDefault 0
+            case Dict.get (TypeVar.namedKeyFrom name super) store.unionFindRanksNamed of
+                Just rank ->
+                    rank
+
+                Nothing ->
+                    0
 
 
 insertRank : TypeVar -> Int -> SubstitutionMap -> SubstitutionMap
@@ -385,8 +393,12 @@ letRankOf : TypeVar -> SubstitutionMap -> LetRank
 letRankOf ( var, _ ) store =
     case var of
         TypeVar.Generated id ->
-            Array.get id store.letRanks
-                |> Maybe.withDefault 0
+            case Array.get id store.letRanks of
+                Just rank ->
+                    rank
+
+                Nothing ->
+                    0
 
         TypeVar.Named _ ->
             0
@@ -458,7 +470,7 @@ lowerLetRanksTo targetLetRank type_ store =
                 |> lowerLetRanksTo targetLetRank t2
                 |> lowerLetRanksTo targetLetRank t3
 
-        Record { fields } ->
+        Record fields ->
             lowerLetRanksInFieldsTo targetLetRank fields store
 
         ExtensibleRecord r ->
@@ -666,13 +678,13 @@ substituteMono store monoType =
             else
                 ( monoType, flags, s3 )
 
-        Record { fields } ->
+        Record fields ->
             let
                 ( fields_, flags, s1 ) =
                     substituteRecordFields store fields
             in
             if isChanged flags then
-                ( Record { fields = fields_ }, flags, s1 )
+                ( Record fields_, flags, s1 )
 
             else
                 ( monoType, flags, s1 )

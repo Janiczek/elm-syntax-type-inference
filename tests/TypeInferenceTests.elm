@@ -750,7 +750,7 @@ publicBoundarySuite =
         TypeI.toPublicType ModuleIds.empty
             { alreadyNormalized = False }
             (TypeI.ExtensibleRecord
-                { extensionTypevar = TypeI.Record { fields = Dict.singleton "b" TypeI.Char }
+                { extensionTypevar = TypeI.Record (Dict.singleton "b" TypeI.Char)
                 , fields = Dict.singleton "a" TypeI.Int
                 }
             )
@@ -762,7 +762,7 @@ publicBoundarySuite =
             (TypeI.ExtensibleRecord
                 { extensionTypevar =
                     TypeI.ExtensibleRecord
-                        { extensionTypevar = TypeI.Record { fields = Dict.singleton "c" TypeI.Bool }
+                        { extensionTypevar = TypeI.Record (Dict.singleton "c" TypeI.Bool)
                         , fields = Dict.singleton "b" TypeI.Char
                         }
                 , fields = Dict.singleton "a" TypeI.Int

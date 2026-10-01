@@ -1,6 +1,7 @@
 module Elm.Syntax.ModuleName.Extra exposing
     ( dottedToFilePath
     , fromDotted
+    , isNotEmpty
     , isSegment
     , splitLastDot
     , toString
@@ -53,6 +54,16 @@ dottedToFilePath dotted =
     toFilePath (fromDotted dotted)
 
 
+isNotEmpty : ModuleName -> Bool
+isNotEmpty moduleName =
+    case moduleName of
+        [] ->
+            False
+
+        _ :: _ ->
+            True
+
+
 {-|
 
     "Foo" -> True
@@ -73,12 +84,11 @@ isSegment =
 -}
 splitLastDot : String -> ( String, String )
 splitLastDot qualifiedName =
-    case List.reverse (fromDotted qualifiedName) of
+    case List.reverse (String.indexes "." qualifiedName) of
         [] ->
             ( "", qualifiedName )
 
-        [ single ] ->
-            ( "", single )
-
-        last :: rest ->
-            ( toString (List.reverse rest), last )
+        lastDot :: _ ->
+            ( String.left lastDot qualifiedName
+            , String.dropLeft (lastDot + 1) qualifiedName
+            )

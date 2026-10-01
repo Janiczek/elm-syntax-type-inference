@@ -581,11 +581,12 @@ importsByAlias imports =
         (\import_ acc ->
             case import_.alias_ of
                 Just alias ->
-                    Dict.update alias
-                        (\maybeModules ->
-                            Just (Maybe.withDefault [] maybeModules ++ [ import_.moduleId ])
-                        )
-                        acc
+                    case Dict.get alias acc of
+                        Just modules ->
+                            Dict.insert alias (modules ++ [ import_.moduleId ]) acc
+
+                        Nothing ->
+                            Dict.insert alias [ import_.moduleId ] acc
 
                 Nothing ->
                     acc
@@ -615,8 +616,12 @@ unaliasedImports imports =
 -}
 modulesWithAlias : ModuleIndex -> String -> List ModuleId
 modulesWithAlias index wantedAlias =
-    Dict.get wantedAlias index.importsByAlias
-        |> Maybe.withDefault []
+    case Dict.get wantedAlias index.importsByAlias of
+        Just modules ->
+            modules
+
+        Nothing ->
+            []
 
 
 isImportedUnaliased : ModuleIndex -> ModuleName -> Bool

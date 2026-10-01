@@ -219,12 +219,11 @@ docsTypeRefs tipe =
                     ModuleNameExtra.splitLastDot qualifiedName
             in
             -- Skip elm/core stuff
-            (if isPrimitiveRef moduleName typeName then
+            (if String.isEmpty moduleName || isPrimitiveRef moduleName typeName then
                 []
 
              else
-                modulePart qualifiedName
-                    |> List.map (\m -> ( m, typeName ))
+                [ ( moduleName, typeName ) ]
             )
                 ++ List.ExtraExtra.fastConcatMap docsTypeRefs args
 
@@ -262,25 +261,6 @@ isPrimitiveRef moduleName typeName =
             False
 
 
-{-|
-
-     "Platform.Cmd.Cmd"
-     --> ["Platform.Cmd"]
-
-     "Int"
-     --> []
-
--}
-modulePart : String -> List String
-modulePart qualifiedName =
-    case ModuleNameExtra.splitLastDot qualifiedName of
-        ( "", _ ) ->
-            []
-
-        ( moduleName, _ ) ->
-            [ moduleName ]
-
-
 packageAliases :
     ModuleIds.Mapping
     -> Dependencies
@@ -312,7 +292,12 @@ packageAliases moduleMapping deps package files =
 
         visiblePackages : List PackageName
         visiblePackages =
-            package :: (Dict.get package deps |> Maybe.map .dependencies |> Maybe.withDefault [])
+            case Dict.get package deps of
+                Just pkg ->
+                    package :: pkg.dependencies
+
+                Nothing ->
+                    [ package ]
 
         index : ModuleLookup.Index
         index =

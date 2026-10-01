@@ -36,18 +36,16 @@ referencedNamesIn : Set VarName -> Expression -> List ( Maybe ModuleName, VarNam
 referencedNamesIn bound expression =
     case expression of
         FunctionOrValue moduleName varName ->
-            if List.isEmpty moduleName && Set.member varName bound then
-                []
-
-            else
-                [ ( if List.isEmpty moduleName then
-                        Nothing
+            case moduleName of
+                [] ->
+                    if Set.member varName bound then
+                        []
 
                     else
-                        Just moduleName
-                  , varName
-                  )
-                ]
+                        [ ( Nothing, varName ) ]
+
+                _ :: _ ->
+                    [ ( Just moduleName, varName ) ]
 
         PrefixOperator operator ->
             [ ( Nothing, operator ) ]

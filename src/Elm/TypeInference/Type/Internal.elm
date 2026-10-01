@@ -89,7 +89,7 @@ type MonoType
     | Unit
     | Tuple2 MonoType MonoType
     | Tuple3 MonoType MonoType MonoType
-    | Record { fields : Dict VarName MonoType }
+    | Record (Dict VarName MonoType)
     | ExtensibleRecord
         { extensionTypevar : MonoType
         , fields : Dict VarName MonoType
@@ -150,8 +150,8 @@ collapseExtensible r1 =
 
     else
         case r1.extensionTypevar of
-            Record r2 ->
-                Record { fields = Dict.union r1.fields r2.fields }
+            Record r2Fields ->
+                Record (Dict.union r1.fields r2Fields)
 
             ExtensibleRecord r2 ->
                 collapseExtensible <|
@@ -253,8 +253,8 @@ Anythign else, we return Nothing and let downstream code report a mismatch.
 shaderSetSlot : MonoType -> Maybe ( MonoType, Dict VarName MonoType )
 shaderSetSlot arg =
     case arg of
-        Record { fields } ->
-            Just ( Record { fields = Dict.empty }, fields )
+        Record fields ->
+            Just ( Record Dict.empty, fields )
 
         ExtensibleRecord er ->
             Just ( er.extensionTypevar, er.fields )
@@ -327,8 +327,8 @@ recurse f type_ =
         Tuple3 t1 t2 t3 ->
             Tuple3 (f t1) (f t2) (f t3)
 
-        Record { fields } ->
-            Record { fields = Dict.map (\_ value -> f value) fields }
+        Record fields ->
+            Record (Dict.map (\_ value -> f value) fields)
 
         ExtensibleRecord r ->
             ExtensibleRecord
@@ -413,7 +413,7 @@ monoTypeVarsHelp type_ acc =
                 |> monoTypeVarsHelp t2
                 |> monoTypeVarsHelp t1
 
-        Record { fields } ->
+        Record fields ->
             monoTypeVarsInFieldsHelp fields acc
 
         ExtensibleRecord r ->
@@ -472,7 +472,7 @@ monoHasTypeVars type_ =
         Tuple3 t1 t2 t3 ->
             monoHasTypeVars t1 || monoHasTypeVars t2 || monoHasTypeVars t3
 
-        Record { fields } ->
+        Record fields ->
             fieldsHaveTypeVars fields
 
         ExtensibleRecord r ->
@@ -551,10 +551,17 @@ normalize ((Forall boundVars monoType) as type_) =
                     (\( style, super ) acc ->
                         case style of
                             Named name ->
-                                Dict.update
-                                    (superTypeTag super)
-                                    (\existing -> Just (Set.insert name (Maybe.withDefault Set.empty existing)))
-                                    acc
+                                let
+                                    tag : Int
+                                    tag =
+                                        superTypeTag super
+                                in
+                                case Dict.get tag acc of
+                                    Just existing ->
+                                        Dict.insert tag (Set.insert name existing) acc
+
+                                    Nothing ->
+                                        Dict.insert tag (Set.singleton name) acc
 
                             Generated _ ->
                                 acc
@@ -581,8 +588,12 @@ normalize ((Forall boundVars monoType) as type_) =
             let
                 used : Set String
                 used =
-                    Dict.get (superTypeTag super) usedNamesBySuper
-                        |> Maybe.withDefault Set.empty
+                    case Dict.get (superTypeTag super) usedNamesBySuper of
+                        Just names ->
+                            names
+
+                        Nothing ->
+                            Set.empty
             in
             if Set.member (nameForSlot super slot) used then
                 nextFreeSlot super (slot + 1)
@@ -608,7 +619,12 @@ normalize ((Forall boundVars monoType) as type_) =
 
                                     startSlot : Int
                                     startSlot =
-                                        Dict.get key nextSlotBySuper |> Maybe.withDefault 0
+                                        case Dict.get key nextSlotBySuper of
+                                            Just nextSlot ->
+                                                nextSlot
+
+                                            Nothing ->
+                                                0
 
                                     slot : Int
                                     slot =
@@ -801,7 +817,7 @@ fromTypeAnnotation resolver typeAnnotation =
 
         TypeAnnotation.Record fields ->
             recordBindings fields
-                |> Result.map (\fields_ -> Record { fields = fields_ })
+                |> Result.map Record
 
         TypeAnnotation.GenericRecord name fields ->
             recordBindings (Node.value fields)
@@ -932,7 +948,7 @@ toPublicTypeNormalized moduleMapping mono_ =
                 (toPublicType moduleMapping { alreadyNormalized = True } t2)
                 (toPublicType moduleMapping { alreadyNormalized = True } t3)
 
-        Record { fields } ->
+        Record fields ->
             Public.Record { fields = Dict.map (\_ v -> toPublicType moduleMapping { alreadyNormalized = True } v) fields }
 
         ExtensibleRecord extensibleRecordUncollapsed ->
@@ -994,8 +1010,8 @@ shaderSlotToPublic f extensionTypevar fields =
             , fields = fields
             }
     of
-        Record r ->
-            ( Dict.map (\_ v -> f v) r.fields
+        Record recordFields ->
+            ( Dict.map (\_ v -> f v) recordFields
             , Nothing
             )
 
@@ -1051,8 +1067,12 @@ applyAnnotationNames : Dict Int TypeVar -> TypeVar -> TypeVar
 applyAnnotationNames mapping (( style, super ) as var) =
     case style of
         Generated theId ->
-            Dict.get (TypeVar.genKeyFrom theId super) mapping
-                |> Maybe.withDefault var
+            case Dict.get (TypeVar.genKeyFrom theId super) mapping of
+                Just renamed ->
+                    renamed
+
+                Nothing ->
+                    var
 
         Named _ ->
             var
@@ -1060,112 +1080,207 @@ applyAnnotationNames mapping (( style, super ) as var) =
 
 collectAnnotationNames : MonoType -> MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
 collectAnnotationNames annoMono inferredMono acc =
-    case ( annoMono, inferredMono ) of
-        ( TypeVar ( Named annoName, annoSuper ), TypeVar ( Generated inferredId, inferredSuper ) ) ->
-            if annoSuper /= inferredSuper then
-                Nothing
+    case annoMono of
+        TypeVar ( annoStyle, annoSuper ) ->
+            case inferredMono of
+                TypeVar ( inferredStyle, inferredSuper ) ->
+                    case annoStyle of
+                        Named annoName ->
+                            case inferredStyle of
+                                Generated inferredId ->
+                                    if annoSuper /= inferredSuper then
+                                        Nothing
 
-            else
-                let
-                    key : Int
-                    key =
-                        TypeVar.genKeyFrom inferredId inferredSuper
+                                    else
+                                        let
+                                            key : Int
+                                            key =
+                                                TypeVar.genKeyFrom inferredId inferredSuper
 
-                    wanted : TypeVar
-                    wanted =
-                        ( Named annoName, annoSuper )
-                in
-                case Dict.get key acc of
-                    Nothing ->
-                        Just (Dict.insert key wanted acc)
+                                            wanted : TypeVar
+                                            wanted =
+                                                ( annoStyle, annoSuper )
+                                        in
+                                        case Dict.get key acc of
+                                            Nothing ->
+                                                Just (Dict.insert key wanted acc)
 
-                    Just existing ->
-                        if existing == wanted then
-                            Just acc
+                                            Just existing ->
+                                                if existing == wanted then
+                                                    Just acc
 
-                        else
+                                                else
+                                                    Nothing
+
+                                Named inferredName ->
+                                    if annoName == inferredName && annoSuper == inferredSuper then
+                                        Just acc
+
+                                    else
+                                        Nothing
+
+                        Generated _ ->
+                            -- Should be impossible (annotations shouldn't contain generated vars)
                             Nothing
 
-        ( TypeVar ( Named annoName, annoSuper ), TypeVar ( Named inferredName, inferredSuper ) ) ->
-            if ( Named annoName, annoSuper ) == ( Named inferredName, inferredSuper ) then
-                Just acc
+                _ ->
+                    Nothing
 
-            else
-                Nothing
+        Function a1 ->
+            case inferredMono of
+                Function b1 ->
+                    case collectAnnotationNames a1.from b1.from acc of
+                        Just acc1 ->
+                            collectAnnotationNames a1.to b1.to acc1
 
-        ( TypeVar _, TypeVar _ ) ->
-            -- Should be impossible (annotations shouldn't contain generated vars)
-            Nothing
+                        Nothing ->
+                            Nothing
 
-        ( TypeVar _, _ ) ->
-            Nothing
+                _ ->
+                    Nothing
 
-        ( _, TypeVar _ ) ->
-            Nothing
+        List a ->
+            case inferredMono of
+                List b ->
+                    collectAnnotationNames a b acc
 
-        ( Function a1, Function b1 ) ->
-            collectAnnotationNames a1.from b1.from acc
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a1.to b1.to)
+                _ ->
+                    Nothing
 
-        ( List a, List b ) ->
-            collectAnnotationNames a b acc
+        Tuple2 a1 a2 ->
+            case inferredMono of
+                Tuple2 b1 b2 ->
+                    case collectAnnotationNames a1 b1 acc of
+                        Just acc1 ->
+                            collectAnnotationNames a2 b2 acc1
 
-        ( Tuple2 a1 a2, Tuple2 b1 b2 ) ->
-            collectAnnotationNames a1 b1 acc
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
+                        Nothing ->
+                            Nothing
 
-        ( Tuple3 a1 a2 a3, Tuple3 b1 b2 b3 ) ->
-            collectAnnotationNames a1 b1 acc
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a2 b2)
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames a3 b3)
+                _ ->
+                    Nothing
 
-        ( Record r1, Record r2 ) ->
-            collectRecordFields r1.fields r2.fields acc
+        Tuple3 a1 a2 a3 ->
+            case inferredMono of
+                Tuple3 b1 b2 b3 ->
+                    case collectAnnotationNames a1 b1 acc of
+                        Just acc1 ->
+                            case collectAnnotationNames a2 b2 acc1 of
+                                Just acc2 ->
+                                    collectAnnotationNames a3 b3 acc2
 
-        ( ExtensibleRecord r1Uncollapsed, ExtensibleRecord r2Uncollapsed ) ->
-            case ( collapseExtensible r1Uncollapsed, collapseExtensible r2Uncollapsed ) of
-                ( ExtensibleRecord r1, ExtensibleRecord r2 ) ->
-                    collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc
-                        |> Maybe.andThen (\a -> a |> collectRecordFields r1.fields r2.fields)
+                                Nothing ->
+                                    Nothing
 
-                ( r1, r2 ) ->
-                    collectAnnotationNames r1 r2 acc
+                        Nothing ->
+                            Nothing
 
-        ( UserDefinedType u1, UserDefinedType u2 ) ->
-            if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
-                Nothing
+                _ ->
+                    Nothing
 
-            else
-                collectAnnotationArgs u1.args u2.args acc
+        Record r1 ->
+            case inferredMono of
+                Record r2 ->
+                    collectRecordFields r1 r2 acc
 
-        ( WebGLShader s1, WebGLShader s2 ) ->
-            collectAnnotationNames s1.attributesExtension s2.attributesExtension acc
-                |> Maybe.andThen (\a -> a |> collectRecordFields s1.attributes s2.attributes)
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
-                |> Maybe.andThen (\a -> a |> collectRecordFields s1.uniforms s2.uniforms)
-                |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
-                |> Maybe.andThen (\a -> a |> collectRecordFields s1.varyings s2.varyings)
+                _ ->
+                    Nothing
 
-        ( Int, Int ) ->
-            Just acc
+        ExtensibleRecord r1Uncollapsed ->
+            case inferredMono of
+                ExtensibleRecord r2Uncollapsed ->
+                    case collapseExtensible r1Uncollapsed of
+                        ExtensibleRecord r1 ->
+                            case collapseExtensible r2Uncollapsed of
+                                ExtensibleRecord r2 ->
+                                    case collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc of
+                                        Just acc1 ->
+                                            collectRecordFields r1.fields r2.fields acc1
 
-        ( Float, Float ) ->
-            Just acc
+                                        Nothing ->
+                                            Nothing
 
-        ( Char, Char ) ->
-            Just acc
+                                r2 ->
+                                    collectAnnotationNames (ExtensibleRecord r1) r2 acc
 
-        ( String, String ) ->
-            Just acc
+                        r1 ->
+                            collectAnnotationNames r1 (collapseExtensible r2Uncollapsed) acc
 
-        ( Bool, Bool ) ->
-            Just acc
+                _ ->
+                    Nothing
 
-        ( Unit, Unit ) ->
-            Just acc
+        UserDefinedType u1 ->
+            case inferredMono of
+                UserDefinedType u2 ->
+                    if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
+                        Nothing
 
-        _ ->
-            Nothing
+                    else
+                        collectAnnotationArgs u1.args u2.args acc
+
+                _ ->
+                    Nothing
+
+        WebGLShader s1 ->
+            case inferredMono of
+                WebGLShader s2 ->
+                    collectAnnotationNames s1.attributesExtension s2.attributesExtension acc
+                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.attributes s2.attributes)
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
+                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.uniforms s2.uniforms)
+                        |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
+                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.varyings s2.varyings)
+
+                _ ->
+                    Nothing
+
+        Int ->
+            case inferredMono of
+                Int ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Float ->
+            case inferredMono of
+                Float ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Char ->
+            case inferredMono of
+                Char ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        String ->
+            case inferredMono of
+                String ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Bool ->
+            case inferredMono of
+                Bool ->
+                    Just acc
+
+                _ ->
+                    Nothing
+
+        Unit ->
+            case inferredMono of
+                Unit ->
+                    Just acc
+
+                _ ->
+                    Nothing
 
 
 collectRecordFields : Dict VarName MonoType -> Dict VarName MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
@@ -1373,7 +1488,7 @@ monoPublicKeyAlphaHelp mono_ state =
             in
             ( "10;" ++ strKey k1 ++ strKey k2 ++ strKey k3, s3 )
 
-        Record { fields } ->
+        Record fields ->
             let
                 ( rk, s1 ) =
                     recordKeyAlpha fields state
@@ -1485,10 +1600,10 @@ shaderSlotKeyAlpha extensionTypevar fields state =
             , fields = fields
             }
     of
-        Record r ->
+        Record recordFields ->
             let
                 ( rk, s1 ) =
-                    recordKeyAlpha r.fields state
+                    recordKeyAlpha recordFields state
             in
             ( strKey rk ++ maybeStrKey Nothing, s1 )
 
@@ -1556,7 +1671,7 @@ monoPublicKeyNormalized mono_ =
                 ++ strKey (monoPublicKeyNormalized t2)
                 ++ strKey (monoPublicKeyNormalized t3)
 
-        Record { fields } ->
+        Record fields ->
             "11;" ++ strKey (recordKeyOf fields)
 
         ExtensibleRecord extensibleRecordNotCollapsed ->
@@ -1618,8 +1733,8 @@ shaderSlotKey extensionTypevar fields =
             , fields = fields
             }
     of
-        Record r ->
-            strKey (recordKeyOf r.fields)
+        Record recordFields ->
+            strKey (recordKeyOf recordFields)
                 ++ maybeStrKey Nothing
 
         TypeVar var ->

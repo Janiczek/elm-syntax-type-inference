@@ -53,29 +53,33 @@ resolverFor moduleMapping deps selfPackage =
     let
         searchOrder : List PackageName
         searchOrder =
-            selfPackage
-                :: (Dict.get selfPackage deps
-                        |> Maybe.map .dependencies
-                        |> Maybe.withDefault []
-                   )
+            case Dict.get selfPackage deps of
+                Just selfPkg ->
+                    selfPackage :: selfPkg.dependencies
+
+                Nothing ->
+                    [ selfPackage ]
 
         addModule : PackageName -> Elm.Docs.Module -> Dict String (List PackageName) -> Dict String (List PackageName)
         addModule pkgName mod acc =
-            Dict.update mod.name
-                (\existing -> Just (Maybe.withDefault [] existing ++ [ pkgName ]))
-                acc
+            case Dict.get mod.name acc of
+                Just existing ->
+                    Dict.insert mod.name (existing ++ [ pkgName ]) acc
+
+                Nothing ->
+                    Dict.insert mod.name [ pkgName ] acc
 
         ownersByModule : Dict String (List PackageName)
         ownersByModule =
             searchOrder
                 |> List.foldl
                     (\pkgName accAcrossPks ->
-                        Dict.get pkgName deps
-                            |> Maybe.map
-                                (\pkg ->
-                                    List.foldl (\mod acc -> addModule pkgName mod acc) accAcrossPks pkg.modules
-                                )
-                            |> Maybe.withDefault accAcrossPks
+                        case Dict.get pkgName deps of
+                            Just pkg ->
+                                List.foldl (\mod acc -> addModule pkgName mod acc) accAcrossPks pkg.modules
+
+                            Nothing ->
+                                accAcrossPks
                     )
                     Dict.empty
 
@@ -110,14 +114,17 @@ resolverFor moduleMapping deps selfPackage =
         moduleIdOf moduleNameStr
             |> Result.andThen
                 (\moduleId ->
-                    case Dict.get moduleNameStr ownersByModule |> Maybe.withDefault [] of
-                        [] ->
+                    case Dict.get moduleNameStr ownersByModule of
+                        Nothing ->
                             Ok ( selfPackage, moduleId )
 
-                        [ owner ] ->
+                        Just [] ->
+                            Ok ( selfPackage, moduleId )
+
+                        Just [ owner ] ->
                             Ok ( owner, moduleId )
 
-                        matches ->
+                        Just matches ->
                             Err <|
                                 AmbiguousModuleOwner
                                     { moduleName = moduleNameStr
@@ -181,7 +188,7 @@ fromDocsType resolver type_ =
 
         Elm.Type.Record fields Nothing ->
             fromDocsFields resolver fields
-                |> Result.map (\fields_ -> Record { fields = Dict.fromList fields_ })
+                |> Result.map (\fields_ -> Record (Dict.fromList fields_))
 
         Elm.Type.Record fields (Just rowVar) ->
             fromDocsFields resolver fields
