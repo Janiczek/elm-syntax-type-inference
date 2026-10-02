@@ -93,7 +93,6 @@ type alias LookupTable =
     , moduleMapping : ModuleIds.Mapping
     , cache : Array.Array (Maybe Type)
     , pool : Dict String Type
-    , annotationFor : Dict TypeI.Id MonoType
     }
 
 
@@ -455,17 +454,9 @@ resolveIdToPublicType id tlt =
 
         monoType : MonoType
         monoType =
-            case Dict.get id tlt.annotationFor of
-                Nothing ->
-                    monoType0
-
-                Just annoMono ->
-                    case TypeI.renameToAnnotation annoMono monoType0 of
-                        Just renamed ->
-                            renamed
-
-                        Nothing ->
-                            monoType0
+            case TypeI.applyNameHints (hintFor tlt.subst) (TypeI.mono monoType0) of
+                TypeI.Forall _ hinted ->
+                    hinted
 
         key : String
         key =
@@ -490,9 +481,22 @@ resolveIdToPublicType id tlt =
       , moduleMapping = tlt.moduleMapping
       , cache = arraySetGrowing Nothing id (Just pubType) tlt.cache
       , pool = pool1
-      , annotationFor = tlt.annotationFor
       }
     )
+
+
+hintFor : SubstitutionMap.SubstitutionMap -> TypeI.Id -> TypeVar.SuperType -> Maybe String
+hintFor subst id super =
+    case SubstitutionMap.hintOf id subst of
+        Just hint ->
+            if hint.super == super then
+                Just hint.name
+
+            else
+                Nothing
+
+        Nothing ->
+            Nothing
 
 
 {-| Look up one range in an already-inferred project, caching the resolved type.
@@ -1157,38 +1161,14 @@ moduleResult ctx file outgoingAliases =
                     (\name acc ->
                         case Dict.get ( ctx.thisIndex.moduleId, "", name ) globalEnv of
                             Just scheme ->
-                                Dict.insert name scheme acc
+                                Dict.insert name
+                                    (scheme
+                                        |> TypeI.applyNameHints (hintFor substitutionMap)
+                                        |> TypeI.normalize
+                                    )
+                                    acc
 
                             Nothing ->
-                                acc
-                    )
-                    Dict.empty
-
-        annotationFor : Dict TypeI.Id TypeI.MonoType
-        annotationFor =
-            file.declarations
-                |> List.foldl
-                    (\(Node declRange decl) acc ->
-                        case decl of
-                            Declaration.FunctionDeclaration fn ->
-                                case fn.signature of
-                                    Nothing ->
-                                        acc
-
-                                    Just (Node _ sigNode) ->
-                                        case Dict.get (RangeLike.fromRange declRange) nodeIds of
-                                            Nothing ->
-                                                acc
-
-                                            Just declId ->
-                                                case TypeI.fromTypeAnnotation ctx.resolver (Node.value sigNode.typeAnnotation) of
-                                                    Err _ ->
-                                                        acc
-
-                                                    Ok annoMono ->
-                                                        Dict.insert declId annoMono acc
-
-                            _ ->
                                 acc
                     )
                     Dict.empty
@@ -1201,7 +1181,6 @@ moduleResult ctx file outgoingAliases =
             , -- We preallocate so `getAllTypes` never needs to grow the array.
               cache = Array.repeat nextId Nothing
             , pool = Dict.empty
-            , annotationFor = annotationFor
             }
         , interface =
             { moduleIndex = ctx.thisIndex

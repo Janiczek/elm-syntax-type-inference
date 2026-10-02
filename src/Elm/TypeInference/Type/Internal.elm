@@ -3,6 +3,7 @@ module Elm.TypeInference.Type.Internal exposing
     , MonoType(..)
     , Type(..)
     , TypeResolver
+    , applyNameHints
     , closeOver
     , collapseExtensible
     , collapsePrimitive
@@ -15,8 +16,8 @@ module Elm.TypeInference.Type.Internal exposing
     , monoHasTypeVars
     , monoPublicKey
     , monoTypeVars
+    , normalize
     , number_
-    , renameToAnnotation
     , toPublicPair
     , toPublicType
     )
@@ -676,6 +677,102 @@ normalize ((Forall boundVars monoType) as type_) =
             )
 
 
+{-| Name generated vars after their name hints:
+
+    Dict #1 #2 (with hints k, v)
+    --> Dict k v
+
+Already taken hint gets a numeric suffix: `k`, `k1`, `k2`, ...
+Vars without a hint are left for `normalize`.
+
+-}
+applyNameHints : (Id -> SuperType -> Maybe String) -> Type -> Type
+applyNameHints hintFor ((Forall boundVars monoType) as type_) =
+    let
+        allVars : List TypeVar
+        allVars =
+            List.reverse boundVars
+                ++ monoTypeVars monoType
+                |> TypeVar.deduplicate
+
+        taken : Set TypeVar.NamedKey
+        taken =
+            allVars
+                |> List.foldl
+                    (\( style, super ) acc ->
+                        case style of
+                            Named name ->
+                                Set.insert (TypeVar.namedKeyFrom name super) acc
+
+                            Generated _ ->
+                                acc
+                    )
+                    Set.empty
+
+        ( mapping, _ ) =
+            allVars
+                |> List.foldl
+                    (\( style, super ) (( mappingAcc, takenAcc ) as acc) ->
+                        case style of
+                            Named _ ->
+                                acc
+
+                            Generated theId ->
+                                case hintFor theId super of
+                                    Nothing ->
+                                        acc
+
+                                    Just hint ->
+                                        let
+                                            name : String
+                                            name =
+                                                freeHintName super hint 0 takenAcc
+                                        in
+                                        ( Dict.insert (TypeVar.genKeyFrom theId super) ( Named name, super ) mappingAcc
+                                        , Set.insert (TypeVar.namedKeyFrom name super) takenAcc
+                                        )
+                    )
+                    ( Dict.empty, taken )
+    in
+    if Dict.isEmpty mapping then
+        type_
+
+    else
+        mapVars
+            (\(( style, super ) as var) ->
+                case style of
+                    Generated theId ->
+                        case Dict.get (TypeVar.genKeyFrom theId super) mapping of
+                            Just renamed ->
+                                renamed
+
+                            Nothing ->
+                                var
+
+                    Named _ ->
+                        var
+            )
+            type_
+
+
+freeHintName : SuperType -> String -> Int -> Set TypeVar.NamedKey -> String
+freeHintName super hint suffix taken =
+    let
+        candidate : String
+        candidate =
+            if suffix == 0 then
+                hint
+
+            else
+                hint ++ String.fromInt suffix
+    in
+    if Set.member (TypeVar.namedKeyFrom candidate super) taken then
+        freeHintName super hint (suffix + 1) taken
+
+    else
+        candidate
+
+
 mapVars : (TypeVar -> TypeVar) -> Type -> Type
 mapVars fn (Forall boundVars monoType) =
     Forall (List.map fn boundVars) (mapVarsMono fn monoType)
@@ -1041,294 +1138,6 @@ shaderSlotToPublic f extensionTypevar fields =
             ( Dict.empty
             , Nothing
             )
-
-
-{-| Rename inferred vars to those from a type annotation.
-
-We walk both types in parallel - we need to see a Named (in annotation) and
-Generated (in inferred) var at the same time (with the same SuperType
-constraint) -> then we rename.
-
-Returns `Nothing` when the shapes don't line up. Shouldn't happen for
-type-checked code.
-
--}
-renameToAnnotation : MonoType -> MonoType -> Maybe MonoType
-renameToAnnotation annoMono inferredMono =
-    case collectAnnotationNames annoMono inferredMono Dict.empty of
-        Nothing ->
-            Nothing
-
-        Just mapping ->
-            Just (mapVarsMono (\var -> var |> applyAnnotationNames mapping) inferredMono)
-
-
-applyAnnotationNames : Dict Int TypeVar -> TypeVar -> TypeVar
-applyAnnotationNames mapping (( style, super ) as var) =
-    case style of
-        Generated theId ->
-            case Dict.get (TypeVar.genKeyFrom theId super) mapping of
-                Just renamed ->
-                    renamed
-
-                Nothing ->
-                    var
-
-        Named _ ->
-            var
-
-
-collectAnnotationNames : MonoType -> MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
-collectAnnotationNames annoMono inferredMono acc =
-    case annoMono of
-        TypeVar ( annoStyle, annoSuper ) ->
-            case inferredMono of
-                TypeVar ( inferredStyle, inferredSuper ) ->
-                    case annoStyle of
-                        Named annoName ->
-                            case inferredStyle of
-                                Generated inferredId ->
-                                    if annoSuper /= inferredSuper then
-                                        Nothing
-
-                                    else
-                                        let
-                                            key : Int
-                                            key =
-                                                TypeVar.genKeyFrom inferredId inferredSuper
-
-                                            wanted : TypeVar
-                                            wanted =
-                                                ( annoStyle, annoSuper )
-                                        in
-                                        case Dict.get key acc of
-                                            Nothing ->
-                                                Just (Dict.insert key wanted acc)
-
-                                            Just existing ->
-                                                if existing == wanted then
-                                                    Just acc
-
-                                                else
-                                                    Nothing
-
-                                Named inferredName ->
-                                    if annoName == inferredName && annoSuper == inferredSuper then
-                                        Just acc
-
-                                    else
-                                        Nothing
-
-                        Generated _ ->
-                            -- Should be impossible (annotations shouldn't contain generated vars)
-                            Nothing
-
-                _ ->
-                    Nothing
-
-        Function a1 ->
-            case inferredMono of
-                Function b1 ->
-                    case collectAnnotationNames a1.from b1.from acc of
-                        Just acc1 ->
-                            collectAnnotationNames a1.to b1.to acc1
-
-                        Nothing ->
-                            Nothing
-
-                _ ->
-                    Nothing
-
-        List a ->
-            case inferredMono of
-                List b ->
-                    collectAnnotationNames a b acc
-
-                _ ->
-                    Nothing
-
-        Tuple2 a1 a2 ->
-            case inferredMono of
-                Tuple2 b1 b2 ->
-                    case collectAnnotationNames a1 b1 acc of
-                        Just acc1 ->
-                            collectAnnotationNames a2 b2 acc1
-
-                        Nothing ->
-                            Nothing
-
-                _ ->
-                    Nothing
-
-        Tuple3 a1 a2 a3 ->
-            case inferredMono of
-                Tuple3 b1 b2 b3 ->
-                    case collectAnnotationNames a1 b1 acc of
-                        Just acc1 ->
-                            case collectAnnotationNames a2 b2 acc1 of
-                                Just acc2 ->
-                                    collectAnnotationNames a3 b3 acc2
-
-                                Nothing ->
-                                    Nothing
-
-                        Nothing ->
-                            Nothing
-
-                _ ->
-                    Nothing
-
-        Record r1 ->
-            case inferredMono of
-                Record r2 ->
-                    collectRecordFields r1 r2 acc
-
-                _ ->
-                    Nothing
-
-        ExtensibleRecord r1Uncollapsed ->
-            case inferredMono of
-                ExtensibleRecord r2Uncollapsed ->
-                    case collapseExtensible r1Uncollapsed of
-                        ExtensibleRecord r1 ->
-                            case collapseExtensible r2Uncollapsed of
-                                ExtensibleRecord r2 ->
-                                    case collectAnnotationNames r1.extensionTypevar r2.extensionTypevar acc of
-                                        Just acc1 ->
-                                            collectRecordFields r1.fields r2.fields acc1
-
-                                        Nothing ->
-                                            Nothing
-
-                                r2 ->
-                                    collectAnnotationNames (ExtensibleRecord r1) r2 acc
-
-                        r1 ->
-                            collectAnnotationNames r1 (collapseExtensible r2Uncollapsed) acc
-
-                _ ->
-                    Nothing
-
-        UserDefinedType u1 ->
-            case inferredMono of
-                UserDefinedType u2 ->
-                    if u1.package /= u2.package || u1.moduleId /= u2.moduleId || u1.name /= u2.name then
-                        Nothing
-
-                    else
-                        collectAnnotationArgs u1.args u2.args acc
-
-                _ ->
-                    Nothing
-
-        WebGLShader s1 ->
-            case inferredMono of
-                WebGLShader s2 ->
-                    collectAnnotationNames s1.attributesExtension s2.attributesExtension acc
-                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.attributes s2.attributes)
-                        |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.uniformsExtension s2.uniformsExtension)
-                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.uniforms s2.uniforms)
-                        |> Maybe.andThen (\a -> a |> collectAnnotationNames s1.varyingsExtension s2.varyingsExtension)
-                        |> Maybe.andThen (\a -> a |> collectRecordFields s1.varyings s2.varyings)
-
-                _ ->
-                    Nothing
-
-        Int ->
-            case inferredMono of
-                Int ->
-                    Just acc
-
-                _ ->
-                    Nothing
-
-        Float ->
-            case inferredMono of
-                Float ->
-                    Just acc
-
-                _ ->
-                    Nothing
-
-        Char ->
-            case inferredMono of
-                Char ->
-                    Just acc
-
-                _ ->
-                    Nothing
-
-        String ->
-            case inferredMono of
-                String ->
-                    Just acc
-
-                _ ->
-                    Nothing
-
-        Bool ->
-            case inferredMono of
-                Bool ->
-                    Just acc
-
-                _ ->
-                    Nothing
-
-        Unit ->
-            case inferredMono of
-                Unit ->
-                    Just acc
-
-                _ ->
-                    Nothing
-
-
-collectRecordFields : Dict VarName MonoType -> Dict VarName MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
-collectRecordFields fields1 fields2 acc =
-    Dict.merge
-        (\_ _ _ -> Nothing)
-        (\_ annoField inferredField maybeAccAcrossFields ->
-            case maybeAccAcrossFields of
-                Nothing ->
-                    Nothing
-
-                Just accAcrossFields ->
-                    case collectAnnotationNames annoField inferredField accAcrossFields of
-                        Nothing ->
-                            Nothing
-
-                        Just acc1 ->
-                            Just acc1
-        )
-        (\_ _ _ -> Nothing)
-        fields1
-        fields2
-        (Just acc)
-
-
-collectAnnotationArgs : List MonoType -> List MonoType -> Dict Int TypeVar -> Maybe (Dict Int TypeVar)
-collectAnnotationArgs annos inferreds acc =
-    case annos of
-        [] ->
-            case inferreds of
-                [] ->
-                    Just acc
-
-                _ :: _ ->
-                    Nothing
-
-        a :: restA ->
-            case inferreds of
-                b :: restB ->
-                    case collectAnnotationNames a b acc of
-                        Nothing ->
-                            Nothing
-
-                        Just acc1 ->
-                            collectAnnotationArgs restA restB acc1
-
-                [] ->
-                    Nothing
 
 
 {-| A deduplication key for a normalized monotype inside a single module's lookup table.

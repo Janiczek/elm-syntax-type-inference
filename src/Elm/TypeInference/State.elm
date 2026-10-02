@@ -22,6 +22,7 @@ module Elm.TypeInference.State exposing
     , idForNode
     , init
     , instantiate
+    , instantiateAnnotation
     , lookupEnv
     , lookupGlobalEnv
     , map
@@ -606,7 +607,20 @@ separate `someID -> someID`, and they don't touch each other.
 
 -}
 instantiate : Type -> StateM MonoType
-instantiate (Forall boundVars monoType) =
+instantiate =
+    instantiateHelp { rigid = False }
+
+
+{-| Like `instantiate`, but the annotation typevar names win over what they get
+unified with.
+-}
+instantiateAnnotation : Type -> StateM MonoType
+instantiateAnnotation =
+    instantiateHelp { rigid = True }
+
+
+instantiateHelp : { rigid : Bool } -> Type -> StateM MonoType
+instantiateHelp rigid (Forall boundVars monoType) =
     case boundVars of
         [] ->
             pure monoType
@@ -615,7 +629,7 @@ instantiate (Forall boundVars monoType) =
             \state0 ->
                 let
                     ( renaming, state1 ) =
-                        freshRenaming boundVars [] state0
+                        freshRenaming rigid boundVars [] state0
                 in
                 ( Ok (TypeI.mapVarsMono (\var -> lookupRenaming var renaming) monoType)
                 , state1
@@ -629,14 +643,60 @@ Uses an association list instead of a Dict for speed (Dict would have been worth
 it at ~8 typevars, unlikely to happen in typical Elm code).
 
 -}
-freshRenaming : List TypeVar -> List ( TypeVar, TypeVar ) -> State -> ( List ( TypeVar, TypeVar ), State )
-freshRenaming vars acc state =
+freshRenaming : { rigid : Bool } -> List TypeVar -> List ( TypeVar, TypeVar ) -> State -> ( List ( TypeVar, TypeVar ), State )
+freshRenaming rigid vars acc state =
     case vars of
         [] ->
             ( acc, state )
 
-        (( _, super ) as var) :: rest ->
-            freshRenaming rest (( var, ( Generated state.nextId, super ) ) :: acc) (tickNextId state)
+        (( style, super ) as var) :: rest ->
+            let
+                freshId : Id
+                freshId =
+                    state.nextId
+
+                hint : Maybe SubstitutionMap.NameHint
+                hint =
+                    case style of
+                        Named name ->
+                            Just
+                                { name = name
+                                , super = super
+                                , rigid = rigid.rigid
+                                }
+
+                        Generated id ->
+                            case SubstitutionMap.hintOf id state.subst of
+                                Just h ->
+                                    Just
+                                        { name = h.name
+                                        , super = h.super
+                                        , rigid = rigid.rigid
+                                        }
+
+                                Nothing ->
+                                    Nothing
+
+                ticked : State
+                ticked =
+                    tickNextId state
+            in
+            freshRenaming rigid
+                rest
+                (( var, ( Generated freshId, super ) ) :: acc)
+                (case hint of
+                    Just h ->
+                        { nextId = ticked.nextId
+                        , nodeIds = ticked.nodeIds
+                        , lexicalEnv = ticked.lexicalEnv
+                        , globalEnv = ticked.globalEnv
+                        , subst = SubstitutionMap.setHint freshId h ticked.subst
+                        , letRank = ticked.letRank
+                        }
+
+                    Nothing ->
+                        ticked
+                )
 
 
 lookupRenaming : TypeVar -> List ( TypeVar, TypeVar ) -> TypeVar

@@ -1,12 +1,15 @@
 module Elm.TypeInference.SubstitutionMap exposing
     ( Flags
     , LetRank
+    , NameHint
     , SubstitutionMap
     , bindRoot
     , empty
     , forLookup
+    , hintOf
     , letRankOf
     , linkTo
+    , setHint
     , setIdLetRank
     , stampIdAtLetRank
     , substitute
@@ -32,7 +35,7 @@ import Elm.TypeInference.Type.Internal as TypeI
         , MonoType(..)
         , Type(..)
         )
-import Elm.TypeInference.TypeVar as TypeVar exposing (NamedKey, TypeVar, TypeVarStyle(..))
+import Elm.TypeInference.TypeVar as TypeVar exposing (NamedKey, SuperType, TypeVar, TypeVarStyle(..))
 
 
 type alias SubstitutionMap =
@@ -48,6 +51,17 @@ type alias SubstitutionMap =
       -- Lowered to min(side1,side2) on unify.
       -- Important for "business logic": `State.generalize` quantifies vars above current let-rank.
       letRanks : Array LetRank
+    , -- Preferred display name of a generated typevar ID
+      hints : Dict Id NameHint
+    }
+
+
+{-| User-visible name for a generated var (eg. `k` from `type Dict k v`).
+-}
+type alias NameHint =
+    { name : String
+    , super : SuperType
+    , rigid : Bool
     }
 
 
@@ -58,6 +72,7 @@ empty =
     , unionFindRanksGen = Array.empty
     , unionFindRanksNamed = Dict.empty
     , letRanks = Array.empty
+    , hints = Dict.empty
     }
 
 
@@ -70,6 +85,7 @@ forLookup store =
     , unionFindRanksGen = Array.empty
     , unionFindRanksNamed = Dict.empty
     , letRanks = Array.empty
+    , hints = store.hints
     }
 
 
@@ -114,6 +130,7 @@ insertSlot ( style, super ) slot store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
+            , hints = store.hints
             }
 
         Named name ->
@@ -122,6 +139,7 @@ insertSlot ( style, super ) slot store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
+            , hints = store.hints
             }
 
 
@@ -134,6 +152,7 @@ removeSlot ( style, super ) store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
+            , hints = store.hints
             }
 
         Named name ->
@@ -142,6 +161,7 @@ removeSlot ( style, super ) store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
+            , hints = store.hints
             }
 
 
@@ -189,6 +209,7 @@ insertRank ( style, super ) rank store =
             , slotsNamed = store.slotsNamed
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
+            , hints = store.hints
             }
 
         Named name ->
@@ -197,6 +218,7 @@ insertRank ( style, super ) rank store =
             , slotsNamed = store.slotsNamed
             , unionFindRanksGen = store.unionFindRanksGen
             , letRanks = store.letRanks
+            , hints = store.hints
             }
 
 
@@ -329,6 +351,7 @@ linkTo : { child : TypeVar, parent : TypeVar } -> SubstitutionMap -> Substitutio
 linkTo { child, parent } store =
     insertSlot child (Link parent) store
         |> setVarLetRank parent (min (letRankOf child store) (letRankOf parent store))
+        |> carryHint child parent
 
 
 {-| Merge two distinct unbound roots, letting union-find rank pick the representative.
@@ -351,15 +374,78 @@ union a b store =
     if unionFindRankA < unionFindRankB then
         insertSlot a (Link b) store
             |> setVarLetRank b mergedLetRank
+            |> carryHint a b
 
     else if unionFindRankB < unionFindRankA then
         insertSlot b (Link a) store
             |> setVarLetRank a mergedLetRank
+            |> carryHint b a
 
     else
         insertSlot b (Link a) store
             |> insertRank a (unionFindRankA + 1)
             |> setVarLetRank a mergedLetRank
+            |> carryHint b a
+
+
+{-| After linking `child` to `parent`, let the parent keep the better hint.
+-}
+carryHint : TypeVar -> TypeVar -> SubstitutionMap -> SubstitutionMap
+carryHint ( childStyle, childSuper ) ( parentStyle, parentSuper ) store =
+    case parentStyle of
+        Named _ ->
+            store
+
+        Generated parentId ->
+            let
+                childHint : Maybe NameHint
+                childHint =
+                    case childStyle of
+                        Generated childId ->
+                            Dict.get childId store.hints
+
+                        Named name ->
+                            Just
+                                { name = name
+                                , super = childSuper
+                                , rigid = False
+                                }
+            in
+            case childHint of
+                Nothing ->
+                    store
+
+                Just hint ->
+                    if hint.super /= parentSuper then
+                        store
+
+                    else
+                        case Dict.get parentId store.hints of
+                            Nothing ->
+                                setHint parentId hint store
+
+                            Just parentHint ->
+                                if hint.rigid && not parentHint.rigid then
+                                    setHint parentId hint store
+
+                                else
+                                    store
+
+
+hintOf : Id -> SubstitutionMap -> Maybe NameHint
+hintOf id store =
+    Dict.get id store.hints
+
+
+setHint : Id -> NameHint -> SubstitutionMap -> SubstitutionMap
+setHint id hint store =
+    { hints = Dict.insert id hint store.hints
+    , slotsGen = store.slotsGen
+    , slotsNamed = store.slotsNamed
+    , unionFindRanksGen = store.unionFindRanksGen
+    , unionFindRanksNamed = store.unionFindRanksNamed
+    , letRanks = store.letRanks
+    }
 
 
 {-| Union-find rank of a root (missing = 0). Tree-height heuristic only.
@@ -378,6 +464,7 @@ stampIdAtLetRank id letRank store =
     , slotsNamed = store.slotsNamed
     , unionFindRanksGen = store.unionFindRanksGen
     , unionFindRanksNamed = store.unionFindRanksNamed
+    , hints = store.hints
     }
 
 
@@ -413,6 +500,7 @@ setVarLetRank ( var, _ ) letRank store =
             , slotsNamed = store.slotsNamed
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
+            , hints = store.hints
             }
 
         TypeVar.Named _ ->

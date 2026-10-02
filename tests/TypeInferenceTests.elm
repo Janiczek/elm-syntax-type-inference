@@ -3134,25 +3134,25 @@ aliasParamNameCollisionRegression =
 
 preferredTypeVarNamesFromTypeDeclarations : Test
 preferredTypeVarNamesFromTypeDeclarations =
-    Test.describe "unannotated declarations prefer typevar names from the custom type definition (#9)"
+    Test.describe "unannotated declarations keep typevar names from the schemes they were instantiated from (#9)"
         [ Test.test "single module" <| \() ->
         let
             modules : Dict ModuleName String
             modules =
                 Dict.singleton [ "Main" ] <|
                     String.ExtraExtra.multilineInput """
-                module Main exposing (empty)
+        module Main exposing (empty)
 
-                type Box item
-                    = Box (List item)
+        type Box item
+            = Box (List item)
 
-                empty =
-                    Box []
-                """
-        in
-        getDeclType modules [ "Main" ] "empty"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Main.Box item")
+        empty =
+            Box []
+        """
+                in
+                getDeclType modules [ "Main" ] "empty"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Main.Box item")
         , Test.test "re-exported through a type alias (FastDict example from the issue)" <| \() ->
         let
             modules : Dict ModuleName String
@@ -3160,141 +3160,191 @@ preferredTypeVarNamesFromTypeDeclarations =
                 Dict.fromList
                     [ ( [ "Internal" ]
                       , String.ExtraExtra.multilineInput """
-                    module Internal exposing (Dict(..), InnerDict(..))
+            module Internal exposing (Dict(..), InnerDict(..))
 
-                    type Dict k v
-                        = Dict Int (InnerDict k v)
+            type Dict k v
+                = Dict Int (InnerDict k v)
 
-                    type InnerDict k v
-                        = Leaf
-                        | Node k v (InnerDict k v) (InnerDict k v)
-                    """
-                      )
-                    , ( [ "FastDict" ]
+            type InnerDict k v
+                = Leaf
+                | Node k v (InnerDict k v) (InnerDict k v)
+            """
+                              )
+                            , ( [ "FastDict" ]
+                              , String.ExtraExtra.multilineInput """
+            module FastDict exposing (Dict, empty)
+
+            import Internal exposing (Dict(..), InnerDict(..))
+
+            type alias Dict k v =
+                Internal.Dict k v
+
+            empty =
+                Dict 0 Leaf
+            """
+                              )
+                            ]
+                in
+                getDeclType modules [ "FastDict" ] "empty"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Internal.Dict k v")
+        , Test.test "names survive through an unannotated function from another module" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.fromList
+                    [ ( [ "Box" ]
                       , String.ExtraExtra.multilineInput """
-                    module FastDict exposing (Dict, empty)
+            module Box exposing (Box, wrap)
 
-                    import Internal exposing (Dict(..), InnerDict(..))
+            type Box item
+                = Box item
 
-                    type alias Dict k v =
-                        Internal.Dict k v
+            wrap x =
+                Box x
+            """
+                      )
+                    , ( [ "Main" ]
+                      , String.ExtraExtra.multilineInput """
+            module Main exposing (wrapTwice)
 
-                    empty =
-                        Dict 0 Leaf
-                    """
+            import Box
+
+            wrapTwice x =
+                Box.wrap (Box.wrap x)
+            """
                       )
                     ]
         in
-        getDeclType modules [ "FastDict" ] "empty"
+        getDeclType modules [ "Main" ] "wrapTwice"
             |> Result.map Type.toString
-            |> Expect.equal (Ok "Internal.Dict k v")
-        , Test.test "a declared name already in use isn't given to a second var" <| \() ->
+            |> Expect.equal (Ok "item -> Box.Box (Box.Box item)")
+        , Test.test "annotation names win over names from the body" <| \() ->
         let
             modules : Dict ModuleName String
             modules =
                 Dict.singleton [ "Main" ] <|
                     String.ExtraExtra.multilineInput """
-                module Main exposing (firsts)
+        module Main exposing (swap)
 
-                type Pair a b
-                    = Pair a b
+        type Pair a b
+            = Pair a b
 
-                firsts (Pair x _) (Pair y _) =
-                    ( x, y )
-                """
+        swap : Pair x y -> Pair y x
+        swap (Pair p q) =
+            Pair q p
+        """
         in
-        getDeclType modules [ "Main" ] "firsts"
+        getDeclType modules [ "Main" ] "swap"
             |> Result.map Type.toString
-            |> Expect.equal (Ok "Main.Pair a b -> Main.Pair c d -> ( a, c )")
+            |> Expect.equal (Ok "Main.Pair x y -> Main.Pair y x")
+        , Test.test "a name already in use gets a numeric suffix" <| \() ->
+        let
+            modules : Dict ModuleName String
+            modules =
+                Dict.singleton [ "Main" ] <|
+                    String.ExtraExtra.multilineInput """
+        module Main exposing (firsts)
+
+        type Pair a b
+            = Pair a b
+
+        firsts (Pair x _) (Pair y _) =
+            ( x, y )
+        """
+                in
+                getDeclType modules [ "Main" ] "firsts"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Main.Pair a b -> Main.Pair a1 b1 -> ( a, a1 )")
         , Test.test "custom types from dependencies" <| \() ->
         let
             modules : Dict ModuleName String
             modules =
                 Dict.singleton [ "Main" ] <|
                     String.ExtraExtra.multilineInput """
-                module Main exposing (none)
+        module Main exposing (none)
 
-                import Platform.Cmd
+        import Platform.Cmd
 
-                none =
-                    Platform.Cmd.none
-                """
-        in
-        getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "none"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Platform.Cmd.Cmd msg")
-        , Test.test "opaque custom types from dependencies" <| \() ->
+        none =
+            Platform.Cmd.none
+        """
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "none"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Platform.Cmd.Cmd msg")
+        , Test.test "opaque custom types from dependencies (names come from Dict.map's scheme)" <| \() ->
         let
             modules : Dict ModuleName String
             modules =
                 Dict.singleton [ "Main" ] <|
                     String.ExtraExtra.multilineInput """
-                module Main exposing (keepValues)
+        module Main exposing (keepValues)
 
-                import Dict
+        import Dict
 
-                keepValues d =
-                    Dict.map (\\_ v -> v) d
-                """
-        in
-        getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "keepValues"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Dict.Dict k v -> Dict.Dict k v")
-        , Test.test "dependency function with a taken declared name" <| \() ->
+        keepValues d =
+            Dict.map (\\_ v -> v) d
+        """
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "keepValues"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Dict.Dict k v1 -> Dict.Dict k v1")
+        , Test.test "dependency function keeps its own typevar names" <| \() ->
         let
             modules : Dict ModuleName String
             modules =
                 Dict.singleton [ "Main" ] <|
                     String.ExtraExtra.multilineInput """
-                module Main exposing (mapper)
+        module Main exposing (mapper)
 
-                import Dict
+        import Dict
 
-                mapper =
-                    Dict.map
-                """
-        in
-        getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "mapper"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "(k -> v -> a) -> Dict.Dict k v -> Dict.Dict k a")
+        mapper =
+            Dict.map
+        """
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "mapper"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "(k -> v1 -> v2) -> Dict.Dict k v1 -> Dict.Dict k v2")
         , Test.test "dependency type nested in a project type" <| \() ->
         let
             modules : Dict ModuleName String
             modules =
                 Dict.singleton [ "Main" ] <|
                     String.ExtraExtra.multilineInput """
-                module Main exposing (wrap)
+        module Main exposing (wrap)
 
-                import Platform.Cmd
+        import Platform.Cmd
 
-                type Box item
-                    = Box item
+        type Box item
+            = Box item
 
-                wrap =
-                    Box Platform.Cmd.none
-                """
-        in
-        getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "wrap"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Main.Box (Platform.Cmd.Cmd msg)")
+        wrap =
+            Box Platform.Cmd.none
+        """
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "wrap"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Main.Box (Platform.Cmd.Cmd msg)")
         , Test.test "dependency type nested in a project type - implicit import" <| \() ->
         let
             modules : Dict ModuleName String
             modules =
                 Dict.singleton [ "Main" ] <|
                     String.ExtraExtra.multilineInput """
-                module Main exposing (wrap)
+        module Main exposing (wrap)
 
-                type Box item
-                    = Box item
+        type Box item
+            = Box item
 
-                wrap =
-                    Box Cmd.none
-                """
-        in
-        getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "wrap"
-            |> Result.map Type.toString
-            |> Expect.equal (Ok "Main.Box (Platform.Cmd.Cmd msg)")
+        wrap =
+            Box Cmd.none
+        """
+                in
+                getDeclTypeWithDeps [ CoreFixture.core ] modules [ "Main" ] "wrap"
+                    |> Result.map Type.toString
+                    |> Expect.equal (Ok "Main.Box (Platform.Cmd.Cmd msg)")
         ]
 
 

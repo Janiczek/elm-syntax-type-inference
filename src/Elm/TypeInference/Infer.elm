@@ -332,7 +332,7 @@ signatureEquations declId maybeAnnotationType =
             State.pure TypeEquation.empty
 
         Just annotationType_ ->
-            State.do (State.instantiate (TypeI.closeOver annotationType_)) <| \freshAnnotationType ->
+            State.do (State.instantiateAnnotation (TypeI.closeOver annotationType_)) <| \freshAnnotationType ->
             State.pure
                 (TypeEquation.single
                     ( TypeI.id_ declId
@@ -708,20 +708,21 @@ inferExpr ctx exprNode =
             State.do State.getNextIdAndTick <| \resultId ->
             finish
                 (TypeEquation.batch
-                [ ( type_
-                  , Function
-                        { from =
-                            ExtensibleRecord
-                                { extensionTypevar = TypeI.id_ recordId
-                                , fields =
-                                    -- the fieldName is ".a", not "a", so let's sanitize that
-                                    Dict.singleton (String.dropLeft 1 fieldName) (TypeI.id_ resultId)
-                                }
-                        , to = TypeI.id_ resultId
-                        }
-                  , "Record access fn: is a function"
-                  )
-                ])
+                    [ ( type_
+                      , Function
+                            { from =
+                                ExtensibleRecord
+                                    { extensionTypevar = TypeI.id_ recordId
+                                    , fields =
+                                        -- the fieldName is ".a", not "a", so let's sanitize that
+                                        Dict.singleton (String.dropLeft 1 fieldName) (TypeI.id_ resultId)
+                                    }
+                            , to = TypeI.id_ resultId
+                            }
+                      , "Record access fn: is a function"
+                      )
+                    ]
+                )
 
         RecordUpdateExpression recordVarNode fieldSetters ->
             let
@@ -773,18 +774,19 @@ inferExpr ctx exprNode =
             State.do State.getNextIdAndTick <| \varyingsId ->
             finish
                 (TypeEquation.batch
-                [ ( type_
-                  , WebGLShader
-                        { attributesExtension = TypeI.id_ attributesId
-                        , attributes = declarations.attributes
-                        , uniformsExtension = TypeI.id_ uniformsId
-                        , uniforms = declarations.uniforms
-                        , varyingsExtension = TypeI.id_ varyingsId
-                        , varyings = declarations.varyings
-                        }
-                  , "GLSLExpression: is a shader"
-                  )
-                ])
+                    [ ( type_
+                      , WebGLShader
+                            { attributesExtension = TypeI.id_ attributesId
+                            , attributes = declarations.attributes
+                            , uniformsExtension = TypeI.id_ uniformsId
+                            , uniforms = declarations.uniforms
+                            , varyingsExtension = TypeI.id_ varyingsId
+                            , varyings = declarations.varyings
+                            }
+                      , "GLSLExpression: is a shader"
+                      )
+                    ]
+                )
 
 
 stateErrorImpossibleExpr : Ctx -> Node Expression -> StateM Inferred
@@ -1103,14 +1105,15 @@ inferPattern ctx patternNode =
             State.do State.getNextIdAndTick <| \recordId ->
             finish
                 (TypeEquation.batch
-                [ ( type_
-                  , ExtensibleRecord
-                        { extensionTypevar = TypeI.id_ recordId
-                        , fields = fields_
-                        }
-                  , "Record pattern"
-                  )
-                ])
+                    [ ( type_
+                      , ExtensibleRecord
+                            { extensionTypevar = TypeI.id_ recordId
+                            , fields = fields_
+                            }
+                      , "Record pattern"
+                      )
+                    ]
+                )
 
         UnConsPattern p1 p2 ->
             State.do State.getNextIdAndTick <| \listItemId ->
