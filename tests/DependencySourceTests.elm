@@ -8,7 +8,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)
-import Elm.TypeInference.Error exposing (ErrorDetails(..))
+import Elm.TypeInference.ProjectError exposing (ProjectError, ProjectErrorDetails(..))
 import Expect
 import Test exposing (Test)
 import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
@@ -54,7 +54,7 @@ projectWith :
     -> List Dependency
     -> Dict String (List File)
     -> Dict ModuleName File
-    -> Result Elm.TypeInference.Error.Error Elm.TypeInference.Project
+    -> Result ProjectError Elm.TypeInference.Project
 projectWith directDependencies allDependencies sources files =
     Elm.TypeInference.init
         { directDependencies = directDependencies

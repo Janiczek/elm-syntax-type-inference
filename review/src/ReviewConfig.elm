@@ -58,7 +58,9 @@ config =
     , NoTestValuesInProductionCode.rule
         (NoTestValuesInProductionCode.startsWith "test_")
     , Simplify.rule Simplify.defaults
+        |> Rule.ignoreErrorsForFiles [ "tests/ListExtraExtraTests.elm" ]
 
     -- custom
     , NoSlowConcat.rule
+        |> Rule.ignoreErrorsForFiles [ "tests/ListExtraExtraTests.elm" ]
     ]

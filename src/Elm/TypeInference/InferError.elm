@@ -1,16 +1,19 @@
-module Elm.TypeInference.Error exposing
-    ( Error, ErrorDetails(..)
+module Elm.TypeInference.InferError exposing
+    ( InferError, InferErrorDetails(..)
     , toString
     )
 
 {-| Errors reported while resolving or inferring a module.
 
-@docs Error, ErrorDetails
+Errors from building a `Project` (`Elm.TypeInference.init`,
+`Elm.TypeInference.addFile`) live in
+[`Elm.TypeInference.ProjectError`](Elm-TypeInference-ProjectError).
+
+@docs InferError, InferErrorDetails
 @docs toString
 
 -}
 
-import Dict exposing (Dict)
 import Elm.Syntax.Expression exposing (Expression)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.ModuleName.Extra
@@ -18,17 +21,17 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Pattern exposing (Pattern)
 import Elm.Syntax.Range as Range exposing (Range)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
-import Elm.Type
+import Elm.TypeInference.Error.Internal exposing (list, record)
 import Elm.TypeInference.Type as Type exposing (Type, VarName)
 import Elm.Writer
 
 
 {-| A type inference error + location info.
 -}
-type alias Error =
+type alias InferError =
     { moduleName : ModuleName
     , declarationNames : List VarName
-    , details : ErrorDetails
+    , details : InferErrorDetails
     }
 
 
@@ -39,22 +42,11 @@ type alias Error =
     without arguments or a 4-tuple. You should never be able to reach these when
     using `elm-syntax`'s parser on real Elm files.
 
-  - **`ImpossibleDocsType`:** Similar but for hand-crafted `docs.json`. Real
-    `docs.json` files emitted by the Elm compiler should never produce these.
-
-  - **`MissingModuleName`:** Raised when a `File` has an empty module name.
-
   - **`ModuleNotFound`:** Raised when `Elm.TypeInference.getType` is called
     with module that's not part of the indexed `Project`.
 
   - **`RangeNotFound`:** Raised when `Elm.TypeInference.getType` is called
     with a `Range` not corresponding to an AST node from the provided `File`s.
-
-  - **`NeedPackageSources`:** Raised by `Elm.TypeInference.init` when
-    extra dependency sources are needed to analyze whether a
-    `docs.json`-mentioned internal type is a record or a custom type.
-    Provide these files in `sourcesToResolveAmbiguity` in the next
-    `Elm.TypeInference.init` call.
 
   - **`VarNotFound`:**
 
@@ -141,16 +133,13 @@ type alias Error =
         --    Type.String
 
 -}
-type ErrorDetails
+type InferErrorDetails
     = -- Syntax errors
       ImpossibleExpr (Node Expression)
     | ImpossiblePattern (Node Pattern)
     | ImpossibleType TypeAnnotation
-    | ImpossibleDocsType Elm.Type.Type
-    | MissingModuleName
     | ModuleNotFound
     | RangeNotFound
-    | NeedPackageSources (Dict String (List String))
       -- Var qualification errors
     | VarNotFound { usedIn : ModuleName, varName : VarName }
     | AmbiguousName { usedIn : ModuleName, varName : VarName, possibleModules : List ModuleName }
@@ -163,7 +152,7 @@ type ErrorDetails
 
 {-| Render an error for diagnostic output.
 -}
-toString : Error -> String
+toString : InferError -> String
 toString error =
     detailsToString error.details
         ++ " (in "
@@ -177,7 +166,7 @@ toString error =
         ++ ")"
 
 
-detailsToString : ErrorDetails -> String
+detailsToString : InferErrorDetails -> String
 detailsToString details =
     case details of
         ImpossibleExpr exprNode ->
@@ -201,25 +190,11 @@ detailsToString details =
                         (Node.Node Range.emptyRange typeAnnotation)
                     )
 
-        ImpossibleDocsType type_ ->
-            "Impossible docs type " ++ docsTypeToString type_
-
-        MissingModuleName ->
-            "Missing module name"
-
         ModuleNotFound ->
             "Module not found"
 
         RangeNotFound ->
             "Range not found"
-
-        NeedPackageSources needed ->
-            "Need package sources "
-                ++ record
-                    (needed
-                        |> Dict.toList
-                        |> List.map (\( pkg, paths ) -> ( pkg, list paths ))
-                    )
 
         VarNotFound r ->
             "Var not found "
@@ -281,81 +256,7 @@ parenIfHasSpace str =
         str
 
 
-record : List ( String, String ) -> String
-record fields =
-    fields
-        |> List.map (\( key, value ) -> key ++ " = " ++ value)
-        |> String.join ", "
-        |> (\str -> "{ " ++ str ++ " }")
-
-
-list : List String -> String
-list items =
-    "[" ++ String.join ", " items ++ "]"
-
-
 rangeToString : Range -> String
 rangeToString { start } =
     String.fromInt start.row ++ ":" ++ String.fromInt start.column
 
-
-docsTypeToString : Elm.Type.Type -> String
-docsTypeToString type_ =
-    let
-        -- Wraps in parens if it wouldn't parse back unambiguously in arg position
-        wrapped : Elm.Type.Type -> String
-        wrapped t =
-            case t of
-                Elm.Type.Lambda _ _ ->
-                    "(" ++ docsTypeToString t ++ ")"
-
-                Elm.Type.Type _ (_ :: _) ->
-                    "(" ++ docsTypeToString t ++ ")"
-
-                _ ->
-                    docsTypeToString t
-    in
-    case type_ of
-        Elm.Type.Var name ->
-            name
-
-        Elm.Type.Lambda from to ->
-            -- `->` is right-associative, so only the left side is ambiguous
-            wrapped from ++ " -> " ++ docsTypeToString to
-
-        Elm.Type.Tuple [] ->
-            "()"
-
-        Elm.Type.Tuple types ->
-            "( " ++ String.join ", " (List.map docsTypeToString types) ++ " )"
-
-        Elm.Type.Type name args ->
-            (name :: List.map wrapped args)
-                |> String.join " "
-
-        Elm.Type.Record fields extensibleVar ->
-            let
-                prefix : String
-                prefix =
-                    case extensibleVar of
-                        Nothing ->
-                            ""
-
-                        Just var ->
-                            var ++ " | "
-            in
-            if String.isEmpty prefix && List.isEmpty fields then
-                "{}"
-
-            else
-                let
-                    fieldsStr : String
-                    fieldsStr =
-                        fields
-                            |> List.map
-                                (\( fieldName, fieldType ) ->
-                                    fieldName ++ " : " ++ docsTypeToString fieldType
-                                )
-                            |> String.join ", "
-                in
-                "{ " ++ prefix ++ fieldsStr ++ " }"

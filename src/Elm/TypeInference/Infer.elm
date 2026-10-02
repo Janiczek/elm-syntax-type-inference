@@ -27,7 +27,7 @@ import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Pattern.Extra
 import Elm.Syntax.Signature exposing (Signature)
 import Elm.TypeInference.BindingGroup as BindingGroup
-import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
@@ -42,7 +42,7 @@ import Elm.TypeInference.Type.Internal as TypeI
         , Type
         , TypeResolver
         )
-import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations, TypeEquation)
+import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import Regex exposing (Regex)
 
@@ -54,11 +54,11 @@ type alias Ctx =
     , index : ModuleLookup.Index
     , allowKernel : Bool
     , moduleMapping : ModuleIds.Mapping
-    , resolvedVars : Dict ( {- written -} ModuleName, VarName ) (Result ErrorDetails (Maybe ( PackageName, ModuleId )))
+    , resolvedVars : Dict ( {- written -} ModuleName, VarName ) (Result InferErrorDetails (Maybe ( PackageName, ModuleId )))
     }
 
 
-resolveVar : Ctx -> ModuleName -> VarName -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+resolveVar : Ctx -> ModuleName -> VarName -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 resolveVar ctx qualifier name =
     case Dict.get ( qualifier, name ) ctx.resolvedVars of
         Just resolved ->
@@ -97,7 +97,7 @@ typeResolver ctx =
 Binding-group type errors get their group via `UnifyConfig`;
 everything else carries the module with an empty group.
 -}
-toError : Ctx -> ErrorDetails -> Error
+toError : Ctx -> InferErrorDetails -> InferError
 toError ctx details =
     { moduleName = FullModuleName.toModuleName ctx.thisModule.moduleName
     , declarationNames = []

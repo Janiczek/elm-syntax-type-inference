@@ -26,7 +26,7 @@ import Dict exposing (Dict)
 import Dict.Extra
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
-import Elm.TypeInference.Error exposing (ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
@@ -940,7 +940,7 @@ fromTypeAnnotation resolver typeAnnotation =
 
 {-| Convert a type-annotation conversion failure into an inference error.
 -}
-fromTypeAnnotationError : FromTypeAnnotationError -> ErrorDetails
+fromTypeAnnotationError : FromTypeAnnotationError -> InferErrorDetails
 fromTypeAnnotationError err =
     case err of
         ImpossibleAnnotation typeAnnotation ->

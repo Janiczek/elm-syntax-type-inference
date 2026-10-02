@@ -9,7 +9,8 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Type
 import Elm.TypeInference
-import Elm.TypeInference.Error as Error
+import Elm.TypeInference.InferError as InferError
+import Elm.TypeInference.ProjectError as ProjectError
 import Expect
 import String.ExtraExtra
 import Test exposing (Test)
@@ -28,7 +29,7 @@ import Tests.Elm.TypeInference.Helpers
 
 suite : Test
 suite =
-    Test.describe "Elm.TypeInference.Error (end-to-end)"
+    Test.describe "Elm.TypeInference.InferError (end-to-end)"
         [ varNotFoundTest
         , ambiguousNameTest
         , ambiguousModuleOwnerTest
@@ -47,11 +48,24 @@ expectError expected result =
         \() ->
             case result of
                 Err (CouldntInfer err) ->
-                    Error.toString err
+                    InferError.toString err
                         |> Expect.equal expected
 
                 other ->
                     Expect.fail ("Expected a type inference error, got: " ++ Debug.toString other)
+
+
+expectProjectError : String -> Result TestError a -> Test
+expectProjectError expected result =
+    Test.test expected <|
+        \() ->
+            case result of
+                Err (CouldntInit err) ->
+                    ProjectError.toString err
+                        |> Expect.equal expected
+
+                other ->
+                    Expect.fail ("Expected a project init error, got: " ++ Debug.toString other)
 
 
 varNotFoundTest : Test
@@ -202,7 +216,7 @@ impossibleDocsTypeTest =
     in
     getExprTypeWithDeps [ weird ]
         "Weird.weird"
-        |> expectError "Impossible docs type ( a, b, c, d ) (in Weird)"
+        |> expectProjectError "Impossible docs type ( a, b, c, d ) (in Weird)"
 
 
 missingModuleNameTest : Test
@@ -246,7 +260,7 @@ missingModuleNameTest =
                             }
                     of
                         Err err ->
-                            Error.toString err
+                            ProjectError.toString err
                                 |> Expect.equal "Missing module name (in <Missing>)"
 
                         Ok _ ->
@@ -312,7 +326,7 @@ moduleNotFoundTest =
                         Ok proj ->
                             case Elm.TypeInference.getType [ "DoesNotExist" ] dummyRange proj |> Tuple.first of
                                 Err err ->
-                                    Error.toString err
+                                    InferError.toString err
                                         |> Expect.equal "Module not found (in DoesNotExist)"
 
                                 Ok _ ->

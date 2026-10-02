@@ -14,9 +14,9 @@ import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Type
-import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
-import Elm.TypeInference.State as State exposing (StateM)
+import Elm.TypeInference.ProjectError exposing (ProjectError, ProjectErrorDetails(..))
+import Elm.TypeInference.State exposing (GlobalKey)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
 import Elm.TypeInference.TypeVar as TypeVar
@@ -45,7 +45,7 @@ fromList packages =
 {-| Resolves a module name from docs.json to its package.
 -}
 type alias Resolver =
-    String -> Result ErrorDetails ( PackageName, ModuleId )
+    String -> Result ProjectErrorDetails ( PackageName, ModuleId )
 
 
 resolverFor : ModuleIds.Mapping -> Dependencies -> PackageName -> Resolver
@@ -83,7 +83,7 @@ resolverFor moduleMapping deps selfPackage =
                     )
                     Dict.empty
 
-        moduleIdOf : String -> Result ErrorDetails ModuleId
+        moduleIdOf : String -> Result ProjectErrorDetails ModuleId
         moduleIdOf dotted =
             if String.isEmpty dotted then
                 -- Impossible in principle (Elm compiler generates docs.json with fully qualified types).
@@ -133,7 +133,7 @@ resolverFor moduleMapping deps selfPackage =
                 )
 
 
-fromDocsType : Resolver -> Elm.Type.Type -> Result ErrorDetails MonoType
+fromDocsType : Resolver -> Elm.Type.Type -> Result ProjectErrorDetails MonoType
 fromDocsType resolver type_ =
     case type_ of
         Elm.Type.Var name ->
@@ -201,7 +201,7 @@ fromDocsType resolver type_ =
                     )
 
 
-fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ErrorDetails (List ( String, MonoType ))
+fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ProjectErrorDetails (List ( String, MonoType ))
 fromDocsFields resolver fields =
     Result.Extra.combineMap
         (\( name, value ) ->
@@ -211,7 +211,25 @@ fromDocsFields resolver fields =
         fields
 
 
-register : ModuleIds.Mapping -> Dependencies -> StateM ( Dict ( ModuleId, PackageName, VarName ) TypeAlias, ModuleIds.Mapping )
+{-| What registering dependencies contributes: constructor/value types and
+type alias bodies.
+-}
+type alias Registered =
+    { globalEnv : Dict GlobalKey TypeI.Type
+    , typeAliases : Dict GlobalKey TypeAlias
+    }
+
+
+register :
+    ModuleIds.Mapping
+    -> Dependencies
+    ->
+        Result
+            ProjectError
+            { globalEnv : Dict GlobalKey TypeI.Type
+            , typeAliases : Dict GlobalKey TypeAlias
+            , moduleMapping : ModuleIds.Mapping
+            }
 register moduleMapping deps =
     let
         moduleMappingWithAllPackageModules : ModuleIds.Mapping
@@ -231,13 +249,25 @@ register moduleMapping deps =
     in
     deps
         |> Dict.toList
-        |> State.foldl
-            (\( pkgName, pkg ) dict ->
-                State.map (\registeredPackage -> Dict.union registeredPackage dict)
-                    (registerPackage moduleMappingWithAllPackageModules deps pkgName pkg)
+        |> Result.Extra.foldlWhileOk
+            (\( pkgName, pkg ) acc ->
+                registerPackage
+                    moduleMappingWithAllPackageModules
+                    deps
+                    pkgName
+                    pkg
+                    acc
             )
-            Dict.empty
-        |> State.map (\dict -> ( dict, moduleMappingWithAllPackageModules ))
+            { globalEnv = Dict.empty
+            , typeAliases = Dict.empty
+            }
+        |> Result.map
+            (\registered ->
+                { globalEnv = registered.globalEnv
+                , typeAliases = registered.typeAliases
+                , moduleMapping = moduleMappingWithAllPackageModules
+                }
+            )
 
 
 registerPackage :
@@ -245,20 +275,32 @@ registerPackage :
     -> Dependencies
     -> PackageName
     -> DependencyPackage
-    -> StateM (Dict ( ModuleId, PackageName, VarName ) TypeAlias)
-registerPackage moduleMapping deps pkgName pkg =
+    -> Registered
+    -> Result ProjectError Registered
+registerPackage moduleMapping deps pkgName pkg registered =
     let
         resolver : Resolver
         resolver =
             resolverFor moduleMapping deps pkgName
     in
     pkg.modules
-        |> State.foldl
-            (\mod dict ->
-                State.map (\registeredPackage -> Dict.union registeredPackage dict)
-                    (registerModule moduleMapping pkgName resolver mod)
+        |> Result.Extra.foldlWhileOk
+            (\mod acc ->
+                registerModule
+                    moduleMapping
+                    pkgName
+                    resolver
+                    mod
+                    acc
             )
-            Dict.empty
+            registered
+
+
+addGlobalBinding : GlobalKey -> MonoType -> Registered -> Registered
+addGlobalBinding key monoType registered =
+    { globalEnv = Dict.insert key (TypeI.closeOver monoType) registered.globalEnv
+    , typeAliases = registered.typeAliases
+    }
 
 
 registerModule :
@@ -266,13 +308,14 @@ registerModule :
     -> PackageName
     -> Resolver
     -> Elm.Docs.Module
-    -> StateM (Dict ( ModuleId, PackageName, VarName ) TypeAlias)
-registerModule moduleMapping pkgName resolver mod =
+    -> Registered
+    -> Result ProjectError Registered
+registerModule moduleMapping pkgName resolver mod registered =
     case ModuleIds.getIdByDotted mod.name moduleMapping of
         Nothing ->
             -- Impossible if we intern modules properly.
             -- Possible if we have a bug.
-            State.error
+            Err
                 { moduleName = ModuleNameExtra.fromDotted mod.name
                 , declarationNames = []
                 , details =
@@ -284,42 +327,30 @@ registerModule moduleMapping pkgName resolver mod =
 
         Just moduleId ->
             let
-                toError : ErrorDetails -> Error
+                toError : ProjectErrorDetails -> ProjectError
                 toError details =
                     { moduleName = ModuleNameExtra.fromDotted mod.name
                     , declarationNames = []
                     , details = details
                     }
 
-                addBinding : VarName -> Elm.Type.Type -> StateM ()
-                addBinding name tipe =
-                    State.do (State.fromResult (Result.mapError toError (fromDocsType resolver tipe))) <| \monoType ->
-                    State.addGlobalBinding ( moduleId, pkgName, name ) (TypeI.closeOver monoType)
+                addBinding : VarName -> Elm.Type.Type -> Registered -> Result ProjectError Registered
+                addBinding name tipe acc =
+                    fromDocsType resolver tipe
+                        |> Result.mapError toError
+                        |> Result.map (\monoType -> addGlobalBinding ( moduleId, pkgName, name ) monoType acc)
             in
-            State.do (State.traverseUnit (\v -> addBinding v.name v.tipe) mod.values) <| \() ->
-            State.do (State.traverseUnit (\b -> addBinding b.name b.tipe) mod.binops) <| \() ->
-            State.do (State.traverseUnit (\union -> registerUnion pkgName moduleId mod.name resolver union) mod.unions) <| \() ->
-            mod.aliases
-                |> State.foldl
-                    (\typeAlias acc ->
-                        State.map
-                            (\maybeRegisteredTypeAlias ->
-                                case maybeRegisteredTypeAlias of
-                                    Nothing ->
-                                        acc
-
-                                    Just ( typeAliasKey, registeredTypeAlias ) ->
-                                        Dict.insert typeAliasKey registeredTypeAlias acc
-                            )
-                            (registerAlias pkgName moduleId mod.name resolver typeAlias)
-                    )
-                    Dict.empty
+            registered
+                |> (\acc -> Result.Extra.foldlWhileOk (\v -> addBinding v.name v.tipe) acc mod.values)
+                |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (\b -> addBinding b.name b.tipe) acc mod.binops)
+                |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (registerUnion pkgName moduleId mod.name resolver) acc mod.unions)
+                |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (registerAlias pkgName moduleId mod.name resolver) acc mod.aliases)
 
 
-registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> StateM ()
-registerUnion pkgName moduleId dottedModuleName resolver union =
+registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> Registered -> Result ProjectError Registered
+registerUnion pkgName moduleId dottedModuleName resolver union registered =
     let
-        toError : ErrorDetails -> Error
+        toError : ProjectErrorDetails -> ProjectError
         toError details =
             { moduleName = ModuleNameExtra.fromDotted dottedModuleName
             , declarationNames = []
@@ -347,26 +378,34 @@ registerUnion pkgName moduleId dottedModuleName resolver union =
                         }
     in
     union.tags
-        |> State.traverseUnit
-            (\( ctorName, argTypeStrings ) ->
-                State.do
-                    (State.fromResult
-                        (Result.mapError toError
-                            (Result.Extra.combineMap
-                                (\argDocsType -> fromDocsType resolver argDocsType)
-                                argTypeStrings
-                            )
+        |> Result.Extra.foldlWhileOk
+            (\( ctorName, argTypeStrings ) acc ->
+                Result.Extra.combineMap
+                    (\argDocsType -> fromDocsType resolver argDocsType)
+                    argTypeStrings
+                    |> Result.mapError toError
+                    |> Result.map
+                        (\argTypes ->
+                            let
+                                ctorType : MonoType
+                                ctorType =
+                                    argTypes
+                                        |> List.foldr
+                                            (\argT ctorAcc ->
+                                                Function
+                                                    { from = argT
+                                                    , to = ctorAcc
+                                                    }
+                                            )
+                                            resultType
+                            in
+                            addGlobalBinding
+                                ( moduleId, pkgName, ctorName )
+                                ctorType
+                                acc
                         )
-                    )
-                <| \argTypes ->
-                let
-                    ctorType : MonoType
-                    ctorType =
-                        argTypes
-                            |> List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType
-                in
-                State.addGlobalBinding ( moduleId, pkgName, ctorName ) (TypeI.closeOver ctorType)
             )
+            registered
 
 
 {-| A record type definition gets a constructor function as well
@@ -377,39 +416,62 @@ registerAlias :
     -> String
     -> Resolver
     -> Elm.Docs.Alias
-    -> StateM (Maybe ( ( ModuleId, PackageName, VarName ), TypeAlias ))
-registerAlias pkgName moduleId dottedModuleName resolver alias_ =
+    -> Registered
+    -> Result ProjectError Registered
+registerAlias pkgName moduleId dottedModuleName resolver alias_ registered =
     let
-        toError : ErrorDetails -> Error
+        toError : ProjectErrorDetails -> ProjectError
         toError details =
             { moduleName = ModuleNameExtra.fromDotted dottedModuleName
             , declarationNames = []
             , details = details
             }
     in
-    State.do (State.fromResult (Result.mapError toError (fromDocsType resolver alias_.tipe))) <| \aliasMono ->
-    let
-        registerConstructor : StateM ()
-        registerConstructor =
-            case alias_.tipe of
-                Elm.Type.Record fields Nothing ->
-                    State.do (State.fromResult (Result.mapError toError (fromDocsFields resolver fields))) <| \resolvedFields ->
-                    let
-                        ctorType : MonoType
-                        ctorType =
-                            List.foldr
-                                (\( _, fieldT ) acc -> Function { from = fieldT, to = acc })
-                                aliasMono
-                                resolvedFields
-                    in
-                    State.addGlobalBinding ( moduleId, pkgName, alias_.name ) (TypeI.closeOver ctorType)
+    fromDocsType resolver alias_.tipe
+        |> Result.mapError toError
+        |> Result.andThen
+            (\aliasMono ->
+                let
+                    withConstructor : Result ProjectError Registered
+                    withConstructor =
+                        case alias_.tipe of
+                            Elm.Type.Record fields Nothing ->
+                                fromDocsFields resolver fields
+                                    |> Result.mapError toError
+                                    |> Result.map
+                                        (\resolvedFields ->
+                                            let
+                                                ctorType : MonoType
+                                                ctorType =
+                                                    List.foldr
+                                                        (\( _, fieldT ) acc ->
+                                                            Function
+                                                                { from = fieldT
+                                                                , to = acc
+                                                                }
+                                                        )
+                                                        aliasMono
+                                                        resolvedFields
+                                            in
+                                            addGlobalBinding
+                                                ( moduleId, pkgName, alias_.name )
+                                                ctorType
+                                                registered
+                                        )
 
-                _ ->
-                    State.pureUnit
-    in
-    State.do registerConstructor <| \() ->
-    State.pure <|
-        Just
-            ( ( moduleId, pkgName, alias_.name )
-            , { args = List.map TypeVar.parse alias_.args, type_ = aliasMono }
+                            _ ->
+                                Ok registered
+                in
+                withConstructor
+                    |> Result.map
+                        (\acc ->
+                            { globalEnv = acc.globalEnv
+                            , typeAliases =
+                                Dict.insert ( moduleId, pkgName, alias_.name )
+                                    { args = List.map TypeVar.parse alias_.args
+                                    , type_ = aliasMono
+                                    }
+                                    acc.typeAliases
+                            }
+                        )
             )

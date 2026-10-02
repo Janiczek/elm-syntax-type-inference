@@ -5,7 +5,7 @@ module Elm.TypeInference.BindingGroup exposing (Member, solveGroup)
 
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName
-import Elm.TypeInference.Error exposing (ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType(..), Type(..))

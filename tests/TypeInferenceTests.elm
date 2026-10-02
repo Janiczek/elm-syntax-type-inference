@@ -11,7 +11,8 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)
-import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
+import Elm.TypeInference.ProjectError as ProjectError
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.State as State
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
@@ -83,7 +84,7 @@ suite =
         ]
 
 
-testExpr : ( String, Result Error Type -> Bool ) -> Test
+testExpr : ( String, Result InferError Type -> Bool ) -> Test
 testExpr ( exprCode, predicate ) =
     let
         trimmedExprCode : String
@@ -109,12 +110,12 @@ testExpr ( exprCode, predicate ) =
             Expect.fail <| "Has failed (but shouldn't): " ++ Debug.toString err
 
 
-is : Type -> Result Error Type -> Bool
+is : Type -> Result InferError Type -> Bool
 is expected actual =
     Ok expected == actual
 
 
-fails : Result Error Type -> Bool
+fails : Result InferError Type -> Bool
 fails actual =
     case actual of
         Err _ ->
@@ -124,7 +125,7 @@ fails actual =
             False
 
 
-isNumber : Result Error Type -> Bool
+isNumber : Result InferError Type -> Bool
 isNumber actual =
     case actual of
         Ok (Type.TypeVar name) ->
@@ -136,8 +137,8 @@ isNumber actual =
 
 
 isList :
-    (Result Error Type -> Bool)
-    -> Result Error Type
+    (Result InferError Type -> Bool)
+    -> Result InferError Type
     -> Bool
 isList innerCheck actual =
     case actual of
@@ -149,8 +150,8 @@ isList innerCheck actual =
 
 
 isMaybe :
-    (Result Error Type -> Bool)
-    -> Result Error Type
+    (Result InferError Type -> Bool)
+    -> Result InferError Type
     -> Bool
 isMaybe innerCheck actual =
     case actual of
@@ -167,9 +168,9 @@ isMaybe innerCheck actual =
 
 
 isTuple :
-    (Result Error Type -> Bool)
-    -> (Result Error Type -> Bool)
-    -> Result Error Type
+    (Result InferError Type -> Bool)
+    -> (Result InferError Type -> Bool)
+    -> Result InferError Type
     -> Bool
 isTuple check1 check2 actual =
     case actual of
@@ -182,9 +183,9 @@ isTuple check1 check2 actual =
 
 
 isFunction :
-    (Result Error Type -> Bool)
-    -> (Result Error Type -> Bool)
-    -> Result Error Type
+    (Result InferError Type -> Bool)
+    -> (Result InferError Type -> Bool)
+    -> Result InferError Type
     -> Bool
 isFunction fromCheck toCheck actual =
     case actual of
@@ -195,7 +196,7 @@ isFunction fromCheck toCheck actual =
             False
 
 
-isFunctionWithSignature : String -> Result Error Type -> Bool
+isFunctionWithSignature : String -> Result InferError Type -> Bool
 isFunctionWithSignature signature actual =
     case actual of
         Ok ((Type.Function _) as type_) ->
@@ -210,7 +211,7 @@ isFunctionWithSignature signature actual =
             False
 
 
-isVar : Result Error Type -> Bool
+isVar : Result InferError Type -> Bool
 isVar actual =
     case actual of
         Ok (Type.TypeVar _) ->
@@ -221,8 +222,8 @@ isVar actual =
 
 
 isRecord :
-    List ( String, Result Error Type -> Bool )
-    -> Result Error Type
+    List ( String, Result InferError Type -> Bool )
+    -> Result InferError Type
     -> Bool
 isRecord fieldChecks actual =
     case actual of
@@ -243,8 +244,8 @@ isRecord fieldChecks actual =
 
 
 isExtensibleRecord :
-    List ( String, Result Error Type -> Bool )
-    -> Result Error Type
+    List ( String, Result InferError Type -> Bool )
+    -> Result InferError Type
     -> Bool
 isExtensibleRecord fieldChecks actual =
     case actual of
@@ -267,8 +268,8 @@ isExtensibleRecord fieldChecks actual =
 {-| Like `isExtensibleRecord`, but doesn't care about order of ext.record nesting
 -}
 isExtensibleRecordWithFields :
-    List ( String, Result Error Type -> Bool )
-    -> Result Error Type
+    List ( String, Result InferError Type -> Bool )
+    -> Result InferError Type
     -> Bool
 isExtensibleRecordWithFields fieldChecks actual =
     case actual of
@@ -303,7 +304,7 @@ emptyShader =
     }
 
 
-isShader : ShaderFields -> Result Error Type -> Bool
+isShader : ShaderFields -> Result InferError Type -> Bool
 isShader expected actual =
     case actual of
         Ok (Type.WebGLShader shader) ->
@@ -325,7 +326,7 @@ isShaderSet expected actual =
             actual == Dict.fromList expected
 
 
-goodExprs : List ( String, Result Error Type -> Bool )
+goodExprs : List ( String, Result InferError Type -> Bool )
 goodExprs =
     [ ( "()", is Unit )
     , ( "123", isNumber )
@@ -428,7 +429,7 @@ goodExprs =
     ]
 
 
-badExprs : List ( String, Result Error Type -> Bool )
+badExprs : List ( String, Result InferError Type -> Bool )
 badExprs =
     [ ( "[1, ()]", fails )
     , ( "fn 1", fails )
@@ -724,7 +725,7 @@ main = 1"""
         ]
 
 
-expectRangeNotFound : Result Error a -> Expect.Expectation
+expectRangeNotFound : Result InferError a -> Expect.Expectation
 expectRangeNotFound result =
     case result of
         Err err ->
@@ -1379,7 +1380,7 @@ shaderAnnotationSuite =
 dependenciesSuite : Test
 dependenciesSuite =
     let
-        testWithCore : ( String, Result Error Type -> Bool ) -> Test
+        testWithCore : ( String, Result InferError Type -> Bool ) -> Test
         testWithCore ( exprCode, predicate ) =
             Test.test exprCode <| \() ->
             case getExprTypeWithDeps [ CoreFixture.core ] exprCode of
@@ -1540,9 +1541,9 @@ main = 1
 """
                 in
                 case getDeclTypeWithDeps [ elmUi, styleElements, elmUiWithContext ] modules [ "Main" ] "main" of
-                    Err (CouldntInfer err) ->
+                    Err (CouldntInit err) ->
                         case err.details of
-                            AmbiguousModuleOwner { moduleName, possiblePackages } ->
+                            ProjectError.AmbiguousModuleOwner { moduleName, possiblePackages } ->
                                 Expect.all
                                     [ \_ -> moduleName |> Expect.equal "Element"
                                     , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
@@ -2500,7 +2501,7 @@ generatedVar n =
     TypeI.TypeVar ( TypeVar.Generated n, TypeVar.Normal )
 
 
-runUnify : Dict ( ModuleId, PackageName, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+runUnify : Dict ( ModuleId, PackageName, String ) TypeAlias -> List ( MonoType, MonoType ) -> Result InferError SubstitutionMap.SubstitutionMap
 runUnify typeAliases eqs =
     (State.do
         (Unify.unifyMany
@@ -2551,7 +2552,7 @@ unifyAliasSuite =
                 , args = [ t ]
                 }
 
-        run : List ( MonoType, MonoType ) -> Result Error SubstitutionMap.SubstitutionMap
+        run : List ( MonoType, MonoType ) -> Result InferError SubstitutionMap.SubstitutionMap
         run =
             runUnify typeAliases
     in
@@ -4397,7 +4398,7 @@ withLazyProject toExpectation =
             Expect.fail ("Couldn't build project: " ++ Debug.toString err)
 
 
-lazyGetType : Dict ModuleName File -> Elm.TypeInference.Project -> ModuleName -> String -> ( Result Error Type, Elm.TypeInference.Project )
+lazyGetType : Dict ModuleName File -> Elm.TypeInference.Project -> ModuleName -> String -> ( Result InferError Type, Elm.TypeInference.Project )
 lazyGetType files proj moduleName declName =
     case lazyDeclRange files moduleName declName of
         Nothing ->
@@ -4643,6 +4644,35 @@ value =
                                                     ]
                                                     ()
                     )
+        , Test.test "empty project accepts files via addFile" <| \() ->
+        let
+            aSource : String
+            aSource =
+                """module A exposing (value)
+
+value x =
+    x
+"""
+        in
+        case parseModules (Dict.singleton [ "A" ] aSource) of
+            Err err ->
+                Expect.fail ("Couldn't parse A: " ++ Debug.toString err)
+
+            Ok files ->
+                case Dict.get [ "A" ] files of
+                    Nothing ->
+                        Expect.fail "Couldn't find the parsed A file"
+
+                    Just aFile ->
+                        case Elm.TypeInference.addFile aFile Elm.TypeInference.empty of
+                            Err error ->
+                                Expect.fail ("Couldn't add file: " ++ Debug.toString error)
+
+                            Ok proj ->
+                                lazyGetType files proj [ "A" ] "value"
+                                    |> Tuple.first
+                                    |> Result.map Type.toString
+                                    |> Expect.equal (Ok "a -> a")
         , Test.test "addFile fails with MissingModuleName for a file with an empty module name" <| \() ->
         withLazyProject
             (\_ proj0 ->
@@ -4658,7 +4688,7 @@ value =
                             Just aFile ->
                                 case Elm.TypeInference.addFile (withEmptyModuleName aFile) proj0 of
                                     Err error ->
-                                        Expect.equal error.details MissingModuleName
+                                        Expect.equal error.details ProjectError.MissingModuleName
 
                                     Ok _ ->
                                         Expect.fail "Expected an error"

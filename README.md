@@ -20,6 +20,7 @@ Elm.TypeInference.getType
     someRange
     project
 --> ( Ok someType, newProject )
+-- Can be later "printed" with `Elm.TypeInference.Type.toString someType`
 
 Elm.TypeInference.addFile updatedFile project
 --> Ok newerProject
@@ -28,5 +29,5 @@ Elm.TypeInference.removeFile ["MyModule","Internal"] project
 --> newerProject
 ```
 
-If `project` fails with `details = NeedPackageSources needed`, read and parse
+If `init` fails with `details = ProjectError.NeedPackageSources needed`, read and parse
 them and retry with them added to the `sourcesToResolveAmbiguity` field.

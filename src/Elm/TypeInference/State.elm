@@ -12,7 +12,6 @@ module Elm.TypeInference.State exposing
     , error
     , existsInEnv
     , foldl
-    , fromResult
     , generalize
     , generalizeBinding
     , getGlobalEnv
@@ -47,7 +46,7 @@ import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
-import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, SubstitutionMap)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
@@ -99,7 +98,7 @@ type alias State =
 {-| State monad. A function from state to something + a new state.
 -}
 type alias StateM a =
-    State -> ( Result Error a, State )
+    State -> ( Result InferError a, State )
 
 
 {-| prefer `pureUnit` over `pure ()`
@@ -123,22 +122,12 @@ okUnit =
     Ok ()
 
 
-error : Error -> StateM a
+error : InferError -> StateM a
 error error_ =
     \s -> ( Err error_, s )
 
 
-fromResult : Result Error a -> StateM a
-fromResult result =
-    case result of
-        Err err ->
-            error err
-
-        Ok value ->
-            pure value
-
-
-run : State -> StateM a -> ( Result Error a, State )
+run : State -> StateM a -> ( Result InferError a, State )
 run state stateFn =
     stateFn state
 
@@ -201,7 +190,7 @@ foldl reduce initialFoldState list =
     \state -> foldlHelp reduce initialFoldState list state
 
 
-foldlHelp : (a -> foldState -> StateM foldState) -> foldState -> List a -> State -> ( Result Error foldState, State )
+foldlHelp : (a -> foldState -> StateM foldState) -> foldState -> List a -> State -> ( Result InferError foldState, State )
 foldlHelp reduce acc list state =
     case list of
         [] ->
@@ -224,7 +213,7 @@ traverse f list =
     \state -> traverseHelp f [] list state
 
 
-traverseHelp : (a -> StateM b) -> List b -> List a -> State -> ( Result Error (List b), State )
+traverseHelp : (a -> StateM b) -> List b -> List a -> State -> ( Result InferError (List b), State )
 traverseHelp f acc list state =
     case list of
         [] ->
@@ -244,7 +233,7 @@ traverseUnit f list =
     \state -> traverseUnitHelp f list state
 
 
-traverseUnitHelp : (a -> StateM ()) -> List a -> State -> ( Result Error (), State )
+traverseUnitHelp : (a -> StateM ()) -> List a -> State -> ( Result InferError (), State )
 traverseUnitHelp f list state =
     case list of
         [] ->

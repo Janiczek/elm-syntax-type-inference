@@ -3,7 +3,7 @@ module Elm.TypeInference.Unify exposing (TypeAlias, UnifyConfig, unifyMany)
 import Dict exposing (Dict)
 import Dict.Extra
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
-import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
@@ -42,7 +42,7 @@ unifyMany cfg eqs =
 
 {-| Intentionally not a State.foldl to reduce GC pressure.
 -}
-unifyManyHelp : UnifyConfig -> List ( MonoType, MonoType ) -> State.State -> ( Result Error (), State.State )
+unifyManyHelp : UnifyConfig -> List ( MonoType, MonoType ) -> State.State -> ( Result InferError (), State.State )
 unifyManyHelp cfg eqs state =
     case eqs of
         [] ->

@@ -1,5 +1,5 @@
 module Elm.TypeInference exposing
-    ( init, Project, Dependency
+    ( init, empty, Project, Dependency
     , getType, getAllTypes
     , addFile, removeFile
     )
@@ -19,7 +19,7 @@ The process:
   - Let the `Project` know about changed or deleted files with
     [`addFile`](#addFile) and [`removeFile`](#removeFile).
 
-@docs init, Project, Dependency
+@docs init, empty, Project, Dependency
 
 @docs getType, getAllTypes
 
@@ -46,12 +46,13 @@ import Elm.Syntax.TypeAnnotation as TypeAnnotation
 import Elm.TypeInference.BindingGroup as BindingGroup
 import Elm.TypeInference.Dependencies as Dependencies exposing (Dependencies)
 import Elm.TypeInference.DependencySources as DependencySources
-import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError)
 import Elm.TypeInference.Infer as Infer
+import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
+import Elm.TypeInference.ProjectError as ProjectError exposing (ProjectError)
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (GlobalKey, StateM)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
@@ -118,7 +119,7 @@ init :
     , projectPackageName : Maybe PackageName
     , projectFiles : Dict ModuleName File
     }
-    -> Result Error Project
+    -> Result ProjectError Project
 init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPackageName, projectFiles } =
     case
         buildDependencyEnv
@@ -163,7 +164,7 @@ init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPa
                 Err
                     { moduleName = [ "<Missing>" ]
                     , declarationNames = []
-                    , details = MissingModuleName
+                    , details = ProjectError.MissingModuleName
                     }
 
             else
@@ -315,7 +316,7 @@ The computed data is cached into a new version of the [`Project`](#Project),
 save it into your model to speed up future `getType` calls.
 
 -}
-getType : ModuleName -> Range -> Project -> ( Result Error Type, Project )
+getType : ModuleName -> Range -> Project -> ( Result InferError Type, Project )
 getType moduleName range proj =
     case moduleData moduleName proj of
         Nothing ->
@@ -336,7 +337,7 @@ getType moduleName range proj =
 Returns [`Type`](Elm-TypeInference-Type#Type)s of all AST nodes in the project.
 
 -}
-getAllTypes : ModuleName -> Project -> ( Result Error (List ( Range, Type )), Project )
+getAllTypes : ModuleName -> Project -> ( Result InferError (List ( Range, Type )), Project )
 getAllTypes moduleName proj =
     case moduleData moduleName proj of
         Nothing ->
@@ -501,7 +502,7 @@ hintFor subst id super =
 
 {-| Look up one range in an already-inferred project, caching the resolved type.
 -}
-lookupRange : ModuleName -> Range -> ProjectModule -> Project -> ( Result Error Type, Project )
+lookupRange : ModuleName -> Range -> ProjectModule -> Project -> ( Result InferError Type, Project )
 lookupRange moduleName range m ((Project p) as proj) =
     case Dict.get m.key p.acc.tables of
         Nothing ->
@@ -623,7 +624,7 @@ invalidate modulesById directlyAffected (Project p) =
                     )
                     ( p.acc.values, p.acc.aliases )
 
-        tablesWithoutAffected : Dict ModuleName (Result Error LookupTable)
+        tablesWithoutAffected : Dict ModuleName (Result InferError LookupTable)
         tablesWithoutAffected =
             affected
                 |> Set.foldl
@@ -653,13 +654,42 @@ invalidate modulesById directlyAffected (Project p) =
         }
 
 
+{-| A [`Project`](#Project) with no dependencies and no files, not even
+`elm/core`.
+
+Handy for tests and mocks. Add modules with [`addFile`](#addFile).
+
+-}
+empty : Project
+empty =
+    Project
+        { currentPackage = Nothing
+        , depEnv =
+            { globalEnv = Dict.empty
+            , typeAliases = Dict.empty
+            , index = Tuple.first (ModuleLookup.buildIndex ModuleIds.empty Dict.empty)
+            , moduleMapping = ModuleIds.empty
+            }
+        , moduleMapping = ModuleIds.empty
+        , modulesById = Dict.empty
+        , importedBy = Dict.empty
+        , acc =
+            { tables = Dict.empty
+            , interfaces = Dict.empty
+            , sccsInTopoOrder = Nothing
+            , values = Dict.empty
+            , aliases = Dict.empty
+            }
+        }
+
+
 {-| Make `Project` aware of a new or changed file.
 
 The module and everything that (transitively) imports it is invalidated
 behind the scenes and will be re-inferred lazily by [`getType`](#getType).
 
 -}
-addFile : File -> Project -> Result Error Project
+addFile : File -> Project -> Result ProjectError Project
 addFile file (Project p) =
     let
         moduleName : ModuleName
@@ -671,7 +701,7 @@ addFile file (Project p) =
             Err
                 { moduleName = moduleName
                 , declarationNames = []
-                , details = MissingModuleName
+                , details = ProjectError.MissingModuleName
                 }
 
         _ :: _ ->
@@ -835,7 +865,7 @@ buildDependencyEnv :
     List PackageName
     -> List Dependency
     -> Dict PackageName (List File)
-    -> Result Error DependencyEnv
+    -> Result ProjectError DependencyEnv
 buildDependencyEnv directDependencies allDependencies sourcesToResolveAmbiguity =
     let
         deps : Dependencies
@@ -871,7 +901,7 @@ buildDependencyEnv directDependencies allDependencies sourcesToResolveAmbiguity 
         Err
             { moduleName = []
             , declarationNames = []
-            , details = NeedPackageSources needed
+            , details = ProjectError.NeedPackageSources needed
             }
 
 
@@ -881,7 +911,7 @@ buildDependencyEnvHelp :
     -> Dependencies
     -> List Dependency
     -> Dependencies
-    -> Result Error DependencyEnv
+    -> Result ProjectError DependencyEnv
 buildDependencyEnvHelp directDependencies sourcesToResolveAmbiguity deps reachableDependencies reachableDeps =
     let
         directVisibleDeps : Dependencies
@@ -906,19 +936,17 @@ buildDependencyEnvHelp directDependencies sourcesToResolveAmbiguity deps reachab
         ( depIndex, moduleMappingWithDepIndex ) =
             ModuleLookup.buildIndex moduleMappingWithDepNames directVisibleDeps
 
-        baseEnv : Result Error DependencyEnv
+        baseEnv : Result ProjectError DependencyEnv
         baseEnv =
-            (State.do (Dependencies.register moduleMappingWithDepIndex reachableDeps) <| \( depAliases, moduleMappingWithDepAliases ) ->
-            State.do State.getGlobalEnv <| \globalEnv ->
-            State.pure <|
-                { globalEnv = globalEnv
-                , typeAliases = depAliases
-                , index = depIndex
-                , moduleMapping = moduleMappingWithDepAliases
-                }
-            )
-                |> State.run State.empty
-                |> Tuple.first
+            Dependencies.register moduleMappingWithDepIndex reachableDeps
+                |> Result.map
+                    (\registered ->
+                        { globalEnv = registered.globalEnv
+                        , typeAliases = registered.typeAliases
+                        , index = depIndex
+                        , moduleMapping = registered.moduleMapping
+                        }
+                    )
     in
     case baseEnv of
         Err err ->
@@ -979,7 +1007,7 @@ type alias ProjectModule =
 
 
 type alias ProjectAcc =
-    { tables : Dict ModuleName (Result Error LookupTable)
+    { tables : Dict ModuleName (Result InferError LookupTable)
     , interfaces : Dict ModuleId ModuleInterface
     , sccsInTopoOrder : Maybe (List (List ModuleId))
     , values : Dict GlobalKey TypeI.Type
@@ -1108,7 +1136,7 @@ inferModule_ :
     -> Dict ModuleId ModuleInterface
     -> ModuleIndex
     -> File
-    -> Result Error { table : LookupTable, interface : ModuleInterface }
+    -> Result InferError { table : LookupTable, interface : ModuleInterface }
 inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfaces thisIndex file =
     let
         ctx : ModuleCtx
@@ -1132,7 +1160,7 @@ inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfac
     State.do (registerConstructorsAndPorts ctx file) <| \() ->
     State.do (registerEffectMagic ctx) <| \() ->
     State.do (solveModule ctx typeAliases file) <| \() ->
-    State.do (moduleResult ctx file outgoingAliases) <| \result ->
+    State.do (moduleResult ctx outgoingAliases) <| \result ->
     State.pure result
     )
         |> State.run (State.init ctx.values)
@@ -1141,14 +1169,13 @@ inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfac
 
 moduleResult :
     ModuleCtx
-    -> File
     -> Dict GlobalKey TypeAlias
     ->
         StateM
             { table : LookupTable
             , interface : ModuleInterface
             }
-moduleResult ctx file outgoingAliases =
+moduleResult ctx outgoingAliases =
     State.do State.createdIdCount <| \nextId ->
     State.do State.getNodeIds <| \nodeIds ->
     State.do State.getSubst <| \substitutionMap ->
@@ -1230,7 +1257,7 @@ solveModule ctx typeAliases file =
                                 )
                     )
 
-        resolvedVars : Dict ( ModuleName, VarName ) (Result ErrorDetails (Maybe ( PackageName, ModuleId )))
+        resolvedVars : Dict ( ModuleName, VarName ) (Result InferErrorDetails (Maybe ( PackageName, ModuleId )))
         resolvedVars =
             Dict.foldl
                 (\_ refs acc ->
@@ -1356,7 +1383,7 @@ gatherTypeAliases ctx file =
                 case declarationNode of
                     Declaration.AliasDeclaration typeAlias ->
                         let
-                            toError : ErrorDetails -> Error
+                            toError : InferErrorDetails -> InferError
                             toError details =
                                 { moduleName = FullModuleName.toModuleName moduleName
                                 , declarationNames = [ Node.value typeAlias.name ]

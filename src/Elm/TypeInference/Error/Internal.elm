@@ -1,4 +1,4 @@
-module Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
+module Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity, list, record)
 
 {-| Shared error types for type-annotation resolution.
 
@@ -7,9 +7,10 @@ Leaf module on purpose: `Elm.TypeInference.Type.Internal` needs these for
 the dependency graph acyclic (`Error.Internal` depends only on `elm-syntax`,
 never on inference modules).
 Type errors themselves carry only the public `Elm.TypeInference.Type`, so
-`Error` never needs `MonoType` from `Type.Internal`.
+`InferError` never needs `MonoType` from `Type.Internal`.
 
 @docs FromTypeAnnotationError, ResolverAmbiguity
+@docs list, record
 
 -}
 
@@ -38,3 +39,20 @@ type FromTypeAnnotationError
 
       -}
       AmbiguousModuleName ResolverAmbiguity
+
+
+{-| Renders `{ key = value, ... }` for diagnostic output.
+-}
+record : List ( String, String ) -> String
+record fields =
+    fields
+        |> List.map (\( key, value ) -> key ++ " = " ++ value)
+        |> String.join ", "
+        |> (\str -> "{ " ++ str ++ " }")
+
+
+{-| Renders `[a, b, ...]` for diagnostic output.
+-}
+list : List String -> String
+list items =
+    "[" ++ String.join ", " items ++ "]"

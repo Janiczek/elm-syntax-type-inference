@@ -26,7 +26,8 @@ import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference exposing (Dependency, Project)
-import Elm.TypeInference.Error as Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.InferError as InferError exposing (InferError)
+import Elm.TypeInference.ProjectError as ProjectError exposing (ProjectError, ProjectErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.Type as Type
@@ -421,12 +422,12 @@ buildProjectStep active =
             )
 
 
-projectErrorValue : List File -> Error -> Encode.Value
+projectErrorValue : List File -> ProjectError -> Encode.Value
 projectErrorValue files err =
     Encode.object
         [ ( "ok", Encode.bool False )
         , ( "moduleCount", Encode.int (List.length files) )
-        , ( "error", Encode.string (Error.toString err) )
+        , ( "error", Encode.string (ProjectError.toString err) )
         ]
 
 
@@ -438,7 +439,7 @@ Uses the bulk `getAllTypes` path (one module-name resolution + one outer
 runAllTypes : PendingInference -> ( Model, Cmd Msg )
 runAllTypes pending =
     let
-        collectFile : File -> ( Dict ModuleName Error, Int, Project ) -> ( Dict ModuleName Error, Int, Project )
+        collectFile : File -> ( Dict ModuleName InferError, Int, Project ) -> ( Dict ModuleName InferError, Int, Project )
         collectFile file ( accErrors, accRangeCount, accProj ) =
             let
                 fileModuleName : ModuleName
@@ -468,7 +469,7 @@ runAllTypes pending =
                                 []
 
                             errs ->
-                                [ ( "error", Encode.string (String.join "\n" (List.map Error.toString errs))) ]
+                                [ ( "error", Encode.string (String.join "\n" (List.map InferError.toString errs))) ]
                        )
                 )
     in

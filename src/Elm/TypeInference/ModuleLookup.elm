@@ -15,7 +15,7 @@ import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
-import Elm.TypeInference.Error exposing (ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
@@ -197,7 +197,7 @@ moduleOfVar :
     -> ModuleIndex
     -> Maybe FullModuleName
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 moduleOfVar moduleMapping index modules thisModule maybeModuleName varName =
     case maybeModuleName of
         Nothing ->
@@ -213,13 +213,13 @@ moduleOfVar moduleMapping index modules thisModule maybeModuleName varName =
 
 
 {-| Wraps pure `moduleOfVar` result into `StateM` for `State.do` chains.
-Wraps error details in Error.
+Wraps error details in InferError.
 Doesn't do anything with State otherwise.
 -}
 wrapError :
     ModuleIndex
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
     -> StateM ( PackageName, ModuleId )
 wrapError thisModule varName resolved =
     case resolved of
@@ -260,7 +260,7 @@ resolveOperatorFunction :
     -> Dict ModuleId ModuleIndex
     -> ModuleId
     -> VarName
-    -> Result ErrorDetails (Maybe ( ModuleId, VarName ))
+    -> Result InferErrorDetails (Maybe ( ModuleId, VarName ))
 resolveOperatorFunction moduleMapping modules operatorModuleId operator =
     case Dict.get operatorModuleId modules of
         Nothing ->
@@ -279,7 +279,7 @@ resolveOperatorFunction moduleMapping modules operatorModuleId operator =
 unqualifiedVarInThisModule :
     ModuleIndex
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 unqualifiedVarInThisModule thisModule varName =
     Ok <|
         if Set.member varName thisModule.declaredValues then
@@ -295,7 +295,7 @@ unqualifiedVarOutsideThisModule :
     -> Dict ModuleId ModuleIndex
     -> ModuleIndex
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 unqualifiedVarOutsideThisModule moduleMapping index modules thisModule varName =
     Result.Extra.combineMap
         (\import_ ->
@@ -354,7 +354,7 @@ explicitImportDefinesValue :
     -> Dict ModuleId ModuleIndex
     -> ImportIndex
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 explicitImportDefinesValue moduleMapping index modules import_ varName =
     case Dict.get import_.moduleId modules of
         Just importedModule ->
@@ -374,7 +374,7 @@ dependencyImportDefinesValue :
     -> Index
     -> ImportIndex
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 dependencyImportDefinesValue moduleMapping (Index idx) import_ varName =
     case import_.exposing_ of
         ModuleIndex.ExposesNothing ->
@@ -441,7 +441,7 @@ qualifiedVar :
     -> ModuleIndex
     -> FullModuleName
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 qualifiedVar moduleMapping index modules thisModule qualifier varName =
     case qualifier of
         ( single, [] ) ->
@@ -511,7 +511,7 @@ qualifiedModuleDefines :
     -> Dict ModuleId ModuleIndex
     -> ModuleId
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 qualifiedModuleDefines moduleMapping index modules moduleId varName =
     case Dict.get moduleId modules of
         Just moduleIndex ->
@@ -536,7 +536,7 @@ qualifiedModuleDefinesByName :
     -> Dict ModuleId ModuleIndex
     -> FullModuleName
     -> VarName
-    -> Result ErrorDetails (Maybe ( PackageName, ModuleId ))
+    -> Result InferErrorDetails (Maybe ( PackageName, ModuleId ))
 qualifiedModuleDefinesByName moduleMapping index modules qualifier varName =
     case ModuleIds.getId qualifier moduleMapping of
         Nothing ->
@@ -577,7 +577,7 @@ deduplicateHelp items seen acc =
                 deduplicateHelp rest (Set.insert item seen) (item :: acc)
 
 
-dependencyModuleDefines : ModuleIds.Mapping -> Index -> ModuleId -> VarName -> Result ErrorDetails (Maybe PackageName)
+dependencyModuleDefines : ModuleIds.Mapping -> Index -> ModuleId -> VarName -> Result InferErrorDetails (Maybe PackageName)
 dependencyModuleDefines moduleMapping (Index index) moduleId varName =
     let
         matches : List PackageName

@@ -14,7 +14,8 @@ import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
-import Elm.TypeInference.Error exposing (Error)
+import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..))
+import Elm.TypeInference.ProjectError exposing (ProjectError, ProjectErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.ModuleLookup as ModuleLookup
@@ -28,7 +29,7 @@ import Result.Extra
 import Set exposing (Set)
 
 
-aliases : ModuleIds.Mapping -> Dependencies -> Dict PackageName (List File) -> Result Error ( Dict GlobalKey TypeAlias, ModuleIds.Mapping )
+aliases : ModuleIds.Mapping -> Dependencies -> Dict PackageName (List File) -> Result ProjectError ( Dict GlobalKey TypeAlias, ModuleIds.Mapping )
 aliases moduleMapping deps sources =
     Dict.foldl
         (\package files accResult ->
@@ -266,7 +267,7 @@ packageAliases :
     -> Dependencies
     -> PackageName
     -> List File
-    -> Result Error ( Dict GlobalKey TypeAlias, ModuleIds.Mapping )
+    -> Result ProjectError ( Dict GlobalKey TypeAlias, ModuleIds.Mapping )
 packageAliases moduleMapping deps package files =
     let
         ( indexedFilesReversed, moduleMappingAfterIndexing ) =
@@ -334,7 +335,7 @@ packageAliases moduleMapping deps package files =
                                             (\err ->
                                                 { moduleName = FullModuleName.toModuleName thisModule.moduleName
                                                 , declarationNames = [ Node.value alias_.name ]
-                                                , details = TypeI.fromTypeAnnotationError err
+                                                , details = fromTypeAnnotationError err
                                                 }
                                             )
                                         |> Result.map
@@ -354,3 +355,13 @@ packageAliases moduleMapping deps package files =
             )
             Dict.empty
         |> Result.map (\dict -> ( dict, moduleMappingAfterIndexing ))
+
+
+fromTypeAnnotationError : FromTypeAnnotationError -> ProjectErrorDetails
+fromTypeAnnotationError err =
+    case err of
+        ImpossibleAnnotation typeAnnotation ->
+            ImpossibleType typeAnnotation
+
+        AmbiguousModuleName ambiguity ->
+            AmbiguousModuleOwner ambiguity

@@ -6,7 +6,8 @@
     "version": "1.1.1",
     "exposed-modules": [
         "Elm.TypeInference",
-        "Elm.TypeInference.Error",
+        "Elm.TypeInference.InferError",
+        "Elm.TypeInference.ProjectError",
         "Elm.TypeInference.Type"
     ],
     "elm-version": "0.19.1 <= v < 0.20.0",

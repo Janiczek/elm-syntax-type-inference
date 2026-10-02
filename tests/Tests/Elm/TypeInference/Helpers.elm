@@ -21,7 +21,8 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference exposing (Dependency)
-import Elm.TypeInference.Error exposing (Error, ErrorDetails(..))
+import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
+import Elm.TypeInference.ProjectError as ProjectError exposing (ProjectError)
 import Elm.TypeInference.Type exposing (Type)
 import List.Extra
 import String.ExtraExtra
@@ -29,7 +30,8 @@ import String.ExtraExtra
 
 type TestError
     = CouldntParse
-    | CouldntInfer Error
+    | CouldntInit ProjectError
+    | CouldntInfer InferError
     | MissingDependencySources (Dict String (List String))
     | CouldntFindMainModule
     | CouldntFindMainDeclaration
@@ -83,11 +85,11 @@ buildProject currentPackage directDependencies allDependencies files =
 
         Err err ->
             case err.details of
-                NeedPackageSources needed ->
+                ProjectError.NeedPackageSources needed ->
                     Err (MissingDependencySources needed)
 
                 _ ->
-                    Err (CouldntInfer err)
+                    Err (CouldntInit err)
 
 
 {-| Look up a `Range` in a `Project`, mapping lookup failures to `TestError`.
@@ -99,7 +101,7 @@ lookupType moduleName range proj =
         |> Result.mapError mapLookupError
 
 
-mapLookupError : Error -> TestError
+mapLookupError : InferError -> TestError
 mapLookupError err =
     case err.details of
         ModuleNotFound ->
@@ -107,9 +109,6 @@ mapLookupError err =
 
         RangeNotFound ->
             CouldntFindMainDeclaration
-
-        NeedPackageSources needed ->
-            MissingDependencySources needed
 
         _ ->
             CouldntInfer err
