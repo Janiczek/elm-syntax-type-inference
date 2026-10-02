@@ -16,6 +16,7 @@ module Elm.TypeInference.Type.Internal exposing
     , monoHasTypeVars
     , monoPublicKey
     , monoTypeVars
+    , nameVarsTogether
     , normalize
     , number_
     , toPublicPair
@@ -26,9 +27,9 @@ import Dict exposing (Dict)
 import Dict.Extra
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
-import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
+import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type as Public exposing (PackageName, Type, VarName)
 import Elm.TypeInference.TypeVar as TypeVar
@@ -753,6 +754,150 @@ applyNameHints hintFor ((Forall boundVars monoType) as type_) =
                         var
             )
             type_
+
+
+{-| Used for all types inside a top-level declaration.
+
+See test letBoundTypeVarNamesMatchEnclosingDeclarationRegression.
+
+-}
+nameVarsTogether : (Id -> SuperType -> Maybe String) -> List MonoType -> List MonoType
+nameVarsTogether hintFor types =
+    let
+        varsPerType : List (List TypeVar)
+        varsPerType =
+            List.map (\t -> TypeVar.deduplicate (monoTypeVars t)) types
+
+        namedTaken : Set TypeVar.NamedKey
+        namedTaken =
+            varsPerType
+                |> List.concat
+                |> List.foldl
+                    (\( style, super ) acc ->
+                        case style of
+                            Named name ->
+                                Set.insert (TypeVar.namedKeyFrom name super) acc
+
+                            Generated _ ->
+                                acc
+                    )
+                    Set.empty
+
+        nameNew :
+            (Id -> SuperType -> Dict Int Int -> Set TypeVar.NamedKey -> ( String, Dict Int Int ))
+            -> List TypeVar
+            -> ( Dict TypeVar.GenKey TypeVar, Set TypeVar.NamedKey )
+            -> ( Dict TypeVar.GenKey TypeVar, Set TypeVar.NamedKey )
+        nameNew pickName vars acc0 =
+            vars
+                |> List.foldl
+                    (\( style, super ) (( ( mappingAcc, takenAcc ), slotsAcc ) as acc) ->
+                        case style of
+                            Named _ ->
+                                acc
+
+                            Generated theId ->
+                                let
+                                    key : TypeVar.GenKey
+                                    key =
+                                        TypeVar.genKeyFrom theId super
+                                in
+                                if Dict.member key mappingAcc then
+                                    acc
+
+                                else
+                                    let
+                                        ( name, newSlots ) =
+                                            pickName theId super slotsAcc takenAcc
+                                    in
+                                    ( ( Dict.insert key ( Named name, super ) mappingAcc
+                                      , Set.insert (TypeVar.namedKeyFrom name super) takenAcc
+                                      )
+                                    , newSlots
+                                    )
+                    )
+                    ( acc0, Dict.empty )
+                |> Tuple.first
+
+        ( mapping, _ ) =
+            varsPerType
+                |> List.foldl
+                    (\vars acc ->
+                        acc
+                            -- hinted vars first, like `applyNameHints`
+                            |> nameNew
+                                (\theId super slots taken ->
+                                    ( freeHintName super (Maybe.withDefault "" (hintFor theId super)) 0 taken
+                                    , slots
+                                    )
+                                )
+                                (List.filter (isHinted hintFor) vars)
+                            -- then the rest, like `normalize`
+                            |> nameNew
+                                (\_ super slots taken ->
+                                    let
+                                        tag : Int
+                                        tag =
+                                            TypeVar.superTypeTag super
+
+                                        slot : Int
+                                        slot =
+                                            freeSlot super (Maybe.withDefault 0 (Dict.get tag slots)) taken
+                                    in
+                                    ( slotName super slot, Dict.insert tag (slot + 1) slots )
+                                )
+                                vars
+                    )
+                    ( Dict.empty, namedTaken )
+    in
+    List.map
+        (mapVarsMono
+            (\(( style, super ) as var) ->
+                case style of
+                    Generated theId ->
+                        Dict.get (TypeVar.genKeyFrom theId super) mapping
+                            |> Maybe.withDefault var
+
+                    Named _ ->
+                        var
+            )
+        )
+        types
+
+
+isHinted : (Id -> SuperType -> Maybe String) -> TypeVar -> Bool
+isHinted hintFor ( style, super ) =
+    case style of
+        Generated theId ->
+            hintFor theId super /= Nothing
+
+        Named _ ->
+            False
+
+
+{-| Same naming scheme as `normalize`
+-}
+slotName : SuperType -> Int -> String
+slotName super slot =
+    case super of
+        Normal ->
+            ordToName slot
+
+        _ ->
+            if slot == 0 then
+                ""
+
+            else
+                String.fromInt slot
+
+
+freeSlot : SuperType -> Int -> Set TypeVar.NamedKey -> Int
+freeSlot super slot taken =
+    if Set.member (TypeVar.namedKeyFrom (slotName super slot) super) taken then
+        freeSlot super (slot + 1) taken
+
+    else
+        slot
 
 
 freeHintName : SuperType -> String -> Int -> Set TypeVar.NamedKey -> String

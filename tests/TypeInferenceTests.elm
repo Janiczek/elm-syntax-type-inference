@@ -12,8 +12,8 @@ import Elm.Syntax.Range exposing (Range)
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)
 import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
-import Elm.TypeInference.ProjectError as ProjectError
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
+import Elm.TypeInference.ProjectError as ProjectError
 import Elm.TypeInference.State as State
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type as Type exposing (PackageName, Type(..))
@@ -61,6 +61,7 @@ suite =
         , infiniteLoopRegression
         , aliasParamNameCollisionRegression
         , preferredTypeVarNamesFromTypeDeclarations
+        , letBoundTypeVarNamesMatchEnclosingDeclarationRegression
         , recordConstructorFunctionRegression
         , unionConstructorReexposeRegression
         , recordConstructorReexposeRegression
@@ -3354,6 +3355,104 @@ preferredTypeVarNamesFromTypeDeclarations =
                     |> Result.map Type.toString
                     |> Expect.equal (Ok "Main.Box (Platform.Cmd.Cmd msg)")
         ]
+
+
+letBoundTypeVarNamesMatchEnclosingDeclarationRegression : Test
+letBoundTypeVarNamesMatchEnclosingDeclarationRegression =
+    Test.test "a let-bound function's typevars are named the same as in its enclosing declaration (miniBill/elm-fast-dict FastDict.merge without annotations)" <| \() ->
+    let
+        stepStateRow : Int
+        stepStateRow =
+            String.lines source
+                |> List.indexedMap Tuple.pair
+                |> List.filter (\( _, line ) -> String.startsWith "        stepState rKey" line)
+                |> List.head
+                |> Maybe.map (\( index, _ ) -> index + 1)
+                |> Maybe.withDefault -1
+
+        source : String
+        source =
+            String.ExtraExtra.multilineInput """
+module Main exposing (merge)
+
+type Dict k v
+    = Dict (List ( k, v ))
+
+toList : Dict k v -> List ( k, v )
+toList (Dict list) =
+    list
+
+listFoldl : (a -> b -> b) -> b -> List a -> b
+listFoldl func acc list =
+    case list of
+        [] ->
+            acc
+
+        x :: xs ->
+            listFoldl func (func x acc) xs
+
+-- the elm/core fixture has no `<` and `>`
+lessThan : comparable -> comparable -> Bool
+lessThan x y =
+    lessThan x y
+
+greaterThan : comparable -> comparable -> Bool
+greaterThan x y =
+    greaterThan x y
+
+foldl : (k -> v -> b -> b) -> b -> Dict k v -> b
+foldl func acc (Dict list) =
+    listFoldl (\\( k, v ) a -> func k v a) acc list
+
+merge leftStep bothStep rightStep leftDict rightDict initialResult =
+    let
+        stepState rKey rValue ( list, result ) =
+            case list of
+                [] ->
+                    ( list, rightStep rKey rValue result )
+
+                ( lKey, lValue ) :: rest ->
+                    if lessThan lKey rKey then
+                        stepState rKey rValue ( rest, leftStep lKey lValue result )
+
+                    else if greaterThan lKey rKey then
+                        ( list, rightStep rKey rValue result )
+
+                    else
+                        ( rest, bothStep lKey lValue rValue result )
+
+        ( leftovers, intermediateResult ) =
+            foldl stepState ( toList leftDict, initialResult ) rightDict
+    in
+    listFoldl (\\( k, v ) result -> leftStep k v result) intermediateResult leftovers
+"""
+            in
+            case
+                parseModules (Dict.singleton [ "Main" ] source)
+                    |> Result.andThen (buildProject Nothing [ CoreFixture.core.name ] [ CoreFixture.core ])
+            of
+                Err err ->
+                    Expect.fail ("Should infer: " ++ Debug.toString err)
+
+                Ok proj ->
+                    ( getDeclTypeWithDeps
+                        [ CoreFixture.core ]
+                        (Dict.singleton [ "Main" ] source)
+                        [ "Main" ]
+                        "merge"
+                        |> Result.map Type.toString
+                    , Elm.TypeInference.getType [ "Main" ]
+                        { start = { row = stepStateRow, column = 9 }
+                        , end = { row = stepStateRow, column = 18 }
+                        }
+                        proj
+                        |> Tuple.first
+                        |> Result.map Type.toString
+                    )
+                        |> Expect.equal
+                            ( Ok "(comparable -> v -> b -> b) -> (comparable -> v -> v1 -> b -> b) -> (comparable -> v1 -> b -> b) -> Main.Dict comparable v -> Main.Dict comparable v1 -> b -> b"
+                            , Ok "comparable -> v1 -> ( List ( comparable, v ), b ) -> ( List ( comparable, v ), b )"
+                            )
 
 
 recordConstructorFunctionRegression : Test

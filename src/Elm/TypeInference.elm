@@ -90,6 +90,9 @@ type Project
 
 type alias LookupTable =
     { nodeIds : Dict RangeLike.RangeLike TypeI.Id
+    , -- Index into `declIds` of which top-level declaration each ID is in
+      declOfId : Dict TypeI.Id Int
+    , declIds : Array.Array (List TypeI.Id)
     , subst : SubstitutionMap.SubstitutionMap
     , moduleMapping : ModuleIds.Mapping
     , cache : Array.Array (Maybe Type)
@@ -445,6 +448,87 @@ ensureInferred m ((Project p) as proj) =
 -}
 resolveIdToPublicType : TypeI.Id -> LookupTable -> ( Type, LookupTable )
 resolveIdToPublicType id tlt =
+    case Dict.get id tlt.declOfId of
+        Nothing ->
+            resolveSingleIdToPublicType id tlt
+
+        Just declIndex ->
+            case Array.get declIndex tlt.declIds of
+                Nothing ->
+                    resolveSingleIdToPublicType id tlt
+
+                Just ids ->
+                    let
+                        newTable : LookupTable
+                        newTable =
+                            resolveDeclaration ids tlt
+                    in
+                    case Array.get id newTable.cache |> Maybe.andThen identity of
+                        Just pubType ->
+                            ( pubType, newTable )
+
+                        Nothing ->
+                            -- Shouldn't happen: `ids` contains `id`
+                            resolveSingleIdToPublicType id newTable
+
+
+resolveDeclaration : List TypeI.Id -> LookupTable -> LookupTable
+resolveDeclaration ids tlt =
+    let
+        ( monoTypesRev, subst1 ) =
+            ids
+                |> List.foldl
+                    (\id ( acc, subst ) ->
+                        let
+                            ( monoType, _, newSubst ) =
+                                SubstitutionMap.substituteMono subst (TypeI.id_ id)
+                        in
+                        ( monoType :: acc, newSubst )
+                    )
+                    ( [], tlt.subst )
+
+        ( cache1, pool1 ) =
+            List.map2 Tuple.pair
+                ids
+                (TypeI.nameVarsTogether (hintFor subst1) (List.reverse monoTypesRev))
+                |> List.foldl
+                    (\( id, monoType ) ( cache, pool ) ->
+                        let
+                            key : String
+                            key =
+                                -- prefixed so as not to clash with `monoPublicKeyAlpha` keys
+                                "n" ++ TypeI.monoPublicKey { alreadyNormalized = True } monoType
+                        in
+                        case Dict.get key pool of
+                            Just canonical ->
+                                ( arraySetGrowing Nothing id (Just canonical) cache
+                                , pool
+                                )
+
+                            Nothing ->
+                                let
+                                    fresh : Type
+                                    fresh =
+                                        TypeI.toPublicType tlt.moduleMapping { alreadyNormalized = True } monoType
+                                in
+                                ( arraySetGrowing Nothing id (Just fresh) cache
+                                , Dict.insert key fresh pool
+                                )
+                    )
+                    ( tlt.cache, tlt.pool )
+    in
+    { nodeIds = tlt.nodeIds
+    , declOfId = tlt.declOfId
+    , declIds = tlt.declIds
+    , subst = subst1
+    , moduleMapping = tlt.moduleMapping
+    , cache = cache1
+    , pool = pool1
+    }
+
+
+resolveSingleIdToPublicType : TypeI.Id -> LookupTable -> ( Type, LookupTable )
+resolveSingleIdToPublicType id tlt =
     let
         ( monoType0, _, subst1 ) =
             SubstitutionMap.substituteMono tlt.subst (TypeI.id_ id)
@@ -474,6 +558,8 @@ resolveIdToPublicType id tlt =
     in
     ( pubType
     , { nodeIds = tlt.nodeIds
+      , declOfId = tlt.declOfId
+      , declIds = tlt.declIds
       , subst = subst1
       , moduleMapping = tlt.moduleMapping
       , cache = arraySetGrowing Nothing id (Just pubType) tlt.cache
@@ -1148,7 +1234,7 @@ inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfac
     State.do (registerConstructorsAndPorts ctx file) <| \() ->
     State.do (registerEffectMagic ctx) <| \() ->
     State.do (solveModule ctx typeAliases file) <| \() ->
-    State.do (moduleResult ctx outgoingAliases) <| \result ->
+    State.do (moduleResult ctx outgoingAliases file) <| \result ->
     State.pure result
     )
         |> State.run (State.init ctx.values)
@@ -1158,17 +1244,27 @@ inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfac
 moduleResult :
     ModuleCtx
     -> Dict GlobalKey TypeAlias
+    -> File
     ->
         StateM
             { table : LookupTable
             , interface : ModuleInterface
             }
-moduleResult ctx outgoingAliases =
+moduleResult ctx outgoingAliases file =
     State.do State.createdIdCount <| \nextId ->
     State.do State.getNodeIds <| \nodeIds ->
     State.do State.getSubst <| \substitutionMap ->
     State.do State.getGlobalEnv <| \globalEnv ->
     let
+        byDeclaration :
+            { declOfId : Dict TypeI.Id Int
+            , declIds : Array.Array (List TypeI.Id)
+            }
+        byDeclaration =
+            groupByDeclaration
+                (List.map (\(Node range _) -> RangeLike.fromRange range) file.declarations)
+                nodeIds
+
         exposedValues : Dict VarName TypeI.Type
         exposedValues =
             ctx.thisIndex.exposedValues
@@ -1191,6 +1287,8 @@ moduleResult ctx outgoingAliases =
     State.pure
         { table =
             { nodeIds = nodeIds
+            , declOfId = byDeclaration.declOfId
+            , declIds = byDeclaration.declIds
             , subst = SubstitutionMap.forLookup substitutionMap
             , moduleMapping = ctx.moduleMapping
             , -- We preallocate so `getAllTypes` never needs to grow the array.
@@ -1203,6 +1301,99 @@ moduleResult ctx outgoingAliases =
             , ownTypeAliases = outgoingAliases
             }
         }
+
+
+groupByDeclaration :
+    List RangeLike.RangeLike
+    -> Dict RangeLike.RangeLike TypeI.Id
+    ->
+        { declOfId : Dict TypeI.Id Int
+        , declIds : Array.Array (List TypeI.Id)
+        }
+groupByDeclaration declRanges nodeIds =
+    let
+        dropFinished : Int -> List ( Int, RangeLike.RangeLike ) -> List ( Int, RangeLike.RangeLike )
+        dropFinished start decls =
+            case decls of
+                ( _, ( _, declEnd ) ) :: rest ->
+                    if declEnd < start then
+                        dropFinished start rest
+
+                    else
+                        decls
+
+                [] ->
+                    decls
+
+        grouped :
+            { remaining : List ( Int, RangeLike.RangeLike )
+            , declOfId : Dict TypeI.Id Int
+            , idsRev : Dict Int (List TypeI.Id)
+            }
+        grouped =
+            nodeIds
+                |> Dict.foldl
+                    (\( start, end ) id acc ->
+                        let
+                            remaining : List ( Int, RangeLike.RangeLike )
+                            remaining =
+                                dropFinished start acc.remaining
+                        in
+                        case remaining of
+                            ( declIndex, ( declStart, declEnd ) ) :: _ ->
+                                if
+                                    (declStart <= start)
+                                        && (end <= declEnd)
+                                        && not (Dict.member id acc.declOfId)
+                                then
+                                    { remaining = remaining
+                                    , declOfId = Dict.insert id declIndex acc.declOfId
+                                    , idsRev = Dict.update declIndex (\ids -> Just (id :: Maybe.withDefault [] ids)) acc.idsRev
+                                    }
+
+                                else
+                                    { remaining = remaining
+                                    , declOfId = acc.declOfId
+                                    , idsRev = acc.idsRev
+                                    }
+
+                            [] ->
+                                { remaining = remaining
+                                , declOfId = acc.declOfId
+                                , idsRev = acc.idsRev
+                                }
+                    )
+                    { remaining = List.indexedMap Tuple.pair declRanges
+                    , declOfId = Dict.empty
+                    , idsRev = Dict.empty
+                    }
+    in
+    { declOfId = grouped.declOfId
+    , declIds =
+        declRanges
+            |> List.indexedMap
+                (\declIndex declRange ->
+                    let
+                        ids : List TypeI.Id
+                        ids =
+                            Dict.get declIndex grouped.idsRev
+                                |> Maybe.withDefault []
+                                |> List.reverse
+                    in
+                    -- the declaration's own type first: it gets the nicest names
+                    case Dict.get declRange nodeIds of
+                        Just ownId ->
+                            if List.member ownId ids then
+                                ownId :: List.filter (\id -> id /= ownId) ids
+
+                            else
+                                ids
+
+                        Nothing ->
+                            ids
+                )
+            |> Array.fromList
+    }
 
 
 solveModule :
