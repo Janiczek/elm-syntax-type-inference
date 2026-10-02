@@ -3382,27 +3382,9 @@ toList : Dict k v -> List ( k, v )
 toList (Dict list) =
     list
 
-listFoldl : (a -> b -> b) -> b -> List a -> b
-listFoldl func acc list =
-    case list of
-        [] ->
-            acc
-
-        x :: xs ->
-            listFoldl func (func x acc) xs
-
--- the elm/core fixture has no `<` and `>`
-lessThan : comparable -> comparable -> Bool
-lessThan x y =
-    lessThan x y
-
-greaterThan : comparable -> comparable -> Bool
-greaterThan x y =
-    greaterThan x y
-
 foldl : (k -> v -> b -> b) -> b -> Dict k v -> b
 foldl func acc (Dict list) =
-    listFoldl (\\( k, v ) a -> func k v a) acc list
+    List.foldl (\\( k, v ) a -> func k v a) acc list
 
 merge leftStep bothStep rightStep leftDict rightDict initialResult =
     let
@@ -3412,10 +3394,10 @@ merge leftStep bothStep rightStep leftDict rightDict initialResult =
                     ( list, rightStep rKey rValue result )
 
                 ( lKey, lValue ) :: rest ->
-                    if lessThan lKey rKey then
+                    if lKey < rKey then
                         stepState rKey rValue ( rest, leftStep lKey lValue result )
 
-                    else if greaterThan lKey rKey then
+                    else if lKey > rKey then
                         ( list, rightStep rKey rValue result )
 
                     else
@@ -3424,7 +3406,7 @@ merge leftStep bothStep rightStep leftDict rightDict initialResult =
         ( leftovers, intermediateResult ) =
             foldl stepState ( toList leftDict, initialResult ) rightDict
     in
-    listFoldl (\\( k, v ) result -> leftStep k v result) intermediateResult leftovers
+    List.foldl (\\( k, v ) result -> leftStep k v result) intermediateResult leftovers
 """
             in
             case

@@ -73,6 +73,18 @@ basics =
           , associativity = Elm.Docs.None
           , precedence = 4
           }
+        , { name = "<"
+          , comment = ""
+          , tipe = Lambda (Var "comparable") (Lambda (Var "comparable") (Type "Basics.Bool" []))
+          , associativity = Elm.Docs.None
+          , precedence = 4
+          }
+        , { name = ">"
+          , comment = ""
+          , tipe = Lambda (Var "comparable") (Lambda (Var "comparable") (Type "Basics.Bool" []))
+          , associativity = Elm.Docs.None
+          , precedence = 4
+          }
         ]
     }
 
@@ -115,6 +127,13 @@ list =
                 Lambda
                     (Lambda (Var "a") (Var "b"))
                     (Lambda (Type "List.List" [ Var "a" ]) (Type "List.List" [ Var "b" ]))
+          }
+        , { name = "foldl"
+          , comment = ""
+          , tipe =
+                Lambda
+                    (Lambda (Var "a") (Lambda (Var "b") (Var "b")))
+                    (Lambda (Var "b") (Lambda (Type "List.List" [ Var "a" ]) (Var "b")))
           }
         ]
     , binops =
