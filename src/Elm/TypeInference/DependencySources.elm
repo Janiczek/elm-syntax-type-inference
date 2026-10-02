@@ -15,10 +15,10 @@ import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..))
-import Elm.TypeInference.ProjectError exposing (ProjectError, ProjectErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.ModuleLookup as ModuleLookup
+import Elm.TypeInference.ProjectError exposing (Location, ProjectError(..))
 import Elm.TypeInference.State exposing (GlobalKey)
 import Elm.TypeInference.Type exposing (PackageName)
 import Elm.TypeInference.Type.Internal as TypeI
@@ -332,10 +332,10 @@ packageAliases moduleMapping deps package files =
                                 Declaration.AliasDeclaration alias_ ->
                                     TypeI.fromTypeAnnotation resolver (Node.value alias_.typeAnnotation)
                                         |> Result.mapError
-                                            (\err ->
-                                                { moduleName = FullModuleName.toModuleName thisModule.moduleName
-                                                , declarationNames = [ Node.value alias_.name ]
-                                                , details = fromTypeAnnotationError err
+                                            (fromTypeAnnotationError
+                                                { package = package
+                                                , moduleName = FullModuleName.toModuleName thisModule.moduleName
+                                                , declarationName = Node.value alias_.name
                                                 }
                                             )
                                         |> Result.map
@@ -357,11 +357,18 @@ packageAliases moduleMapping deps package files =
         |> Result.map (\dict -> ( dict, moduleMappingAfterIndexing ))
 
 
-fromTypeAnnotationError : FromTypeAnnotationError -> ProjectErrorDetails
-fromTypeAnnotationError err =
+fromTypeAnnotationError : Location -> FromTypeAnnotationError -> ProjectError
+fromTypeAnnotationError location err =
     case err of
         ImpossibleAnnotation typeAnnotation ->
-            ImpossibleType typeAnnotation
+            ImpossibleType
+                { location = location
+                , typeAnnotation = typeAnnotation
+                }
 
         AmbiguousModuleName ambiguity ->
-            AmbiguousModuleOwner ambiguity
+            AmbiguousModuleOwner
+                { location = location
+                , moduleName = ambiguity.moduleName
+                , possiblePackages = ambiguity.possiblePackages
+                }

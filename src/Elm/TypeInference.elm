@@ -105,7 +105,7 @@ type alias LookupTable =
     parsed from each dependency's `elm.json` and `docs.json`.
   - `sourcesToResolveAmbiguity`: Elm sources from dependencies' `ELM_HOME`
     needed to disambiguate hidden types. Start with `Dict.empty`; if you get
-    `Err` with `details = NeedPackageSources needed`, read and parse those
+    `Err (NeedPackageSources needed)`, read and parse those
     files and retry with them supplied.
   - `projectPackageName`: the project's own package name (`Just` for packages,
     `Nothing` for applications).
@@ -161,11 +161,7 @@ init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPa
                         files
             in
             if missingModuleName then
-                Err
-                    { moduleName = [ "<Missing>" ]
-                    , declarationNames = []
-                    , details = ProjectError.MissingModuleName
-                    }
+                Err ProjectError.MissingModuleName
 
             else
                 let
@@ -698,11 +694,7 @@ addFile file (Project p) =
     in
     case moduleName of
         [] ->
-            Err
-                { moduleName = moduleName
-                , declarationNames = []
-                , details = ProjectError.MissingModuleName
-                }
+            Err ProjectError.MissingModuleName
 
         _ :: _ ->
             let
@@ -898,11 +890,7 @@ buildDependencyEnv directDependencies allDependencies sourcesToResolveAmbiguity 
             reachableDeps
 
     else
-        Err
-            { moduleName = []
-            , declarationNames = []
-            , details = ProjectError.NeedPackageSources needed
-            }
+        Err (ProjectError.NeedPackageSources needed)
 
 
 buildDependencyEnvHelp :

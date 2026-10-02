@@ -84,7 +84,7 @@ buildProject currentPackage directDependencies allDependencies files =
             Ok proj
 
         Err err ->
-            case err.details of
+            case err of
                 ProjectError.NeedPackageSources needed ->
                     Err (MissingDependencySources needed)
 

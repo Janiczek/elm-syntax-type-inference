@@ -27,7 +27,7 @@ import Elm.Syntax.Node as Node
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference exposing (Dependency, Project)
 import Elm.TypeInference.InferError as InferError exposing (InferError)
-import Elm.TypeInference.ProjectError as ProjectError exposing (ProjectError, ProjectErrorDetails(..))
+import Elm.TypeInference.ProjectError as ProjectError exposing (ProjectError(..))
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.Type as Type
@@ -392,7 +392,7 @@ buildProjectStep active =
             }
     of
         Err err ->
-            case err.details of
+            case err of
                 NeedPackageSources needed ->
                     ( { active = Just active, pending = Nothing, inference = Nothing }
                     , requestPackageSources (Encode.dict identity (Encode.list Encode.string) needed)

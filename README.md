@@ -29,5 +29,5 @@ Elm.TypeInference.removeFile ["MyModule","Internal"] project
 --> newerProject
 ```
 
-If `init` fails with `details = ProjectError.NeedPackageSources needed`, read and parse
+If `init` fails with `Err (ProjectError.NeedPackageSources needed)`, read and parse
 them and retry with them added to the `sourcesToResolveAmbiguity` field.

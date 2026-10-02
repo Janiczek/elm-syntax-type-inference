@@ -14,8 +14,9 @@ import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Type
+import Elm.TypeInference.Error.Internal exposing (ResolverAmbiguity)
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
-import Elm.TypeInference.ProjectError exposing (ProjectError, ProjectErrorDetails(..))
+import Elm.TypeInference.ProjectError exposing (Location, ProjectError(..))
 import Elm.TypeInference.State exposing (GlobalKey)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..))
@@ -45,7 +46,34 @@ fromList packages =
 {-| Resolves a module name from docs.json to its package.
 -}
 type alias Resolver =
-    String -> Result ProjectErrorDetails ( PackageName, ModuleId )
+    String -> Result ResolverAmbiguity ( PackageName, ModuleId )
+
+
+type FromDocsTypeError
+    = ImpossibleDocs Elm.Type.Type
+    | AmbiguousDocsModule ResolverAmbiguity
+
+
+toProjectError : PackageName -> String -> VarName -> FromDocsTypeError -> ProjectError
+toProjectError pkgName dottedModuleName declarationName err =
+    let
+        location : Location
+        location =
+            { package = pkgName
+            , moduleName = ModuleNameExtra.fromDotted dottedModuleName
+            , declarationName = declarationName
+            }
+    in
+    case err of
+        ImpossibleDocs type_ ->
+            ImpossibleDocsType { location = location, type_ = type_ }
+
+        AmbiguousDocsModule ambiguity ->
+            AmbiguousModuleOwner
+                { location = location
+                , moduleName = ambiguity.moduleName
+                , possiblePackages = ambiguity.possiblePackages
+                }
 
 
 resolverFor : ModuleIds.Mapping -> Dependencies -> PackageName -> Resolver
@@ -83,32 +111,19 @@ resolverFor moduleMapping deps selfPackage =
                     )
                     Dict.empty
 
-        moduleIdOf : String -> Result ProjectErrorDetails ModuleId
+        moduleIdOf : String -> Result ResolverAmbiguity ModuleId
         moduleIdOf dotted =
-            if String.isEmpty dotted then
-                -- Impossible in principle (Elm compiler generates docs.json with fully qualified types).
-                -- Possible in practice (if somebody hand-crafts a docs.json file).
-                Err
-                    (AmbiguousModuleOwner
+            case ModuleIds.getIdByDotted dotted moduleMapping of
+                Just moduleId ->
+                    Ok moduleId
+
+                Nothing ->
+                    -- Impossible if we pre-intern docs modules properly.
+                    -- Possible if we have a bug.
+                    Err
                         { moduleName = dotted
                         , possiblePackages = []
                         }
-                    )
-
-            else
-                case ModuleIds.getIdByDotted dotted moduleMapping of
-                    Just moduleId ->
-                        Ok moduleId
-
-                    Nothing ->
-                        -- Impossible if we pre-intern docs modules properly.
-                        -- Possible if we have a bug.
-                        Err
-                            (AmbiguousModuleOwner
-                                { moduleName = dotted
-                                , possiblePackages = []
-                                }
-                            )
     in
     \moduleNameStr ->
         moduleIdOf moduleNameStr
@@ -125,15 +140,14 @@ resolverFor moduleMapping deps selfPackage =
                             Ok ( owner, moduleId )
 
                         Just matches ->
-                            Err <|
-                                AmbiguousModuleOwner
-                                    { moduleName = moduleNameStr
-                                    , possiblePackages = matches
-                                    }
+                            Err
+                                { moduleName = moduleNameStr
+                                , possiblePackages = matches
+                                }
                 )
 
 
-fromDocsType : Resolver -> Elm.Type.Type -> Result ProjectErrorDetails MonoType
+fromDocsType : Resolver -> Elm.Type.Type -> Result FromDocsTypeError MonoType
 fromDocsType resolver type_ =
     case type_ of
         Elm.Type.Var name ->
@@ -159,32 +173,38 @@ fromDocsType resolver type_ =
                 (fromDocsType resolver c)
 
         Elm.Type.Tuple _ ->
-            Err (ImpossibleDocsType type_)
+            Err (ImpossibleDocs type_)
 
         Elm.Type.Type qualifiedName args ->
             let
                 ( moduleNameStr, typeName ) =
                     ModuleNameExtra.splitLastDot qualifiedName
             in
-            Result.andThen
-                (\( package, moduleId ) ->
-                    Result.Extra.combineMap (\arg -> fromDocsType resolver arg) args
-                        |> Result.map
-                            (\argTypes ->
-                                case TypeI.collapsePrimitive package moduleId typeName argTypes of
-                                    Just collapsed ->
-                                        collapsed
+            if String.isEmpty moduleNameStr then
+                -- Impossible in principle (Elm compiler generates docs.json with fully qualified types).
+                -- Possible in practice (if somebody hand-crafts a docs.json file).
+                Err (ImpossibleDocs type_)
 
-                                    Nothing ->
-                                        UserDefinedType
-                                            { package = package
-                                            , moduleId = moduleId
-                                            , name = typeName
-                                            , args = argTypes
-                                            }
-                            )
-                )
-                (resolver moduleNameStr)
+            else
+                Result.andThen
+                    (\( package, moduleId ) ->
+                        Result.Extra.combineMap (\arg -> fromDocsType resolver arg) args
+                            |> Result.map
+                                (\argTypes ->
+                                    case TypeI.collapsePrimitive package moduleId typeName argTypes of
+                                        Just collapsed ->
+                                            collapsed
+
+                                        Nothing ->
+                                            UserDefinedType
+                                                { package = package
+                                                , moduleId = moduleId
+                                                , name = typeName
+                                                , args = argTypes
+                                                }
+                                )
+                    )
+                    (resolver moduleNameStr |> Result.mapError AmbiguousDocsModule)
 
         Elm.Type.Record fields Nothing ->
             fromDocsFields resolver fields
@@ -201,7 +221,7 @@ fromDocsType resolver type_ =
                     )
 
 
-fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result ProjectErrorDetails (List ( String, MonoType ))
+fromDocsFields : Resolver -> List ( String, Elm.Type.Type ) -> Result FromDocsTypeError (List ( String, MonoType ))
 fromDocsFields resolver fields =
     Result.Extra.combineMap
         (\( name, value ) ->
@@ -311,51 +331,33 @@ registerModule :
     -> Registered
     -> Result ProjectError Registered
 registerModule moduleMapping pkgName resolver mod registered =
-    case ModuleIds.getIdByDotted mod.name moduleMapping of
-        Nothing ->
-            -- Impossible if we intern modules properly.
-            -- Possible if we have a bug.
-            Err
-                { moduleName = ModuleNameExtra.fromDotted mod.name
-                , declarationNames = []
-                , details =
-                    AmbiguousModuleOwner
-                        { moduleName = mod.name
-                        , possiblePackages = []
-                        }
-                }
+    let
+        moduleId : ModuleId
+        moduleId =
+            -- `register` already interned every package module, so this
+            -- only looks up the existing id and the mapping stays the same.
+            ModuleIds.intern (FullModuleName.fromDotted mod.name) moduleMapping
+                |> Tuple.first
 
-        Just moduleId ->
-            let
-                toError : ProjectErrorDetails -> ProjectError
-                toError details =
-                    { moduleName = ModuleNameExtra.fromDotted mod.name
-                    , declarationNames = []
-                    , details = details
-                    }
-
-                addBinding : VarName -> Elm.Type.Type -> Registered -> Result ProjectError Registered
-                addBinding name tipe acc =
-                    fromDocsType resolver tipe
-                        |> Result.mapError toError
-                        |> Result.map (\monoType -> addGlobalBinding ( moduleId, pkgName, name ) monoType acc)
-            in
-            registered
-                |> (\acc -> Result.Extra.foldlWhileOk (\v -> addBinding v.name v.tipe) acc mod.values)
-                |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (\b -> addBinding b.name b.tipe) acc mod.binops)
-                |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (registerUnion pkgName moduleId mod.name resolver) acc mod.unions)
-                |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (registerAlias pkgName moduleId mod.name resolver) acc mod.aliases)
+        addBinding : VarName -> Elm.Type.Type -> Registered -> Result ProjectError Registered
+        addBinding name tipe acc =
+            fromDocsType resolver tipe
+                |> Result.mapError (toProjectError pkgName mod.name name)
+                |> Result.map (\monoType -> addGlobalBinding ( moduleId, pkgName, name ) monoType acc)
+    in
+    registered
+        |> (\acc -> Result.Extra.foldlWhileOk (\v -> addBinding v.name v.tipe) acc mod.values)
+        |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (\b -> addBinding b.name b.tipe) acc mod.binops)
+        |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (registerUnion pkgName moduleId mod.name resolver) acc mod.unions)
+        |> Result.andThen (\acc -> Result.Extra.foldlWhileOk (registerAlias pkgName moduleId mod.name resolver) acc mod.aliases)
 
 
 registerUnion : PackageName -> ModuleId -> String -> Resolver -> Elm.Docs.Union -> Registered -> Result ProjectError Registered
 registerUnion pkgName moduleId dottedModuleName resolver union registered =
     let
-        toError : ProjectErrorDetails -> ProjectError
-        toError details =
-            { moduleName = ModuleNameExtra.fromDotted dottedModuleName
-            , declarationNames = []
-            , details = details
-            }
+        toError : FromDocsTypeError -> ProjectError
+        toError =
+            toProjectError pkgName dottedModuleName union.name
 
         args : List MonoType
         args =
@@ -420,12 +422,9 @@ registerAlias :
     -> Result ProjectError Registered
 registerAlias pkgName moduleId dottedModuleName resolver alias_ registered =
     let
-        toError : ProjectErrorDetails -> ProjectError
-        toError details =
-            { moduleName = ModuleNameExtra.fromDotted dottedModuleName
-            , declarationNames = []
-            , details = details
-            }
+        toError : FromDocsTypeError -> ProjectError
+        toError =
+            toProjectError pkgName dottedModuleName alias_.name
     in
     fromDocsType resolver alias_.tipe
         |> Result.mapError toError

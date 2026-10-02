@@ -1,5 +1,5 @@
 module Elm.TypeInference.ProjectError exposing
-    ( ProjectError, ProjectErrorDetails(..)
+    ( ProjectError(..), Location
     , toString
     )
 
@@ -9,7 +9,7 @@ module Elm.TypeInference.ProjectError exposing
 Errors from type inference itself live in
 [`Elm.TypeInference.InferError`](Elm-TypeInference-InferError).
 
-@docs ProjectError, ProjectErrorDetails
+@docs ProjectError, Location
 @docs toString
 
 -}
@@ -22,16 +22,16 @@ import Elm.Syntax.Range as Range
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 import Elm.Type
 import Elm.TypeInference.Error.Internal exposing (list, record)
-import Elm.TypeInference.Type exposing (VarName)
+import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.Writer
 
 
-{-| A project initialization error + location info.
+{-| Where in a dependency an error was found.
 -}
-type alias ProjectError =
-    { moduleName : ModuleName
-    , declarationNames : List VarName
-    , details : ProjectErrorDetails
+type alias Location =
+    { package : PackageName
+    , moduleName : ModuleName
+    , declarationName : VarName
     }
 
 
@@ -53,37 +53,23 @@ type alias ProjectError =
     given in `sourcesToResolveAmbiguity`.
 
   - **`AmbiguousModuleOwner`:** Raised when a type in a dependency's
-    `docs.json` or sources refers to a module exposed by more than one
-    package visible to that dependency.
+    `docs.json` or sources refers to a module (`moduleName`) exposed by more
+    than one package visible to that dependency.
 
 -}
-type ProjectErrorDetails
-    = NeedPackageSources (Dict String (List String))
+type ProjectError
+    = NeedPackageSources (Dict PackageName (List String))
     | MissingModuleName
-    | ImpossibleDocsType Elm.Type.Type
-    | ImpossibleType TypeAnnotation
-    | AmbiguousModuleOwner { moduleName : String, possiblePackages : List String }
+    | ImpossibleDocsType { location : Location, type_ : Elm.Type.Type }
+    | ImpossibleType { location : Location, typeAnnotation : TypeAnnotation }
+    | AmbiguousModuleOwner { location : Location, moduleName : String, possiblePackages : List PackageName }
 
 
 {-| Render an error for diagnostic output.
 -}
 toString : ProjectError -> String
 toString error =
-    detailsToString error.details
-        ++ " (in "
-        ++ Elm.Syntax.ModuleName.Extra.toString error.moduleName
-        ++ (if List.isEmpty error.declarationNames then
-                ""
-
-            else
-                "." ++ String.join "/" error.declarationNames
-           )
-        ++ ")"
-
-
-detailsToString : ProjectErrorDetails -> String
-detailsToString details =
-    case details of
+    case error of
         NeedPackageSources needed ->
             "Need package sources "
                 ++ record
@@ -95,15 +81,18 @@ detailsToString details =
         MissingModuleName ->
             "Missing module name"
 
-        ImpossibleDocsType type_ ->
-            "Impossible docs type " ++ docsTypeToString type_
+        ImpossibleDocsType r ->
+            "Impossible docs type "
+                ++ docsTypeToString r.type_
+                ++ locationToString r.location
 
-        ImpossibleType typeAnnotation ->
+        ImpossibleType r ->
             "Impossible type "
                 ++ Elm.Writer.write
                     (Elm.Writer.writeTypeAnnotation
-                        (Node.Node Range.emptyRange typeAnnotation)
+                        (Node.Node Range.emptyRange r.typeAnnotation)
                     )
+                ++ locationToString r.location
 
         AmbiguousModuleOwner r ->
             "Ambiguous module owner "
@@ -111,10 +100,22 @@ detailsToString details =
                     [ ( "moduleName", r.moduleName )
                     , ( "possiblePackages", list r.possiblePackages )
                     ]
+                ++ locationToString r.location
 
 
 
 -- HELPERS
+
+
+locationToString : Location -> String
+locationToString location =
+    " (in "
+        ++ Elm.Syntax.ModuleName.Extra.toString location.moduleName
+        ++ "."
+        ++ location.declarationName
+        ++ " from "
+        ++ location.package
+        ++ ")"
 
 
 docsTypeToString : Elm.Type.Type -> String

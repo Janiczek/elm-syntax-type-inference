@@ -8,7 +8,7 @@ import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)
-import Elm.TypeInference.ProjectError exposing (ProjectError, ProjectErrorDetails(..))
+import Elm.TypeInference.ProjectError exposing (ProjectError(..))
 import Expect
 import Test exposing (Test)
 import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
@@ -88,7 +88,7 @@ suite =
                                 Expect.fail "First pass should request sources for example/css"
 
                             Err err ->
-                                case err.details of
+                                case err of
                                     NeedPackageSources needed ->
                                         if needed /= Dict.singleton "example/css" [ "src/Css/Internal.elm" ] then
                                             Expect.fail ("Should request example/css, requested: " ++ Debug.toString needed)
@@ -137,7 +137,7 @@ suite =
                                 Expect.fail "First pass should request sources for example/duration"
 
                             Err err ->
-                                case err.details of
+                                case err of
                                     NeedPackageSources needed ->
                                         if needed /= Dict.singleton "example/duration" [ "src/Duration.elm" ] then
                                             Expect.fail ("Should request example/duration, requested: " ++ Debug.toString needed)

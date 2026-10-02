@@ -1542,16 +1542,23 @@ main = 1
                 in
                 case getDeclTypeWithDeps [ elmUi, styleElements, elmUiWithContext ] modules [ "Main" ] "main" of
                     Err (CouldntInit err) ->
-                        case err.details of
-                            ProjectError.AmbiguousModuleOwner { moduleName, possiblePackages } ->
+                        case err of
+                            ProjectError.AmbiguousModuleOwner { location, moduleName, possiblePackages } ->
                                 Expect.all
-                                    [ \_ -> moduleName |> Expect.equal "Element"
+                                    [ \_ ->
+                                        location
+                                            |> Expect.equal
+                                                { package = "miniBill/elm-ui-with-context"
+                                                , moduleName = [ "Element", "WithContext" ]
+                                                , declarationName = "toElement"
+                                                }
+                                    , \_ -> moduleName |> Expect.equal "Element"
                                     , \_ -> possiblePackages |> Expect.equal [ "mdgriffith/elm-ui", "mdgriffith/style-elements" ]
                                     ]
                                     ()
 
-                            otherDetails ->
-                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherDetails)
+                            otherError ->
+                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherError)
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
@@ -1624,8 +1631,8 @@ main = Element.text "hi"
                                     ]
                                     ()
 
-                            otherDetails ->
-                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherDetails)
+                            otherError ->
+                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherError)
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
@@ -1693,8 +1700,8 @@ main = 1
                                     ]
                                     ()
 
-                            otherDetails ->
-                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherDetails)
+                            otherError ->
+                                Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString otherError)
 
                     other ->
                         Expect.fail ("Expected AmbiguousModuleOwner, got: " ++ Debug.toString other)
@@ -4688,7 +4695,7 @@ value x =
                             Just aFile ->
                                 case Elm.TypeInference.addFile (withEmptyModuleName aFile) proj0 of
                                     Err error ->
-                                        Expect.equal error.details ProjectError.MissingModuleName
+                                        Expect.equal error ProjectError.MissingModuleName
 
                                     Ok _ ->
                                         Expect.fail "Expected an error"

@@ -216,7 +216,7 @@ impossibleDocsTypeTest =
     in
     getExprTypeWithDeps [ weird ]
         "Weird.weird"
-        |> expectProjectError "Impossible docs type ( a, b, c, d ) (in Weird)"
+        |> expectProjectError "Impossible docs type ( a, b, c, d ) (in Weird.weird from author/weird)"
 
 
 missingModuleNameTest : Test
@@ -261,7 +261,7 @@ missingModuleNameTest =
                     of
                         Err err ->
                             ProjectError.toString err
-                                |> Expect.equal "Missing module name (in <Missing>)"
+                                |> Expect.equal "Missing module name"
 
                         Ok _ ->
                             Expect.fail "Expected a MissingModuleName error"
