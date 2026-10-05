@@ -121,7 +121,7 @@ checkOne cfg member =
                     ( finalMono, _, _ ) =
                         SubstitutionMap.substituteMono subst (TypeI.id_ member.id)
                 in
-                if shaderSlotsTooGeneral annoMono finalMono then
+                if shaderSlotsTooGeneral cfg annoMono finalMono then
                     let
                         ( pubAnno, pubFinal ) =
                             TypeI.toPublicPair cfg.moduleMapping annoMono finalMono
@@ -158,30 +158,35 @@ checkOne cfg member =
 is an error because the annotation is more general than the body.
 
 -}
-shaderSlotsTooGeneral : MonoType -> MonoType -> Bool
-shaderSlotsTooGeneral annoMono finalMono =
+shaderSlotsTooGeneral : UnifyConfig -> MonoType -> MonoType -> Bool
+shaderSlotsTooGeneral cfg annoMono finalMono =
     case annoMono of
         WebGLShader annoShader ->
             case finalMono of
                 WebGLShader finalShader ->
-                    let
-                        slots :
-                            { attributesExtension : MonoType
-                            , attributes : Dict String MonoType
-                            , uniformsExtension : MonoType
-                            , uniforms : Dict String MonoType
-                            , varyingsExtension : MonoType
-                            , varyings : Dict String MonoType
-                            }
-                            -> List { extensionTypevar : MonoType, fields : Dict String MonoType }
-                        slots shader =
-                            [ { extensionTypevar = shader.attributesExtension, fields = shader.attributes }
-                            , { extensionTypevar = shader.uniformsExtension, fields = shader.uniforms }
-                            , { extensionTypevar = shader.varyingsExtension, fields = shader.varyings }
-                            ]
-                    in
-                    List.map2 Tuple.pair (slots annoShader) (slots finalShader)
-                        |> List.any (\( annoSlot, finalSlot ) -> slotTooGeneral annoSlot finalSlot)
+                    List.map2 Tuple.pair
+                        [ annoShader.attributes
+                        , annoShader.uniforms
+                        , annoShader.varyings
+                        ]
+                        [ finalShader.attributes
+                        , finalShader.uniforms
+                        , finalShader.varyings
+                        ]
+                        |> List.any
+                            (\( annoSlot, finalSlot ) ->
+                                case Unify.shaderSlotParts cfg.typeAliases annoSlot of
+                                    Just anno ->
+                                        case Unify.shaderSlotParts cfg.typeAliases finalSlot of
+                                            Just final ->
+                                                slotTooGeneral anno final
+
+                                            Nothing ->
+                                                False
+
+                                    Nothing ->
+                                        False
+                            )
 
                 _ ->
                     False
@@ -198,28 +203,10 @@ slotTooGeneral annoSlot finalSlot =
     case annoSlot.extensionTypevar of
         TypeVar _ ->
             if Dict.isEmpty annoSlot.fields then
-                not (Dict.isEmpty (collapsedFields finalSlot))
+                not (Dict.isEmpty finalSlot.fields)
 
             else
-                not (Dict.isEmpty (Dict.diff annoSlot.fields (collapsedFields finalSlot)))
+                not (Dict.isEmpty (Dict.diff annoSlot.fields finalSlot.fields))
 
         _ ->
-            not (Dict.isEmpty (Dict.diff annoSlot.fields (collapsedFields finalSlot)))
-
-
-collapsedFields : { extensionTypevar : MonoType, fields : Dict String MonoType } -> Dict String MonoType
-collapsedFields slot =
-    case
-        TypeI.collapseExtensible
-            { extensionTypevar = slot.extensionTypevar
-            , fields = slot.fields
-            }
-    of
-        ExtensibleRecord r ->
-            r.fields
-
-        Record fields ->
-            fields
-
-        _ ->
-            Dict.empty
+            not (Dict.isEmpty (Dict.diff annoSlot.fields finalSlot.fields))

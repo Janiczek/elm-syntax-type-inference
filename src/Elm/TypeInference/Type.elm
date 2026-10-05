@@ -64,12 +64,9 @@ type Type
         , arguments : List Type
         }
     | WebGLShader
-        { attributesFields : Dict String Type
-        , attributesExtensionTypevar : Maybe String
-        , uniformsFields : Dict String Type
-        , uniformsExtensionTypevar : Maybe String
-        , varyingsFields : Dict String Type
-        , varyingsExtensionTypevar : Maybe String
+        { attributes : Type
+        , uniforms : Type
+        , varyings : Type
         }
 
 
@@ -171,7 +168,11 @@ toString t =
                         |> Dict.toList
                         |> List.map (\( name, fieldType ) -> name ++ " : " ++ toString fieldType)
             in
-            "{" ++ String.join ", " fieldStrings ++ "}"
+            if List.isEmpty fieldStrings then
+                "{}"
+
+            else
+                "{ " ++ String.join ", " fieldStrings ++ " }"
 
         ExtensibleRecord { fields, extensionTypevar } ->
             let
@@ -203,9 +204,9 @@ toString t =
 
         WebGLShader r ->
             [ "Shader"
-            , shaderSlotToString r.attributesFields r.attributesExtensionTypevar
-            , shaderSlotToString r.uniformsFields r.uniformsExtensionTypevar
-            , shaderSlotToString r.varyingsFields r.varyingsExtensionTypevar
+            , wrapped r.attributes
+            , wrapped r.uniforms
+            , wrapped r.varyings
             ]
                 |> String.join " "
 
@@ -298,9 +299,9 @@ breakType maxWidth t =
 
         WebGLShader r ->
             [ "Shader"
-            , toMultilineString maxWidth (shaderSlotToType r.attributesFields r.attributesExtensionTypevar)
-            , toMultilineString maxWidth (shaderSlotToType r.uniformsFields r.uniformsExtensionTypevar)
-            , toMultilineString maxWidth (shaderSlotToType r.varyingsFields r.varyingsExtensionTypevar)
+            , wrappedMultiline maxWidth r.attributes
+            , wrappedMultiline maxWidth r.uniforms
+            , wrappedMultiline maxWidth r.varyings
             ]
                 |> String.join " "
 
@@ -464,9 +465,9 @@ toTypeAnnotation type_ =
         WebGLShader r ->
             TypeAnnotation.Typed
                 (Node.empty ( [ "WebGL" ], "Shader" ))
-                [ Node.empty <| shaderSlotToTypeAnnotation r.attributesFields r.attributesExtensionTypevar
-                , Node.empty <| shaderSlotToTypeAnnotation r.uniformsFields r.uniformsExtensionTypevar
-                , Node.empty <| shaderSlotToTypeAnnotation r.varyingsFields r.varyingsExtensionTypevar
+                [ Node.empty <| toTypeAnnotation r.attributes
+                , Node.empty <| toTypeAnnotation r.uniforms
+                , Node.empty <| toTypeAnnotation r.varyings
                 ]
 
 
@@ -512,27 +513,3 @@ recordFieldsToRecordDefinition fields =
                     :: acc
             )
             []
-
-
-shaderSlotToType : Dict String Type -> Maybe String -> Type
-shaderSlotToType fields extensionTypevar =
-    case extensionTypevar of
-        Nothing ->
-            Record { fields = fields }
-
-        Just var ->
-            if Dict.isEmpty fields then
-                TypeVar var
-
-            else
-                ExtensibleRecord { fields = fields, extensionTypevar = var }
-
-
-shaderSlotToString : Dict String Type -> Maybe String -> String
-shaderSlotToString fields extensionTypevar =
-    toString (shaderSlotToType fields extensionTypevar)
-
-
-shaderSlotToTypeAnnotation : Dict String Type -> Maybe String -> TypeAnnotation
-shaderSlotToTypeAnnotation fields extensionTypevar =
-    toTypeAnnotation (shaderSlotToType fields extensionTypevar)

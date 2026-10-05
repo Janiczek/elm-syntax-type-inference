@@ -3,6 +3,7 @@ module Tests.Elm.TypeInference.Helpers exposing
     , buildMainModuleProject
     , buildProject
     , getDeclType
+    , getDeclTypeAndProject
     , getDeclTypeWithDeps
     , getDeclTypeWithDirectAndDeps
     , getDeclTypeWithPackage
@@ -203,6 +204,27 @@ getDeclTypeWithPackage :
     -> String
     -> Result TestError Type
 getDeclTypeWithPackage currentPackage directDependencies dependencies modules moduleName declName =
+    getDeclTypeAndProject
+        currentPackage
+        directDependencies
+        dependencies
+        modules
+        moduleName
+        declName
+        |> Result.map Tuple.first
+
+
+{-| Like `getDeclTypeWithPackage`, but also gives the (post-inference) `Project`.
+-}
+getDeclTypeAndProject :
+    Maybe String
+    -> List String
+    -> List Dependency
+    -> Dict ModuleName String
+    -> ModuleName
+    -> String
+    -> Result TestError ( Type, Elm.TypeInference.Project )
+getDeclTypeAndProject currentPackage directDependencies dependencies modules moduleName declName =
     parseModules modules
         |> Result.andThen
             (\files ->
@@ -218,7 +240,12 @@ getDeclTypeWithPackage currentPackage directDependencies dependencies modules mo
                                             |> Result.fromMaybe CouldntFindMainDeclaration
                                             |> Result.andThen
                                                 (\declNode ->
-                                                    lookupType moduleName (Node.range declNode) proj
+                                                    Elm.TypeInference.getType moduleName (Node.range declNode) proj
+                                                        |> (\( result, newProj ) ->
+                                                                result
+                                                                    |> Result.mapError mapLookupError
+                                                                    |> Result.map (\t -> ( t, newProj ))
+                                                           )
                                                 )
                                     )
                         )

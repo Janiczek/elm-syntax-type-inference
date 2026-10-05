@@ -8,10 +8,12 @@ module Elm.TypeInference.Type.Internal exposing
     , collapseExtensible
     , collapsePrimitive
     , external
+    , fromPublicType
     , fromTypeAnnotation
     , fromTypeAnnotationError
     , id_
     , mapVarsMono
+    , moduleIdsIn
     , mono
     , monoHasTypeVars
     , monoPublicKey
@@ -25,6 +27,7 @@ module Elm.TypeInference.Type.Internal exposing
 
 import Dict exposing (Dict)
 import Dict.Extra
+import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
@@ -103,12 +106,9 @@ type MonoType
         , args : List MonoType
         }
     | WebGLShader
-        { attributesExtension : MonoType
-        , attributes : Dict VarName MonoType
-        , uniformsExtension : MonoType
-        , uniforms : Dict VarName MonoType
-        , varyingsExtension : MonoType
-        , varyings : Dict VarName MonoType
+        { attributes : MonoType
+        , uniforms : MonoType
+        , varyings : MonoType
         }
 
 
@@ -231,57 +231,21 @@ collapseWebGLShader moduleId name args =
     if moduleId == ModuleIds.webGLId && name == "Shader" then
         case args of
             [ attributes, uniforms, varyings ] ->
-                Maybe.map3 makeWebGLShader
-                    (shaderSetSlot attributes)
-                    (shaderSetSlot uniforms)
-                    (shaderSetSlot varyings)
+                -- In practice records or extensible records, but we hold full
+                -- types to support type aliases as well.
+                Just
+                    (WebGLShader
+                        { attributes = attributes
+                        , uniforms = uniforms
+                        , varyings = varyings
+                        }
+                    )
 
             _ ->
                 Nothing
 
     else
         Nothing
-
-
-{-| WebGL Shader typevars can be of three shapes:
-
-  - `{ position : Vec3 }`
-  - `{ attributes | position : Vec3 }`
-  - `a`
-
-Anythign else, we return Nothing and let downstream code report a mismatch.
-
--}
-shaderSetSlot : MonoType -> Maybe ( MonoType, Dict VarName MonoType )
-shaderSetSlot arg =
-    case arg of
-        Record fields ->
-            Just ( Record Dict.empty, fields )
-
-        ExtensibleRecord er ->
-            Just ( er.extensionTypevar, er.fields )
-
-        TypeVar v ->
-            Just ( TypeVar v, Dict.empty )
-
-        _ ->
-            Nothing
-
-
-makeWebGLShader :
-    ( MonoType, Dict VarName MonoType )
-    -> ( MonoType, Dict VarName MonoType )
-    -> ( MonoType, Dict VarName MonoType )
-    -> MonoType
-makeWebGLShader ( attributesExtension, attributes ) ( uniformsExtension, uniforms ) ( varyingsExtension, varyings ) =
-    WebGLShader
-        { attributesExtension = attributesExtension
-        , attributes = attributes
-        , uniformsExtension = uniformsExtension
-        , uniforms = uniforms
-        , varyingsExtension = varyingsExtension
-        , varyings = varyings
-        }
 
 
 
@@ -348,12 +312,9 @@ recurse f type_ =
 
         WebGLShader r ->
             WebGLShader
-                { attributesExtension = f r.attributesExtension
-                , attributes = Dict.map (\_ t -> f t) r.attributes
-                , uniformsExtension = f r.uniformsExtension
-                , uniforms = Dict.map (\_ t -> f t) r.uniforms
-                , varyingsExtension = f r.varyingsExtension
-                , varyings = Dict.map (\_ t -> f t) r.varyings
+                { attributes = f r.attributes
+                , uniforms = f r.uniforms
+                , varyings = f r.varyings
                 }
 
 
@@ -428,12 +389,73 @@ monoTypeVarsHelp type_ acc =
 
         WebGLShader r ->
             acc
-                |> monoTypeVarsInFieldsHelp r.varyings
-                |> monoTypeVarsHelp r.varyingsExtension
-                |> monoTypeVarsInFieldsHelp r.uniforms
-                |> monoTypeVarsHelp r.uniformsExtension
-                |> monoTypeVarsInFieldsHelp r.attributes
-                |> monoTypeVarsHelp r.attributesExtension
+                |> monoTypeVarsHelp r.varyings
+                |> monoTypeVarsHelp r.uniforms
+                |> monoTypeVarsHelp r.attributes
+
+
+{-| Modules whose named types the type mentions.
+-}
+moduleIdsIn : MonoType -> Set ModuleId -> Set ModuleId
+moduleIdsIn type_ acc =
+    case type_ of
+        TypeVar _ ->
+            acc
+
+        Function { from, to } ->
+            acc
+                |> moduleIdsIn from
+                |> moduleIdsIn to
+
+        Int ->
+            acc
+
+        Float ->
+            acc
+
+        Char ->
+            acc
+
+        String ->
+            acc
+
+        Bool ->
+            acc
+
+        List inner ->
+            moduleIdsIn inner acc
+
+        Unit ->
+            acc
+
+        Tuple2 a b ->
+            acc
+                |> moduleIdsIn a
+                |> moduleIdsIn b
+
+        Tuple3 a b c ->
+            acc
+                |> moduleIdsIn a
+                |> moduleIdsIn b
+                |> moduleIdsIn c
+
+        Record fields ->
+            Dict.foldl (\_ v inner -> moduleIdsIn v inner) acc fields
+
+        ExtensibleRecord r ->
+            Dict.foldl
+                (\_ v inner -> moduleIdsIn v inner)
+                (moduleIdsIn r.extensionTypevar acc)
+                r.fields
+
+        UserDefinedType r ->
+            List.foldl moduleIdsIn (Set.insert r.moduleId acc) r.args
+
+        WebGLShader r ->
+            acc
+                |> moduleIdsIn r.attributes
+                |> moduleIdsIn r.uniforms
+                |> moduleIdsIn r.varyings
 
 
 {-| `not (List.isEmpty (monoTypeVars type_))`, stopping at the first variable.
@@ -484,12 +506,9 @@ monoHasTypeVars type_ =
             List.any monoHasTypeVars r.args
 
         WebGLShader r ->
-            monoHasTypeVars r.attributesExtension
-                || fieldsHaveTypeVars r.attributes
-                || monoHasTypeVars r.uniformsExtension
-                || fieldsHaveTypeVars r.uniforms
-                || monoHasTypeVars r.varyingsExtension
-                || fieldsHaveTypeVars r.varyings
+            monoHasTypeVars r.attributes
+                || monoHasTypeVars r.uniforms
+                || monoHasTypeVars r.varyings
 
 
 fieldsHaveTypeVars : Dict VarName MonoType -> Bool
@@ -1095,6 +1114,96 @@ fromTypeAnnotationError err =
             AmbiguousModuleOwner ambiguity
 
 
+fromPublicType : ModuleIds.Mapping -> Public.Type -> Maybe MonoType
+fromPublicType moduleMapping publicType =
+    let
+        go : Public.Type -> Maybe MonoType
+        go =
+            fromPublicType moduleMapping
+
+        goDict : Dict VarName Public.Type -> Maybe (Dict VarName MonoType)
+        goDict fields =
+            Dict.foldl
+                (\name t acc -> Maybe.map2 (Dict.insert name) (go t) acc)
+                (Just Dict.empty)
+                fields
+    in
+    case publicType of
+        Public.TypeVar name ->
+            Just (TypeVar (TypeVar.parse name))
+
+        Public.Function { from, to } ->
+            Maybe.map2 (\f t -> Function { from = f, to = t }) (go from) (go to)
+
+        Public.Int ->
+            Just Int
+
+        Public.Float ->
+            Just Float
+
+        Public.Char ->
+            Just Char
+
+        Public.String ->
+            Just String
+
+        Public.Bool ->
+            Just Bool
+
+        Public.List inner ->
+            Maybe.map List (go inner)
+
+        Public.Unit ->
+            Just Unit
+
+        Public.Tuple2 a b ->
+            Maybe.map2 Tuple2 (go a) (go b)
+
+        Public.Tuple3 a b c ->
+            Maybe.map3 Tuple3 (go a) (go b) (go c)
+
+        Public.Record { fields } ->
+            Maybe.map Record (goDict fields)
+
+        Public.ExtensibleRecord { fields, extensionTypevar } ->
+            goDict fields
+                |> Maybe.map
+                    (\monoFields ->
+                        ExtensibleRecord
+                            { extensionTypevar = TypeVar (TypeVar.parse extensionTypevar)
+                            , fields = monoFields
+                            }
+                    )
+
+        Public.Named { package, moduleName, name, arguments } ->
+            Maybe.map2
+                (\moduleId args ->
+                    UserDefinedType
+                        { package = package
+                        , moduleId = moduleId
+                        , name = name
+                        , args = args
+                        }
+                )
+                (FullModuleName.fromModuleName moduleName
+                    |> Maybe.andThen (\full -> ModuleIds.getId full moduleMapping)
+                )
+                (List.foldr (\arg acc -> Maybe.map2 (::) (go arg) acc) (Just []) arguments)
+
+        Public.WebGLShader r ->
+            Maybe.map3
+                (\attributes uniforms varyings ->
+                    WebGLShader
+                        { attributes = attributes
+                        , uniforms = uniforms
+                        , varyings = varyings
+                        }
+                )
+                (go r.attributes)
+                (go r.uniforms)
+                (go r.varyings)
+
+
 toPublicType : ModuleIds.Mapping -> { alreadyNormalized : Bool } -> MonoType -> Public.Type
 toPublicType moduleMapping { alreadyNormalized } origMono =
     let
@@ -1224,65 +1333,11 @@ toPublicTypeNormalized moduleMapping mono_ =
                 }
 
         WebGLShader r ->
-            let
-                ( attributesFields, attributesExtensionTypevar ) =
-                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.attributesExtension r.attributes
-
-                ( uniformsFields, uniformsExtensionTypevar ) =
-                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.uniformsExtension r.uniforms
-
-                ( varyingsFields, varyingsExtensionTypevar ) =
-                    shaderSlotToPublic (\t -> toPublicType moduleMapping { alreadyNormalized = True } t) r.varyingsExtension r.varyings
-            in
             Public.WebGLShader
-                { attributesFields = attributesFields
-                , attributesExtensionTypevar = attributesExtensionTypevar
-                , uniformsFields = uniformsFields
-                , uniformsExtensionTypevar = uniformsExtensionTypevar
-                , varyingsFields = varyingsFields
-                , varyingsExtensionTypevar = varyingsExtensionTypevar
+                { attributes = toPublicType moduleMapping { alreadyNormalized = True } r.attributes
+                , uniforms = toPublicType moduleMapping { alreadyNormalized = True } r.uniforms
+                , varyings = toPublicType moduleMapping { alreadyNormalized = True } r.varyings
                 }
-
-
-shaderSlotToPublic : (MonoType -> Public.Type) -> MonoType -> Dict VarName MonoType -> ( Dict VarName Public.Type, Maybe String )
-shaderSlotToPublic f extensionTypevar fields =
-    case
-        collapseExtensible
-            { extensionTypevar = extensionTypevar
-            , fields = fields
-            }
-    of
-        Record recordFields ->
-            ( Dict.map (\_ v -> f v) recordFields
-            , Nothing
-            )
-
-        TypeVar var ->
-            ( Dict.empty
-            , Just (TypeVar.toString var)
-            )
-
-        ExtensibleRecord r ->
-            case r.extensionTypevar of
-                TypeVar var ->
-                    ( Dict.map (\_ v -> f v) r.fields
-                    , Just (TypeVar.toString var)
-                    )
-
-                _ ->
-                    -- Should be impossible to trigger for users of the
-                    -- library, as they don't have access to MonoType
-                    -- constructors.
-                    ( Dict.map (\_ v -> f v) r.fields
-                    , Just "<elm-syntax-type-inference bug: non-var as extensible record base>"
-                    )
-
-        _ ->
-            -- Shouldn't happen: shader slots are always record-like.
-            -- Fall back to a closed record holding nothing, to avoid crashing.
-            ( Dict.empty
-            , Nothing
-            )
 
 
 {-| A deduplication key for a normalized monotype inside a single module's lookup table.
@@ -1480,15 +1535,15 @@ monoPublicKeyAlphaHelp mono_ state =
         WebGLShader r ->
             let
                 ( a, s1 ) =
-                    shaderSlotKeyAlpha r.attributesExtension r.attributes state
+                    monoPublicKeyAlphaHelp r.attributes state
 
                 ( b, s2 ) =
-                    shaderSlotKeyAlpha r.uniformsExtension r.uniforms s1
+                    monoPublicKeyAlphaHelp r.uniforms s1
 
                 ( c, s3 ) =
-                    shaderSlotKeyAlpha r.varyingsExtension r.varyings s2
+                    monoPublicKeyAlphaHelp r.varyings s2
             in
-            ( "14;" ++ a ++ b ++ c, s3 )
+            ( "14;" ++ strKey a ++ strKey b ++ strKey c, s3 )
 
 
 recordKeyAlpha : Dict VarName MonoType -> AlphaState -> ( String, AlphaState )
@@ -1544,42 +1599,6 @@ extNameAlpha extensionTypevar state =
             ( "<elm-syntax-type-inference bug: non-var as extensible record base>"
             , state
             )
-
-
-shaderSlotKeyAlpha : MonoType -> Dict VarName MonoType -> AlphaState -> ( String, AlphaState )
-shaderSlotKeyAlpha extensionTypevar fields state =
-    case
-        collapseExtensible
-            { extensionTypevar = extensionTypevar
-            , fields = fields
-            }
-    of
-        Record recordFields ->
-            let
-                ( rk, s1 ) =
-                    recordKeyAlpha recordFields state
-            in
-            ( strKey rk ++ maybeStrKey Nothing, s1 )
-
-        TypeVar var ->
-            let
-                ( vc, s1 ) =
-                    alphaVarCode var state
-            in
-            ( strKey "0;" ++ maybeStrKey (Just vc), s1 )
-
-        ExtensibleRecord r ->
-            let
-                ( rk, s1 ) =
-                    recordKeyAlpha r.fields state
-
-                ( ek, s2 ) =
-                    extNameAlpha r.extensionTypevar s1
-            in
-            ( strKey rk ++ maybeStrKey (Just ek), s2 )
-
-        _ ->
-            ( strKey "0;" ++ maybeStrKey Nothing, state )
 
 
 monoPublicKeyNormalized : MonoType -> String
@@ -1647,9 +1666,9 @@ monoPublicKeyNormalized mono_ =
 
         WebGLShader r ->
             "14;"
-                ++ shaderSlotKey r.attributesExtension r.attributes
-                ++ shaderSlotKey r.uniformsExtension r.uniforms
-                ++ shaderSlotKey r.varyingsExtension r.varyings
+                ++ strKey (monoPublicKeyNormalized r.attributes)
+                ++ strKey (monoPublicKeyNormalized r.uniforms)
+                ++ strKey (monoPublicKeyNormalized r.varyings)
 
 
 extNameOf : MonoType -> String
@@ -1679,43 +1698,8 @@ argsKeyOf args =
         ++ List.foldl (\arg acc -> acc ++ strKey (monoPublicKeyNormalized arg)) "" args
 
 
-shaderSlotKey : MonoType -> Dict VarName MonoType -> String
-shaderSlotKey extensionTypevar fields =
-    case
-        collapseExtensible
-            { extensionTypevar = extensionTypevar
-            , fields = fields
-            }
-    of
-        Record recordFields ->
-            strKey (recordKeyOf recordFields)
-                ++ maybeStrKey Nothing
-
-        TypeVar var ->
-            strKey "0;"
-                ++ maybeStrKey (Just (TypeVar.toString var))
-
-        ExtensibleRecord r ->
-            strKey (recordKeyOf r.fields)
-                ++ maybeStrKey (Just (extNameOf r.extensionTypevar))
-
-        _ ->
-            strKey "0;"
-                ++ maybeStrKey Nothing
-
-
 strKey : String -> String
 strKey s =
     String.fromInt (String.length s)
         ++ ":"
         ++ s
-
-
-maybeStrKey : Maybe String -> String
-maybeStrKey m =
-    case m of
-        Nothing ->
-            "0;"
-
-        Just s ->
-            "1;" ++ strKey s

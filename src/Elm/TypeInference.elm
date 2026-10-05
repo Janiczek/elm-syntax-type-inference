@@ -1,6 +1,6 @@
 module Elm.TypeInference exposing
     ( init, empty, Project, Dependency
-    , getType, getAllTypes
+    , getType, getAllTypes, expand
     , addFile, removeFile
     )
 
@@ -21,7 +21,7 @@ The process:
 
 @docs init, empty, Project, Dependency
 
-@docs getType, getAllTypes
+@docs getType, getAllTypes, expand
 
 @docs addFile, removeFile
 
@@ -59,7 +59,7 @@ import Elm.TypeInference.SubstitutionMap as SubstitutionMap
 import Elm.TypeInference.Type exposing (PackageName, Type, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeResolver)
 import Elm.TypeInference.TypeVar as TypeVar
-import Elm.TypeInference.Unify exposing (TypeAlias)
+import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import List.ExtraExtra
 import RangeLike
 import Result.Extra
@@ -329,6 +329,170 @@ getType moduleName range proj =
 
         Just m ->
             lookupRange moduleName range m (ensureInferred m proj)
+
+
+{-| Fully expand the type aliases in a [`Type`](Elm-TypeInference-Type#Type).
+
+    type alias X =
+        { a : Int, b : String }
+
+    foo : X
+    foo = { a = 5, b = "hello" }
+
+    -- Assuming you `getType` for the `foo`:
+    Named
+       { package = ""
+       , moduleName = ["Main"]
+       , name = "X"
+       , arguments = []
+       }
+
+    -- You can expand it:
+    expand project theTypeAbove
+    -->
+    Record
+        { fields =
+            Dict.fromList
+                [ ( "a", Int )
+                , ( "b", String )
+                ]
+        }
+
+-}
+expand : Project -> Type -> Type
+expand (Project p) type_ =
+    case TypeI.fromPublicType p.moduleMapping type_ of
+        Nothing ->
+            type_
+
+        Just mono ->
+            Unify.expandAliasDeep (knownAliases p mono) mono
+                |> TypeI.toPublicType p.moduleMapping { alreadyNormalized = True }
+
+
+knownAliases :
+    { a
+        | currentPackage : Maybe PackageName
+        , depEnv : DependencyEnv
+        , moduleMapping : ModuleIds.Mapping
+        , modulesById : Dict ModuleId ProjectModule
+        , acc : ProjectAcc
+    }
+    -> MonoType
+    -> Dict GlobalKey TypeAlias
+knownAliases p mono =
+    knownAliasesHelp
+        p
+        (Set.toList (TypeI.moduleIdsIn mono Set.empty))
+        Set.empty
+        p.acc.aliases
+
+
+knownAliasesHelp :
+    { a
+        | currentPackage : Maybe PackageName
+        , depEnv : DependencyEnv
+        , moduleMapping : ModuleIds.Mapping
+        , modulesById : Dict ModuleId ProjectModule
+        , acc : ProjectAcc
+    }
+    -> List ModuleId
+    -> Set ModuleId
+    -> Dict GlobalKey TypeAlias
+    -> Dict GlobalKey TypeAlias
+knownAliasesHelp p todo visited acc =
+    case todo of
+        [] ->
+            acc
+
+        moduleId :: rest ->
+            let
+                visited1 : Set ModuleId
+                visited1 =
+                    Set.insert moduleId visited
+            in
+            if Set.member moduleId visited || Dict.member moduleId p.acc.interfaces then
+                knownAliasesHelp p rest visited1 acc
+
+            else
+                case Dict.get moduleId p.modulesById of
+                    Nothing ->
+                        knownAliasesHelp p rest visited1 acc
+
+                    Just m ->
+                        let
+                            own : Dict GlobalKey TypeAlias
+                            own =
+                                uninferredModuleAliases p m
+
+                            mentioned : List ModuleId
+                            mentioned =
+                                Dict.foldl
+                                    (\_ alias_ inner -> TypeI.moduleIdsIn alias_.type_ inner)
+                                    Set.empty
+                                    own
+                                    |> Set.toList
+                        in
+                        knownAliasesHelp p (mentioned ++ rest) visited1 (Dict.union own acc)
+
+
+uninferredModuleAliases :
+    { a
+        | currentPackage : Maybe PackageName
+        , depEnv : DependencyEnv
+        , moduleMapping : ModuleIds.Mapping
+        , modulesById : Dict ModuleId ProjectModule
+        , acc : ProjectAcc
+    }
+    -> ProjectModule
+    -> Dict GlobalKey TypeAlias
+uninferredModuleAliases p m =
+    let
+        imported : Dict ModuleId ModuleInterface
+        imported =
+            m.index.imports
+                |> List.foldl
+                    (\import_ inner ->
+                        case Dict.get import_.moduleId p.acc.interfaces of
+                            Just interface ->
+                                Dict.insert import_.moduleId interface inner
+
+                            Nothing ->
+                                case Dict.get import_.moduleId p.modulesById of
+                                    Just other ->
+                                        Dict.insert import_.moduleId
+                                            { moduleIndex = other.index
+                                            , exposedValues = Dict.empty
+                                            , ownTypeAliases = Dict.empty
+                                            }
+                                            inner
+
+                                    Nothing ->
+                                        inner
+                    )
+                    Dict.empty
+
+        ctx : ModuleCtx
+        ctx =
+            moduleCtx
+                p.currentPackage
+                p.depEnv
+                p.moduleMapping
+                p.acc.values
+                p.acc.aliases
+                imported
+                m.index
+    in
+    case
+        gatherTypeAliases ctx m.file
+            |> State.run (State.init p.acc.values)
+            |> Tuple.first
+    of
+        Ok own ->
+            own
+
+        Err _ ->
+            Dict.empty
 
 
 {-| Mostly a test helper.

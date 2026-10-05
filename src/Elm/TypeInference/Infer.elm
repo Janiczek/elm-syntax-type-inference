@@ -776,17 +776,24 @@ inferExpr ctx exprNode =
                 (TypeEquation.batch
                     [ ( type_
                       , WebGLShader
-                            { attributesExtension = TypeI.id_ attributesId
-                            , attributes = declarations.attributes
-                            , uniformsExtension = TypeI.id_ uniformsId
-                            , uniforms = declarations.uniforms
-                            , varyingsExtension = TypeI.id_ varyingsId
-                            , varyings = declarations.varyings
+                            { attributes = openSlot attributesId declarations.attributes
+                            , uniforms = openSlot uniformsId declarations.uniforms
+                            , varyings = openSlot varyingsId declarations.varyings
                             }
                       , "GLSLExpression: is a shader"
                       )
                     ]
                 )
+
+
+{-| A shader set the GLSL literal declares: these fields, and possibly more.
+-}
+openSlot : TypeI.Id -> Dict VarName MonoType -> MonoType
+openSlot extensionId fields =
+    TypeI.collapseExtensible
+        { extensionTypevar = TypeI.id_ extensionId
+        , fields = fields
+        }
 
 
 stateErrorImpossibleExpr : Ctx -> Node Expression -> StateM Inferred

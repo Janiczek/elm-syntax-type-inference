@@ -30,12 +30,9 @@ toStringSuite =
         shader : Type
         shader =
             WebGLShader
-                { attributesFields = Dict.empty
-                , attributesExtensionTypevar = Nothing
-                , uniformsFields = Dict.empty
-                , uniformsExtensionTypevar = Nothing
-                , varyingsFields = Dict.empty
-                , varyingsExtensionTypevar = Nothing
+                { attributes = Record { fields = Dict.empty }
+                , uniforms = Record { fields = Dict.empty }
+                , varyings = Record { fields = Dict.empty }
                 }
 
         cases : List ( Type, String )
@@ -125,7 +122,7 @@ toMultilineStringSuite =
               , "{ aaaaaaaaaa : Int\n, bbbbbbbbbb : c\n, cccccccccc : d\n}"
               )
             , ( Record { fields = Dict.fromList [ ( "a", Int ) ] }
-              , "{a : Int}"
+              , "{ a : Int }"
               )
             ]
 
