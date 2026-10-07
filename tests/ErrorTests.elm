@@ -39,6 +39,9 @@ suite =
         , typeMismatchTest
         , infiniteTypeTest
         , constraintMismatchTest
+        , recursiveAliasTest
+        , mutuallyRecursiveAliasTest
+        , recursiveDocsAliasTest
         ]
 
 
@@ -393,3 +396,89 @@ constraintMismatchTest =
         [ "Main" ]
         "foo"
         |> expectError "Constraint mismatch number String (in Main.foo)"
+
+
+recursiveAliasTest : Test
+recursiveAliasTest =
+    getDeclTypeWithDeps [ CoreFixture.core ]
+        (Dict.singleton [ "Main" ]
+            (String.ExtraExtra.multilineInput
+                """
+                module Main exposing (foo)
+
+                type alias Comment =
+                    { message : String
+                    , responses : List Comment
+                    }
+
+                foo : Comment
+                foo =
+                    { message = "a", responses = [] }
+                """
+            )
+        )
+        [ "Main" ]
+        "foo"
+        |> expectError "Recursive alias { aliases = [Main.Comment] } (in Main.Comment)"
+
+
+mutuallyRecursiveAliasTest : Test
+mutuallyRecursiveAliasTest =
+    getDeclTypeWithDeps [ CoreFixture.core ]
+        (Dict.singleton [ "Main" ]
+            (String.ExtraExtra.multilineInput
+                """
+                module Main exposing (foo)
+
+                type alias Comment =
+                    { message : String
+                    , responses : Responses
+                    }
+
+                type alias Responses =
+                    { responses : List Comment
+                    }
+
+                foo : Int
+                foo =
+                    1
+                """
+            )
+        )
+        [ "Main" ]
+        "foo"
+        |> expectError "Recursive alias { aliases = [Main.Comment, Main.Responses] } (in Main.Comment)"
+
+
+recursiveDocsAliasTest : Test
+recursiveDocsAliasTest =
+    let
+        weirdModule : Elm.Docs.Module
+        weirdModule =
+            { name = "Weird"
+            , comment = ""
+            , unions = []
+            , aliases =
+                [ { name = "Comment"
+                  , comment = ""
+                  , args = []
+                  , tipe =
+                        Elm.Type.Record
+                            [ ( "next", Elm.Type.Type "Weird.Comment" [] ) ]
+                            Nothing
+                  }
+                ]
+            , values = []
+            , binops = []
+            }
+
+        weird : Elm.TypeInference.Dependency
+        weird =
+            { name = "author/weird"
+            , dependencies = []
+            , modules = [ weirdModule ]
+            }
+    in
+    getExprTypeWithDeps [ weird ]
+        "1"
+        |> expectProjectError "Recursive alias { aliases = [Weird.Comment] } (in Weird.Comment from author/weird)"

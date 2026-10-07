@@ -56,6 +56,11 @@ type alias Location =
     `docs.json` or sources refers to a module (`moduleName`) exposed by more
     than one package visible to that dependency.
 
+  - **`RecursiveAlias`:** Raised when a type alias in
+    `sourcesToResolveAmbiguity` refers to itself. This is rejected by Elm
+    compiler when publishing a package, so it only happens with hand-written
+    `sourcesToResolveAmbiguity` or `docs.json` files.
+
 -}
 type ProjectError
     = NeedPackageSources (Dict PackageName (List String))
@@ -63,6 +68,7 @@ type ProjectError
     | ImpossibleDocsType { location : Location, type_ : Elm.Type.Type }
     | ImpossibleType { location : Location, typeAnnotation : TypeAnnotation }
     | AmbiguousModuleOwner { location : Location, moduleName : String, possiblePackages : List PackageName }
+    | RecursiveAlias { location : Location, aliases : List { moduleName : ModuleName, name : VarName } }
 
 
 {-| Render an error for diagnostic output.
@@ -102,6 +108,19 @@ toString error =
                     ]
                 ++ locationToString r.location
 
+        RecursiveAlias r ->
+            "Recursive alias "
+                ++ record
+                    [ ( "aliases"
+                      , list
+                            (List.map
+                                (\alias_ -> Elm.Syntax.ModuleName.Extra.qualifiedName alias_.moduleName alias_.name)
+                                r.aliases
+                            )
+                      )
+                    ]
+                ++ locationToString r.location
+
 
 
 -- HELPERS
@@ -110,9 +129,7 @@ toString error =
 locationToString : Location -> String
 locationToString location =
     " (in "
-        ++ Elm.Syntax.ModuleName.Extra.toString location.moduleName
-        ++ "."
-        ++ location.declarationName
+        ++ Elm.Syntax.ModuleName.Extra.qualifiedName location.moduleName location.declarationName
         ++ " from "
         ++ location.package
         ++ ")"

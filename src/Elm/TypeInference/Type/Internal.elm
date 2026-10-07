@@ -13,11 +13,13 @@ module Elm.TypeInference.Type.Internal exposing
     , fromTypeAnnotationError
     , id_
     , mapVarsMono
+    , moduleIdToModuleName
     , moduleIdsIn
     , mono
     , monoPublicKey
     , monoTypeVars
     , nameVarsTogether
+    , namedTypesIn
     , normalize
     , number_
     , toPublicPair
@@ -454,6 +456,68 @@ moduleIdsIn type_ acc =
                 |> moduleIdsIn r.attributes
                 |> moduleIdsIn r.uniforms
                 |> moduleIdsIn r.varyings
+
+
+namedTypesIn : MonoType -> List ( ModuleId, PackageName, VarName ) -> List ( ModuleId, PackageName, VarName )
+namedTypesIn type_ acc =
+    case type_ of
+        TypeVar _ ->
+            acc
+
+        Function { from, to } ->
+            acc
+                |> namedTypesIn from
+                |> namedTypesIn to
+
+        Int ->
+            acc
+
+        Float ->
+            acc
+
+        Char ->
+            acc
+
+        String ->
+            acc
+
+        Bool ->
+            acc
+
+        List inner ->
+            namedTypesIn inner acc
+
+        Unit ->
+            acc
+
+        Tuple2 a b ->
+            acc
+                |> namedTypesIn a
+                |> namedTypesIn b
+
+        Tuple3 a b c ->
+            acc
+                |> namedTypesIn a
+                |> namedTypesIn b
+                |> namedTypesIn c
+
+        Record fields ->
+            Dict.foldl (\_ v inner -> namedTypesIn v inner) acc fields
+
+        ExtensibleRecord r ->
+            Dict.foldl
+                (\_ v inner -> namedTypesIn v inner)
+                (namedTypesIn r.extensionTypevar acc)
+                r.fields
+
+        UserDefinedType r ->
+            List.foldl namedTypesIn (( r.moduleId, r.package, r.name ) :: acc) r.args
+
+        WebGLShader r ->
+            acc
+                |> namedTypesIn r.attributes
+                |> namedTypesIn r.uniforms
+                |> namedTypesIn r.varyings
 
 
 monoTypeVarsInFieldsHelp : Dict VarName MonoType -> List TypeVar -> List TypeVar

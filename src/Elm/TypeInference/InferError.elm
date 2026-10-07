@@ -132,6 +132,18 @@ type alias InferError =
         --    (Type.TypeVar "number")
         --    Type.String
 
+  - **`RecursiveAlias`:**
+
+        module Main exposing (Comment)
+
+        type alias Comment =
+            { message : String
+            , responses : List Comment
+            }
+
+        --> RecursiveAlias
+        --    { aliases = [ { moduleName = [ "Main" ], name = "Comment" } ] }
+
 -}
 type InferErrorDetails
     = -- Syntax errors
@@ -148,6 +160,8 @@ type InferErrorDetails
     | TypeMismatch Type Type
     | InfiniteType Type Type
     | ConstraintMismatch Type Type
+      -- Declaration errors
+    | RecursiveAlias { aliases : List { moduleName : ModuleName, name : VarName } }
 
 
 {-| Render an error for diagnostic output.
@@ -156,12 +170,11 @@ toString : InferError -> String
 toString error =
     detailsToString error.details
         ++ " (in "
-        ++ Elm.Syntax.ModuleName.Extra.toString error.moduleName
         ++ (if List.isEmpty error.declarationNames then
-                ""
+                Elm.Syntax.ModuleName.Extra.toString error.moduleName
 
             else
-                "." ++ String.join "/" error.declarationNames
+                Elm.Syntax.ModuleName.Extra.qualifiedName error.moduleName (String.join "/" error.declarationNames)
            )
         ++ ")"
 
@@ -239,6 +252,14 @@ detailsToString details =
                 , parenIfHasSpace (Type.toString type_)
                 ]
 
+        RecursiveAlias r ->
+            "Recursive alias "
+                ++ record
+                    [ ( "aliases"
+                      , list (List.map (\alias_ -> Elm.Syntax.ModuleName.Extra.qualifiedName alias_.moduleName alias_.name) r.aliases)
+                      )
+                    ]
+
 
 
 -- HELPERS
@@ -259,4 +280,3 @@ parenIfHasSpace str =
 rangeToString : Range -> String
 rangeToString { start } =
     String.fromInt start.row ++ ":" ++ String.fromInt start.column
-

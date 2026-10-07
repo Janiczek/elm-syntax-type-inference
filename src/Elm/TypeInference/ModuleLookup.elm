@@ -13,6 +13,7 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
 import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
@@ -815,7 +816,7 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                                                 Nothing ->
                                                     -- Unknown qualifier (not imported/implicit/interned).
                                                     Err
-                                                        { moduleName = String.join "." qualifier
+                                                        { moduleName = ModuleNameExtra.toString qualifier
                                                         , possiblePackages = []
                                                         }
                         in

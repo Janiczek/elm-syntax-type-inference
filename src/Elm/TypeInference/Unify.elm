@@ -1,7 +1,9 @@
 module Elm.TypeInference.Unify exposing
     ( TypeAlias
     , UnifyConfig
+    , aliasCycle
     , expandAliasDeep
+    , firstAliasCycle
     , unifyMany
     )
 
@@ -20,6 +22,7 @@ import Elm.TypeInference.TypeVar
         , TypeVar
         , TypeVarStyle(..)
         )
+import Set exposing (Set)
 
 
 type alias TypeAlias =
@@ -87,8 +90,8 @@ unifyManyHelp cfg eqs state =
 
 {-| Expand alias (substitute its args) recursively, then collapse extensible records.
 
-There is a possibility of infinite cycles. We use `fuel` to stop the expansion
-after a while and provide a type mismatch instead of a hang.
+Alias cycles are rejected when aliases are gathered (see `aliasCycle`), so
+the alias graph is a DAG and this always terminates.
 
 Intentionally shallow to preserve inferred types to be as high-level (aliases)
 as possible, instead of the low-level records underneath.
@@ -97,7 +100,95 @@ Full expansion only happens in error reporting.
 -}
 expandAlias : TypeAliases -> MonoType -> MonoType
 expandAlias typeAliases type_ =
-    collapseTop (expandAliasHelp maxAliasDepth typeAliases type_)
+    collapseTop (expandAliasHelp typeAliases type_)
+
+
+firstAliasCycle : TypeAliases -> List ( ModuleId, PackageName, VarName ) -> Maybe (List ( ModuleId, PackageName, VarName ))
+firstAliasCycle typeAliases keys =
+    case keys of
+        [] ->
+            Nothing
+
+        key :: rest ->
+            case aliasCycle typeAliases key of
+                Just cycle ->
+                    Just cycle
+
+                Nothing ->
+                    firstAliasCycle typeAliases rest
+
+
+{-| Returns alias cycle:
+
+
+    type alias Comment =
+        { responses : Responses }
+
+    type alias Responses =
+        { responses : List Comment }
+
+    --> [ Comment, Responses ] (fully package+module qualified)
+
+-}
+aliasCycle : TypeAliases -> ( ModuleId, PackageName, VarName ) -> Maybe (List ( ModuleId, PackageName, VarName ))
+aliasCycle typeAliases start =
+    case Dict.get start typeAliases of
+        Nothing ->
+            Nothing
+
+        Just alias_ ->
+            case
+                aliasCycleHelp typeAliases
+                    start
+                    [ start ]
+                    (Set.singleton start)
+                    (TypeI.namedTypesIn alias_.type_ [])
+            of
+                Err cycle ->
+                    Just cycle
+
+                Ok _ ->
+                    Nothing
+
+
+aliasCycleHelp :
+    TypeAliases
+    -> ( ModuleId, PackageName, VarName )
+    -> List ( ModuleId, PackageName, VarName )
+    -> Set ( ModuleId, PackageName, VarName )
+    -> List ( ModuleId, PackageName, VarName )
+    -> Result (List ( ModuleId, PackageName, VarName )) (Set ( ModuleId, PackageName, VarName ))
+aliasCycleHelp typeAliases start pathReversed visited todo =
+    case todo of
+        [] ->
+            Ok visited
+
+        key :: rest ->
+            if key == start then
+                Err (List.reverse pathReversed)
+
+            else if Set.member key visited then
+                aliasCycleHelp typeAliases start pathReversed visited rest
+
+            else
+                case Dict.get key typeAliases of
+                    Nothing ->
+                        -- a custom type (or a type we don't know about)
+                        aliasCycleHelp typeAliases start pathReversed (Set.insert key visited) rest
+
+                    Just alias_ ->
+                        case
+                            aliasCycleHelp typeAliases
+                                start
+                                (key :: pathReversed)
+                                (Set.insert key visited)
+                                (TypeI.namedTypesIn alias_.type_ [])
+                        of
+                            Err cycle ->
+                                Err cycle
+
+                            Ok visited1 ->
+                                aliasCycleHelp typeAliases start pathReversed visited1 rest
 
 
 {-| `expandAlias` which says if the top type was an alias application.
@@ -118,7 +209,7 @@ expandAliasTracked typeAliases type_ =
                         Just mappings ->
                             ( True
                             , collapseTop
-                                (expandAliasHelp (maxAliasDepth - 1)
+                                (expandAliasHelp
                                     typeAliases
                                     (substituteAliasArgs mappings alias_.type_)
                                 )
@@ -138,52 +229,36 @@ collapseTop type_ =
             notExtensibleRecord
 
 
-{-| This should be enough (any real alias chain like that should be
-unreadable/unusable in real code).
--}
-maxAliasDepth : Int
-maxAliasDepth =
-    1000
-
-
-expandAliasHelp : Int -> TypeAliases -> MonoType -> MonoType
-expandAliasHelp fuel typeAliases type_ =
+expandAliasHelp : TypeAliases -> MonoType -> MonoType
+expandAliasHelp typeAliases type_ =
     case type_ of
         UserDefinedType ut ->
-            if fuel <= 0 then
-                type_
+            case Dict.get ( ut.moduleId, ut.package, ut.name ) typeAliases of
+                Nothing ->
+                    type_
 
-            else
-                case Dict.get ( ut.moduleId, ut.package, ut.name ) typeAliases of
-                    Nothing ->
-                        type_
+                Just alias_ ->
+                    case zipAliasArgs alias_.args ut.args of
+                        {- Imagine:
 
-                    Just alias_ ->
-                        case zipAliasArgs alias_.args ut.args of
-                            {- Imagine:
+                           type alias Pair first second =
+                               ( first, second )
 
-                               type alias Pair first second =
-                                   ( first, second )
+                           x : Pair Int
+                           x = ( 1, "oops" )
 
-                               x : Pair Int
-                               x = ( 1, "oops" )
+                        -}
+                        Nothing ->
+                            type_
 
-                            -}
-                            Nothing ->
-                                type_
-
-                            Just mappings ->
-                                expandAliasHelp (fuel - 1) typeAliases (substituteAliasArgs mappings alias_.type_)
+                        Just mappings ->
+                            expandAliasHelp typeAliases (substituteAliasArgs mappings alias_.type_)
 
         ExtensibleRecord r ->
-            if fuel <= 0 then
-                type_
-
-            else
-                TypeI.collapseExtensible
-                    { extensionTypevar = expandAliasHelp (fuel - 1) typeAliases r.extensionTypevar
-                    , fields = r.fields
-                    }
+            TypeI.collapseExtensible
+                { extensionTypevar = expandAliasHelp typeAliases r.extensionTypevar
+                , fields = r.fields
+                }
 
         _ ->
             type_
@@ -197,45 +272,41 @@ aliases instead of as the low-level records underneath them).
 -}
 expandAliasDeep : TypeAliases -> MonoType -> MonoType
 expandAliasDeep typeAliases type_ =
-    collapseTop (expandAliasDeepHelp maxAliasDepth typeAliases type_)
+    collapseTop (expandAliasDeepHelp typeAliases type_)
 
 
-expandAliasDeepHelp : Int -> TypeAliases -> MonoType -> MonoType
-expandAliasDeepHelp fuel typeAliases type_ =
+expandAliasDeepHelp : TypeAliases -> MonoType -> MonoType
+expandAliasDeepHelp typeAliases type_ =
     case type_ of
         UserDefinedType ut ->
-            if fuel <= 0 then
-                expandDeepChildren fuel typeAliases type_
+            case Dict.get ( ut.moduleId, ut.package, ut.name ) typeAliases of
+                Nothing ->
+                    expandDeepChildren typeAliases type_
 
-            else
-                case Dict.get ( ut.moduleId, ut.package, ut.name ) typeAliases of
-                    Nothing ->
-                        expandDeepChildren fuel typeAliases type_
+                Just alias_ ->
+                    case zipAliasArgs alias_.args ut.args of
+                        Nothing ->
+                            expandDeepChildren typeAliases type_
 
-                    Just alias_ ->
-                        case zipAliasArgs alias_.args ut.args of
-                            Nothing ->
-                                expandDeepChildren fuel typeAliases type_
-
-                            Just mappings ->
-                                expandAliasDeepHelp (fuel - 1) typeAliases (substituteAliasArgs mappings alias_.type_)
+                        Just mappings ->
+                            expandAliasDeepHelp typeAliases (substituteAliasArgs mappings alias_.type_)
 
         _ ->
-            expandDeepChildren fuel typeAliases type_
+            expandDeepChildren typeAliases type_
 
 
-{-| Expand aliases fully. Fuel counts depth instead of breadth.
+{-| Expand aliases fully, in the type's children.
 -}
-expandDeepChildren : Int -> TypeAliases -> MonoType -> MonoType
-expandDeepChildren fuel typeAliases type_ =
+expandDeepChildren : TypeAliases -> MonoType -> MonoType
+expandDeepChildren typeAliases type_ =
     case type_ of
         TypeI.TypeVar _ ->
             type_
 
         TypeI.Function f ->
             TypeI.Function
-                { from = expandAliasDeepHelp fuel typeAliases f.from
-                , to = expandAliasDeepHelp fuel typeAliases f.to
+                { from = expandAliasDeepHelp typeAliases f.from
+                , to = expandAliasDeepHelp typeAliases f.to
                 }
 
         TypeI.Int ->
@@ -254,30 +325,30 @@ expandDeepChildren fuel typeAliases type_ =
             type_
 
         TypeI.List listItemType ->
-            TypeI.List (expandAliasDeepHelp fuel typeAliases listItemType)
+            TypeI.List (expandAliasDeepHelp typeAliases listItemType)
 
         TypeI.Unit ->
             type_
 
         TypeI.Tuple2 t1 t2 ->
             TypeI.Tuple2
-                (expandAliasDeepHelp fuel typeAliases t1)
-                (expandAliasDeepHelp fuel typeAliases t2)
+                (expandAliasDeepHelp typeAliases t1)
+                (expandAliasDeepHelp typeAliases t2)
 
         TypeI.Tuple3 t1 t2 t3 ->
             TypeI.Tuple3
-                (expandAliasDeepHelp fuel typeAliases t1)
-                (expandAliasDeepHelp fuel typeAliases t2)
-                (expandAliasDeepHelp fuel typeAliases t3)
+                (expandAliasDeepHelp typeAliases t1)
+                (expandAliasDeepHelp typeAliases t2)
+                (expandAliasDeepHelp typeAliases t3)
 
         TypeI.Record fields ->
             TypeI.Record
-                (Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) fields)
+                (Dict.map (\_ v -> expandAliasDeepHelp typeAliases v) fields)
 
         TypeI.ExtensibleRecord r ->
             TypeI.ExtensibleRecord
-                { extensionTypevar = expandAliasDeepHelp fuel typeAliases r.extensionTypevar
-                , fields = Dict.map (\_ v -> expandAliasDeepHelp fuel typeAliases v) r.fields
+                { extensionTypevar = expandAliasDeepHelp typeAliases r.extensionTypevar
+                , fields = Dict.map (\_ v -> expandAliasDeepHelp typeAliases v) r.fields
                 }
 
         TypeI.UserDefinedType r ->
@@ -285,14 +356,14 @@ expandDeepChildren fuel typeAliases type_ =
                 { package = r.package
                 , moduleId = r.moduleId
                 , name = r.name
-                , args = List.map (\arg -> expandAliasDeepHelp fuel typeAliases arg) r.args
+                , args = List.map (\arg -> expandAliasDeepHelp typeAliases arg) r.args
                 }
 
         TypeI.WebGLShader r ->
             TypeI.WebGLShader
-                { attributes = expandAliasDeepHelp fuel typeAliases r.attributes
-                , uniforms = expandAliasDeepHelp fuel typeAliases r.uniforms
-                , varyings = expandAliasDeepHelp fuel typeAliases r.varyings
+                { attributes = expandAliasDeepHelp typeAliases r.attributes
+                , uniforms = expandAliasDeepHelp typeAliases r.uniforms
+                , varyings = expandAliasDeepHelp typeAliases r.varyings
                 }
 
 
@@ -619,9 +690,8 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
                 combined =
                     Dict.union er.fields extFields
             in
-            State.do (unifyMany cfg overlapEqs) <|
-                \() ->
-                    recordBindings cfg t1 t2 combined recordFields
+            State.do (unifyMany cfg overlapEqs) <| \() ->
+            recordBindings cfg t1 t2 combined recordFields
 
         ExtensibleRecord extEr ->
             let
@@ -639,15 +709,14 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
                 merged =
                     Dict.union er.fields extEr.fields
             in
-            State.do (unifyMany cfg overlapEqs) <|
-                \() ->
-                    unifyRecordVsExtensible cfg
-                        t1
-                        t2
-                        recordFields
-                        { extensionTypevar = extEr.extensionTypevar
-                        , fields = merged
-                        }
+            State.do (unifyMany cfg overlapEqs) <| \() ->
+            unifyRecordVsExtensible cfg
+                t1
+                t2
+                recordFields
+                { extensionTypevar = extEr.extensionTypevar
+                , fields = merged
+                }
 
         _ ->
             let
@@ -974,29 +1043,28 @@ unifyExpanded cfg t1 t2 =
                         unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                     else
-                        State.do State.getNextIdAndTick <|
-                            \tailId ->
-                                let
-                                    tail : MonoType
-                                    tail =
-                                        TypeI.id_ tailId
-                                in
-                                unifyMany
-                                    cfg
-                                    (( r1.extensionTypevar
-                                     , ExtensibleRecord
+                        State.do State.getNextIdAndTick <| \tailId ->
+                        let
+                            tail : MonoType
+                            tail =
+                                TypeI.id_ tailId
+                        in
+                        unifyMany
+                            cfg
+                            (( r1.extensionTypevar
+                             , ExtensibleRecord
+                                { extensionTypevar = tail
+                                , fields = onlyIn2
+                                }
+                             )
+                                :: ( r2.extensionTypevar
+                                   , ExtensibleRecord
                                         { extensionTypevar = tail
-                                        , fields = onlyIn2
+                                        , fields = onlyIn1
                                         }
-                                     )
-                                        :: ( r2.extensionTypevar
-                                           , ExtensibleRecord
-                                                { extensionTypevar = tail
-                                                , fields = onlyIn1
-                                                }
-                                           )
-                                        :: sharedEqs
-                                    )
+                                   )
+                                :: sharedEqs
+                            )
 
                 Record r2 ->
                     unifyRecordVsExtensible cfg t1 t2 r2 r1
@@ -1091,40 +1159,37 @@ unifyExpanded cfg t1 t2 =
                                 typeMismatch cfg t1 t2
 
                             else
-                                State.do State.getNextIdAndTick <|
-                                    \tailId ->
-                                        let
-                                            tail : MonoType
-                                            tail =
-                                                TypeI.id_ tailId
+                                State.do State.getNextIdAndTick <| \tailId ->
+                                let
+                                    tail : MonoType
+                                    tail =
+                                        TypeI.id_ tailId
 
-                                            absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
-                                            absorb extensionTypevar fields =
-                                                [ ( extensionTypevar
-                                                  , ExtensibleRecord
-                                                        { extensionTypevar = tail
-                                                        , fields = fields
-                                                        }
-                                                  )
-                                                ]
-                                        in
-                                        if not closed1 && not closed2 then
-                                            unifyMany cfg (absorb set1.extensionTypevar only2 ++ absorb set2.extensionTypevar only1 ++ sharedEqs)
+                                    absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
+                                    absorb extensionTypevar fields =
+                                        [ ( extensionTypevar
+                                          , ExtensibleRecord
+                                                { extensionTypevar = tail
+                                                , fields = fields
+                                                }
+                                          )
+                                        ]
+                                in
+                                if not closed1 && not closed2 then
+                                    unifyMany cfg (absorb set1.extensionTypevar only2 ++ absorb set2.extensionTypevar only1 ++ sharedEqs)
 
-                                        else if not closed1 then
-                                            unifyMany cfg (absorb set1.extensionTypevar only2 ++ sharedEqs)
+                                else if not closed1 then
+                                    unifyMany cfg (absorb set1.extensionTypevar only2 ++ sharedEqs)
 
-                                        else if not closed2 then
-                                            unifyMany cfg (absorb set2.extensionTypevar only1 ++ sharedEqs)
+                                else if not closed2 then
+                                    unifyMany cfg (absorb set2.extensionTypevar only1 ++ sharedEqs)
 
-                                        else
-                                            unifyMany cfg sharedEqs
+                                else
+                                    unifyMany cfg sharedEqs
                     in
-                    State.do (webglSet webgl1.attributes webgl2.attributes) <|
-                        \() ->
-                            State.do (webglSet webgl1.uniforms webgl2.uniforms) <|
-                                \() ->
-                                    webglSet webgl1.varyings webgl2.varyings
+                    State.do (webglSet webgl1.attributes webgl2.attributes) <| \() ->
+                    State.do (webglSet webgl1.uniforms webgl2.uniforms) <| \() ->
+                    webglSet webgl1.varyings webgl2.varyings
 
                 _ ->
                     typeMismatch cfg t1 t2
@@ -1225,24 +1290,23 @@ bindFlexVars cfg (( typeVarStyle, super ) as typeVar) (( otherStyle, otherSuper 
             if m == super && m == otherSuper then
                 -- Either could be chosen as then parent (linked to),
                 -- but we prefer Generated ids as they can't collide.
-                State.modifySubst <|
-                    \subst ->
-                        case typeVarStyle of
-                            Named _ ->
-                                case otherStyle of
-                                    Generated _ ->
-                                        subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
+                State.modifySubst <| \subst ->
+                case typeVarStyle of
+                    Named _ ->
+                        case otherStyle of
+                            Generated _ ->
+                                subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
 
-                                    Named _ ->
-                                        subst |> SubstitutionMap.union typeVar otherVar
+                            Named _ ->
+                                subst |> SubstitutionMap.union typeVar otherVar
+
+                    Generated _ ->
+                        case otherStyle of
+                            Named _ ->
+                                subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
 
                             Generated _ ->
-                                case otherStyle of
-                                    Named _ ->
-                                        subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
-
-                                    Generated _ ->
-                                        subst |> SubstitutionMap.union typeVar otherVar
+                                subst |> SubstitutionMap.union typeVar otherVar
 
             else if m == otherSuper then
                 -- otherVar is more constrained -> it will be the `parent` representative.
@@ -1255,19 +1319,18 @@ bindFlexVars cfg (( typeVarStyle, super ) as typeVar) (( otherStyle, otherSuper 
                 -- eg. Comparable and Appendable
                 -- introduce fresh var with combined constraint
                 -- point both at it
-                State.do State.getNextIdAndTick <|
-                    \freshId ->
-                        let
-                            fresh : TypeVar
-                            fresh =
-                                ( Generated freshId, m )
-                        in
-                        State.modifySubst
-                            (\subst ->
-                                subst
-                                    |> SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                                    |> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
-                            )
+                State.do State.getNextIdAndTick <| \freshId ->
+                let
+                    fresh : TypeVar
+                    fresh =
+                        ( Generated freshId, m )
+                in
+                State.modifySubst
+                    (\subst ->
+                        subst
+                            |> SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                            |> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                    )
 
 
 {-| The most specific supertype that satisfies both constraints, if any.

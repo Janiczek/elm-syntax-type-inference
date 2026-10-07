@@ -193,9 +193,7 @@ toString t =
 
                 qualifiedName : String
                 qualifiedName =
-                    Elm.Syntax.ModuleName.Extra.toString moduleName
-                        ++ "."
-                        ++ name
+                    Elm.Syntax.ModuleName.Extra.qualifiedName moduleName name
             in
             (qualifiedName
                 :: argStrings
@@ -290,9 +288,7 @@ breakType maxWidth t =
             let
                 qualifiedName : String
                 qualifiedName =
-                    Elm.Syntax.ModuleName.Extra.toString moduleName
-                        ++ "."
-                        ++ name
+                    Elm.Syntax.ModuleName.Extra.qualifiedName moduleName name
             in
             (qualifiedName :: List.map (\arg -> arg |> wrappedMultiline maxWidth) arguments)
                 |> String.join " "

@@ -3,6 +3,7 @@ module Elm.Syntax.ModuleName.Extra exposing
     , fromDotted
     , isNotEmpty
     , isSegment
+    , qualifiedName
     , splitLastDot
     , toString
     )
@@ -21,6 +22,22 @@ import String.ExtraExtra
 toString : ModuleName -> String
 toString moduleName =
     String.join "." moduleName
+
+
+{-| A name qualified with its module.
+
+    [ "Foo", "Bar" ] "baz" -> "Foo.Bar.baz"
+    [ "Foo" ] "Bar" -> "Foo.Bar"
+    [] "baz" -> "baz"
+
+-}
+qualifiedName : ModuleName -> String -> String
+qualifiedName moduleName name =
+    if List.isEmpty moduleName then
+        name
+
+    else
+        toString moduleName ++ "." ++ name
 
 
 {-|
@@ -83,12 +100,12 @@ isSegment =
 
 -}
 splitLastDot : String -> ( String, String )
-splitLastDot qualifiedName =
-    case List.reverse (String.indexes "." qualifiedName) of
+splitLastDot dotted =
+    case List.reverse (String.indexes "." dotted) of
         [] ->
-            ( "", qualifiedName )
+            ( "", dotted )
 
         lastDot :: _ ->
-            ( String.left lastDot qualifiedName
-            , String.dropLeft (lastDot + 1) qualifiedName
+            ( String.left lastDot dotted
+            , String.dropLeft (lastDot + 1) dotted
             )

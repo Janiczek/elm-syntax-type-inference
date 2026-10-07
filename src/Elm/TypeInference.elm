@@ -1196,12 +1196,60 @@ buildDependencyEnvHelp directDependencies sourcesToResolveAmbiguity deps reachab
                     Err err
 
                 Ok ( sourceAliases, moduleMapping2 ) ->
-                    Ok
-                        { globalEnv = env.globalEnv
-                        , index = env.index
-                        , typeAliases = Dict.union sourceAliases env.typeAliases
-                        , moduleMapping = moduleMapping2
-                        }
+                    let
+                        typeAliases : Dict GlobalKey TypeAlias
+                        typeAliases =
+                            Dict.union sourceAliases env.typeAliases
+                    in
+                    -- The compiler rejects recursive aliases, so real packages
+                    -- can't contain one. Hand-written `Dependency` docs or
+                    -- `sourcesToResolveAmbiguity` still could, and expanding
+                    -- such an alias would never finish.
+                    case Unify.firstAliasCycle typeAliases (Dict.keys typeAliases) of
+                        Just cycle ->
+                            Err (recursiveDependencyAlias moduleMapping2 cycle)
+
+                        Nothing ->
+                            Ok
+                                { globalEnv = env.globalEnv
+                                , index = env.index
+                                , typeAliases = typeAliases
+                                , moduleMapping = moduleMapping2
+                                }
+
+
+recursiveDependencyAlias : ModuleIds.Mapping -> List GlobalKey -> ProjectError
+recursiveDependencyAlias moduleMapping cycle =
+    let
+        aliases : List { moduleName : ModuleName, name : VarName }
+        aliases =
+            List.map
+                (\( moduleId, _, name ) ->
+                    { moduleName = TypeI.moduleIdToModuleName moduleMapping moduleId
+                    , name = name
+                    }
+                )
+                cycle
+
+        location : ProjectError.Location
+        location =
+            case ( cycle, aliases ) of
+                ( ( _, package, _ ) :: _, first :: _ ) ->
+                    { package = package
+                    , moduleName = first.moduleName
+                    , declarationName = first.name
+                    }
+
+                _ ->
+                    { package = ""
+                    , moduleName = []
+                    , declarationName = ""
+                    }
+    in
+    ProjectError.RecursiveAlias
+        { location = location
+        , aliases = aliases
+        }
 
 
 reachablePackages : Dependencies -> List PackageName -> Set PackageName
@@ -1792,6 +1840,37 @@ gatherTypeAliases ctx file =
                         State.pure accAcrossDeclarations
             )
             Dict.empty
+        |> State.andThen (rejectAliasCycles ctx)
+
+
+rejectAliasCycles : ModuleCtx -> Dict GlobalKey TypeAlias -> StateM (Dict GlobalKey TypeAlias)
+rejectAliasCycles ctx own =
+    let
+        typeAliases : Dict GlobalKey TypeAlias
+        typeAliases =
+            Dict.union own ctx.aliases
+    in
+    case Unify.firstAliasCycle typeAliases (Dict.keys own) of
+        Nothing ->
+            State.pure own
+
+        Just cycle ->
+            let
+                aliases : List { moduleName : ModuleName, name : VarName }
+                aliases =
+                    List.map
+                        (\( moduleId, _, name ) ->
+                            { moduleName = TypeI.moduleIdToModuleName ctx.moduleMapping moduleId
+                            , name = name
+                            }
+                        )
+                        cycle
+            in
+            State.error
+                { moduleName = FullModuleName.toModuleName ctx.thisIndex.moduleName
+                , declarationNames = List.map .name (List.take 1 aliases)
+                , details = RecursiveAlias { aliases = aliases }
+                }
 
 
 registerConstructorsAndPorts : ModuleCtx -> File -> StateM ()

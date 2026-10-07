@@ -55,6 +55,20 @@ suite =
                     ModuleNameExtra.fromDotted "Foo.Bar"
                         |> Expect.equal [ "Foo", "Bar" ]
             ]
+        , Test.describe "qualifiedName"
+            [ Test.test "nested module" <|
+                \() ->
+                    ModuleNameExtra.qualifiedName [ "Foo", "Bar" ] "baz"
+                        |> Expect.equal "Foo.Bar.baz"
+            , Test.test "type in module" <|
+                \() ->
+                    ModuleNameExtra.qualifiedName [ "Foo" ] "Bar"
+                        |> Expect.equal "Foo.Bar"
+            , Test.test "no module" <|
+                \() ->
+                    ModuleNameExtra.qualifiedName [] "baz"
+                        |> Expect.equal "baz"
+            ]
         , Test.describe "isNotEmpty"
             [ Test.test "empty" <| \() -> ModuleNameExtra.isNotEmpty [] |> Expect.equal False
             , Test.test "nonempty" <| \() -> ModuleNameExtra.isNotEmpty [ "A" ] |> Expect.equal True

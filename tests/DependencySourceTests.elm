@@ -161,7 +161,39 @@ suite =
 
                     _ ->
                         Expect.fail "Regression source did not parse"
+        , Test.test "`init` rejects a recursive alias in the provided sources" <|
+            \() ->
+                case ( Elm.Parser.parseToFile recursiveHiddenSource, Elm.Parser.parseToFile mainSource ) of
+                    ( Ok hidden, Ok main ) ->
+                        case
+                            projectWith
+                                [ "example/css", "elm/core" ]
+                                [ cssDependency, CoreFixture.core ]
+                                (Dict.singleton "example/css" [ hidden ])
+                                (Dict.singleton [ "Main" ] main)
+                        of
+                            Ok _ ->
+                                Expect.fail "Should have rejected the recursive alias"
+
+                            Err err ->
+                                err
+                                    |> Elm.TypeInference.ProjectError.toString
+                                    |> Expect.equal "Recursive alias { aliases = [Css.Internal.ExplicitLength] } (in Css.Internal.ExplicitLength from example/css)"
+
+                    _ ->
+                        Expect.fail "Regression source did not parse"
         ]
+
+
+recursiveHiddenSource : String
+recursiveHiddenSource =
+    """module Css.Internal exposing (ExplicitLength)
+
+type alias ExplicitLength =
+    { value : Int
+    , next : List ExplicitLength
+    }
+"""
 
 
 durationDependency : Dependency
