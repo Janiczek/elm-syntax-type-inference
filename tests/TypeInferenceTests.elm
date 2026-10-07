@@ -3896,7 +3896,7 @@ merge leftStep bothStep rightStep leftDict rightDict initialResult =
             in
             case
                 parseModules (Dict.singleton [ "Main" ] source)
-                    |> Result.andThen (buildProject Nothing [ CoreFixture.core.name ] [ CoreFixture.core ])
+                    |> Result.andThen (Dict.values >> buildProject Nothing [ CoreFixture.core.name ] [ CoreFixture.core ])
             of
                 Err err ->
                     Expect.fail ("Should infer: " ++ Debug.toString err)
@@ -5067,7 +5067,7 @@ lazyProject =
     lazyProjectFiles
         |> Result.andThen
             (\files ->
-                buildProject Nothing [] [] files
+                buildProject Nothing [] [] (Dict.values files)
             )
 
 
@@ -5204,7 +5204,7 @@ lazyProjectSuite =
                         let
                             queryAllInOrder : List ( ModuleName, String ) -> ( List ( ModuleName, String ), List ( ModuleName, String ) )
                             queryAllInOrder decls =
-                                case buildProject Nothing [] [] files of
+                                case buildProject Nothing [] [] (Dict.values files) of
                                     Err _ ->
                                         ( [], [] )
 
@@ -5468,7 +5468,7 @@ result =
                         Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
 
                     Ok needsCFiles ->
-                        case buildProject Nothing [] [] needsCFiles of
+                        case buildProject Nothing [] [] (Dict.values needsCFiles) of
                             Err err ->
                                 Expect.fail ("Couldn't build project: " ++ Debug.toString err)
 

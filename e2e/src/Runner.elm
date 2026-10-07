@@ -374,21 +374,13 @@ run flagsValue =
 
 buildProjectStep : Active -> ( Model, Cmd Msg )
 buildProjectStep active =
-    let
-        projectFiles : Dict ModuleName File
-        projectFiles =
-            List.foldl
-                (\file acc -> Dict.insert (FileExtra.moduleName file) file acc)
-                Dict.empty
-                active.files
-    in
     case
         Elm.TypeInference.init
             { directDependencies = active.directDependencies
             , allDependencies = active.allDependencies
             , sourcesToResolveAmbiguity = active.dependencySources
             , projectPackageName = active.currentPackage
-            , projectFiles = projectFiles
+            , projectFiles = active.files
             }
     of
         Err err ->

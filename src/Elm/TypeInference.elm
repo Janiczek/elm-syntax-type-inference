@@ -113,7 +113,7 @@ type alias LookupTable =
     files and retry with them supplied.
   - `projectPackageName`: the project's own package name (`Just` for packages,
     `Nothing` for applications).
-  - `projectFiles`: the project's Elm sources, keyed by module name.
+  - `projectFiles`: the project's Elm sources.
 
 -}
 init :
@@ -121,7 +121,7 @@ init :
     , allDependencies : List Dependency
     , sourcesToResolveAmbiguity : Dict PackageName (List File)
     , projectPackageName : Maybe PackageName
-    , projectFiles : Dict ModuleName File
+    , projectFiles : List File
     }
     -> Result ProjectError Project
 init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPackageName, projectFiles } =
@@ -136,10 +136,6 @@ init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPa
 
         Ok dep ->
             let
-                files : List File
-                files =
-                    Dict.values projectFiles
-
                 ( modulesReversed, missingModuleName, moduleMapping ) =
                     List.foldl
                         (\file ( acc, accMissingModuleName, accModuleMapping ) ->
@@ -162,10 +158,17 @@ init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPa
                                 ( acc, True, accModuleMapping )
                         )
                         ( [], False, dep.moduleMapping )
-                        files
+                        projectFiles
+
+                duplicateModule : Maybe ModuleName
+                duplicateModule =
+                    firstDuplicateModule modulesReversed Set.empty
             in
             if missingModuleName then
                 Err ProjectError.MissingModuleName
+
+            else if duplicateModule /= Nothing then
+                Err (ProjectError.DuplicateModule (Maybe.withDefault [] duplicateModule))
 
             else
                 let
@@ -197,6 +200,20 @@ init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPa
                             }
                         }
                     )
+
+
+firstDuplicateModule : List ProjectModule -> Set ModuleId -> Maybe ModuleName
+firstDuplicateModule modules seen =
+    case modules of
+        [] ->
+            Nothing
+
+        m :: rest ->
+            if Set.member m.index.moduleId seen then
+                Just m.key
+
+            else
+                firstDuplicateModule rest (Set.insert m.index.moduleId seen)
 
 
 addReverseEdges : ModuleIndex -> Dict ModuleId (Set ModuleId) -> Dict ModuleId (Set ModuleId)

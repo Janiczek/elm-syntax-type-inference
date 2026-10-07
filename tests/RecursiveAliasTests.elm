@@ -256,7 +256,7 @@ expandDoesntCrash =
                         , arguments = []
                         }
             in
-            case parseModules files |> Result.andThen (buildProject Nothing [ "elm/core" ] [ CoreFixture.core ]) of
+            case parseModules files |> Result.andThen (Dict.values >> buildProject Nothing [ "elm/core" ] [ CoreFixture.core ]) of
                 Ok proj ->
                     Elm.TypeInference.expand proj type_
                         |> Type.toString

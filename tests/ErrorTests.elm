@@ -2,6 +2,7 @@ module ErrorTests exposing (suite)
 
 import Dict exposing (Dict)
 import Elm.Docs
+import Elm.Parser
 import Elm.Syntax.File exposing (File)
 import Elm.Syntax.Module as Module
 import Elm.Syntax.ModuleName exposing (ModuleName)
@@ -35,6 +36,7 @@ suite =
         , ambiguousModuleOwnerTest
         , impossibleDocsTypeTest
         , missingModuleNameTest
+        , duplicateModuleTest
         , moduleNotFoundTest
         , typeMismatchTest
         , infiniteTypeTest
@@ -244,14 +246,14 @@ missingModuleNameTest =
 
                 Ok files ->
                     let
-                        filesWithMissingName : Dict ModuleName File
+                        filesWithMissingName : List File
                         filesWithMissingName =
                             files
                                 |> Dict.values
                                 |> List.head
                                 |> Maybe.map withEmptyModuleName
-                                |> Maybe.map (\file -> Dict.singleton [ "Main" ] file)
-                                |> Maybe.withDefault Dict.empty
+                                |> Maybe.map List.singleton
+                                |> Maybe.withDefault []
                     in
                     case
                         Elm.TypeInference.init
@@ -268,6 +270,45 @@ missingModuleNameTest =
 
                         Ok _ ->
                             Expect.fail "Expected a MissingModuleName error"
+
+
+duplicateModuleTest : Test
+duplicateModuleTest =
+    Test.test "Duplicate module" <|
+        \() ->
+            case
+                Elm.Parser.parseToFile
+                    (String.ExtraExtra.multilineInput
+                        """
+                module Main exposing (main)
+
+                main =
+                    1
+                """
+                    )
+            of
+                Err err ->
+                    Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
+
+                Ok file ->
+                    case
+                        Elm.TypeInference.init
+                            { directDependencies = []
+                            , allDependencies = []
+                            , sourcesToResolveAmbiguity = Dict.empty
+                            , projectPackageName = Nothing
+                            , projectFiles = [ file, file ]
+                            }
+                    of
+                        Err err ->
+                            Expect.all
+                                [ \e -> Expect.equal e (ProjectError.DuplicateModule [ "Main" ])
+                                , \e -> Expect.equal (ProjectError.toString e) "Duplicate module Main"
+                                ]
+                                err
+
+                        Ok _ ->
+                            Expect.fail "Expected a DuplicateModule error"
 
 
 withEmptyModuleName : File -> File
@@ -335,7 +376,7 @@ moduleNotFoundTest =
                     Expect.fail ("Couldn't parse fixture: " ++ Debug.toString err)
 
                 Ok files ->
-                    case buildProject Nothing [] [] files of
+                    case buildProject Nothing [] [] (Dict.values files) of
                         Err err ->
                             Expect.fail ("Couldn't build project: " ++ Debug.toString err)
 

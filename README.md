@@ -11,7 +11,7 @@ Elm.TypeInference.init
     , allDependencies = [...] -- Parsed from ~/.elm files
     , sourcesToResolveAmbiguity = Dict.empty
     , projectPackageName = Just "my/package-name"
-    , projectFiles = Dict.fromList [ ( [ "MyModule", "Internal" ], parsedFile ) ]
+    , projectFiles = [ parsedFile ]
     }
 --> Ok project
 

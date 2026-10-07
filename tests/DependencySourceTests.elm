@@ -16,9 +16,9 @@ import Tests.Elm.TypeInference.Fixture.ElmCore as CoreFixture
 
 {-| `Main` infers without an error inside a fully-built `Project`.
 -}
-mainHasNoErrors : Elm.TypeInference.Project -> Dict ModuleName File -> Expect.Expectation
+mainHasNoErrors : Elm.TypeInference.Project -> List File -> Expect.Expectation
 mainHasNoErrors proj files =
-    case Dict.get [ "Main" ] files of
+    case List.head files of
         Nothing ->
             Expect.fail "Couldn't find Main file"
 
@@ -53,7 +53,7 @@ projectWith :
     List String
     -> List Dependency
     -> Dict String (List File)
-    -> Dict ModuleName File
+    -> List File
     -> Result ProjectError Elm.TypeInference.Project
 projectWith directDependencies allDependencies sources files =
     Elm.TypeInference.init
@@ -73,9 +73,9 @@ suite =
                 case ( Elm.Parser.parseToFile hiddenSource, Elm.Parser.parseToFile mainSource ) of
                     ( Ok hidden, Ok main ) ->
                         let
-                            mainFiles : Dict ModuleName File
+                            mainFiles : List File
                             mainFiles =
-                                Dict.singleton [ "Main" ] main
+                                [ main ]
                         in
                         case
                             projectWith
@@ -122,9 +122,9 @@ suite =
                 case ( Elm.Parser.parseToFile hiddenTypeSource, Elm.Parser.parseToFile hiddenTypeMainSource ) of
                     ( Ok hidden, Ok main ) ->
                         let
-                            mainFiles : Dict ModuleName File
+                            mainFiles : List File
                             mainFiles =
-                                Dict.singleton [ "Main" ] main
+                                [ main ]
                         in
                         case
                             projectWith
@@ -171,9 +171,9 @@ suite =
                 of
                     ( Ok hidden, Ok units, Ok main ) ->
                         let
-                            mainFiles : Dict ModuleName File
+                            mainFiles : List File
                             mainFiles =
-                                Dict.singleton [ "Main" ] main
+                                [ main ]
                         in
                         case
                             projectWith
@@ -219,7 +219,7 @@ suite =
                                 [ "example/css", "elm/core" ]
                                 [ cssDependency, CoreFixture.core ]
                                 (Dict.singleton "example/css" [ hidden ])
-                                (Dict.singleton [ "Main" ] main)
+                                [ main ]
                         of
                             Ok _ ->
                                 Expect.fail "Should have rejected the recursive alias"

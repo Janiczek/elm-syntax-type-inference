@@ -60,7 +60,7 @@ buildMainModuleProjectWithPackage currentPackage moduleCode =
                     currentPackage
                     []
                     []
-                    (Dict.singleton mainModule file)
+                    [ file ]
                     |> Result.map (Tuple.pair file)
             )
 
@@ -69,7 +69,7 @@ buildProject :
     Maybe String
     -> List String
     -> List Dependency
-    -> Dict ModuleName File
+    -> List File
     -> Result TestError Elm.TypeInference.Project
 buildProject currentPackage directDependencies allDependencies files =
     case
@@ -134,7 +134,7 @@ main =
         |> Result.mapError (always CouldntParse)
         |> Result.andThen
             (\file ->
-                buildProject Nothing (List.map .name allDependencies) allDependencies (Dict.singleton mainModule file)
+                buildProject Nothing (List.map .name allDependencies) allDependencies [ file ]
                     |> Result.andThen
                         (\proj ->
                             file.declarations
@@ -228,7 +228,7 @@ getDeclTypeAndProject currentPackage directDependencies dependencies modules mod
     parseModules modules
         |> Result.andThen
             (\files ->
-                buildProject currentPackage directDependencies dependencies files
+                buildProject currentPackage directDependencies dependencies (Dict.values files)
                     |> Result.andThen
                         (\proj ->
                             Dict.get moduleName files

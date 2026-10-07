@@ -45,6 +45,9 @@ type alias Location =
 
   - **`MissingModuleName`:** Raised when a `File` has an empty module name.
 
+  - **`DuplicateModule`:** Raised by `Elm.TypeInference.init` when two of the
+    `projectFiles` declare the same module.
+
   - **`ImpossibleDocsType`:** for hand-crafted `docs.json` with nonsensical
     data, like a 4-tuple. Real `docs.json` files emitted by the Elm compiler
     should never produce these.
@@ -68,6 +71,7 @@ type alias Location =
 type ProjectError
     = NeedPackageSources (Dict PackageName (List String))
     | MissingModuleName
+    | DuplicateModule ModuleName
     | ImpossibleDocsType { location : Location, type_ : Elm.Type.Type }
     | ImpossibleType { location : Location, typeAnnotation : TypeAnnotation }
     | AmbiguousModuleOwner { location : Location, moduleName : String, possiblePackages : List PackageName }
@@ -91,6 +95,9 @@ toString error =
 
         MissingModuleName ->
             "Missing module name"
+
+        DuplicateModule moduleName ->
+            "Duplicate module " ++ String.join "." moduleName
 
         ImpossibleDocsType r ->
             "Impossible docs type "
