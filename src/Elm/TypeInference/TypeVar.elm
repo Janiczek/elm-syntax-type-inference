@@ -6,6 +6,7 @@ module Elm.TypeInference.TypeVar exposing
     , TypeVarStyle(..)
     , genKeyFrom
     , deduplicate
+    , isNamedVar
     , namedKeyFrom
     , parse
     , superTypeTag
@@ -103,6 +104,16 @@ typeVariableConstraintPrefixes =
     , ( "appendable", Appendable )
     , ( "number", Number )
     ]
+
+
+isNamedVar : TypeVar -> Bool
+isNamedVar ( style, _ ) =
+    case style of
+        Named _ ->
+            True
+
+        Generated _ ->
+            False
 
 
 superTypeToString : SuperType -> String

@@ -15,7 +15,6 @@ module Elm.TypeInference.Type.Internal exposing
     , mapVarsMono
     , moduleIdsIn
     , mono
-    , monoHasTypeVars
     , monoPublicKey
     , monoTypeVars
     , nameVarsTogether
@@ -26,7 +25,6 @@ module Elm.TypeInference.Type.Internal exposing
     )
 
 import Dict exposing (Dict)
-import Dict.Extra
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
@@ -456,64 +454,6 @@ moduleIdsIn type_ acc =
                 |> moduleIdsIn r.attributes
                 |> moduleIdsIn r.uniforms
                 |> moduleIdsIn r.varyings
-
-
-{-| `not (List.isEmpty (monoTypeVars type_))`, stopping at the first variable.
--}
-monoHasTypeVars : MonoType -> Bool
-monoHasTypeVars type_ =
-    case type_ of
-        TypeVar _ ->
-            True
-
-        Function { from, to } ->
-            monoHasTypeVars from || monoHasTypeVars to
-
-        Int ->
-            False
-
-        Float ->
-            False
-
-        Char ->
-            False
-
-        String ->
-            False
-
-        Bool ->
-            False
-
-        List listItemType ->
-            monoHasTypeVars listItemType
-
-        Unit ->
-            False
-
-        Tuple2 t1 t2 ->
-            monoHasTypeVars t1 || monoHasTypeVars t2
-
-        Tuple3 t1 t2 t3 ->
-            monoHasTypeVars t1 || monoHasTypeVars t2 || monoHasTypeVars t3
-
-        Record fields ->
-            fieldsHaveTypeVars fields
-
-        ExtensibleRecord r ->
-            monoHasTypeVars r.extensionTypevar || fieldsHaveTypeVars r.fields
-
-        UserDefinedType r ->
-            List.any monoHasTypeVars r.args
-
-        WebGLShader r ->
-            monoHasTypeVars r.attributes
-                || monoHasTypeVars r.uniforms
-                || monoHasTypeVars r.varyings
-
-
-fieldsHaveTypeVars : Dict VarName MonoType -> Bool
-fieldsHaveTypeVars fields =
-    Dict.Extra.any (\_ fieldType -> monoHasTypeVars fieldType) fields
 
 
 monoTypeVarsInFieldsHelp : Dict VarName MonoType -> List TypeVar -> List TypeVar

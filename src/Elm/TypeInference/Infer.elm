@@ -39,10 +39,11 @@ import Elm.TypeInference.Type.Internal as TypeI
     exposing
         ( Id
         , MonoType(..)
-        , Type
+        , Type(..)
         , TypeResolver
         )
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations)
+import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import Regex exposing (Regex)
 
@@ -55,6 +56,8 @@ type alias Ctx =
     , allowKernel : Bool
     , moduleMapping : ModuleIds.Mapping
     , resolvedVars : Dict ( {- written -} ModuleName, VarName ) (Result InferErrorDetails (Maybe ( PackageName, ModuleId )))
+    , -- Keyed by source name (eg. `"a"`, `"comparable1"`).
+      rigidTypeVars : Dict String TypeVar
     }
 
 
@@ -315,31 +318,47 @@ annotationType ctx maybeSigNode =
                     State.pure (Just t)
 
 
-{-| `declId ≡ annotationType`, if the function is annotated.
+annotationScheme : Ctx -> MonoType -> Type
+annotationScheme ctx annotationMono =
+    let
+        scoped : MonoType
+        scoped =
+            TypeI.mapVarsMono
+                (\var ->
+                    case Dict.get (TypeVar.toString var) ctx.rigidTypeVars of
+                        Just enclosing ->
+                            enclosing
 
-The annotation's type variables are freshly instantiated before use: two
-unrelated declarations can both write eg. `a` in their signature, and those
-`a`s must not be the same substitution-map key -- otherwise unifying one
-declaration's body against its own annotation would leak a binding for `a`
-that then corrupts every other same-named-variable signature processed
-afterwards (see the `e2e/tests/histogram-force-comparable` regression fixture).
-
--}
-signatureEquations : Id -> Maybe MonoType -> StateM Equations
-signatureEquations declId maybeAnnotationType =
-    case maybeAnnotationType of
-        Nothing ->
-            State.pure TypeEquation.empty
-
-        Just annotationType_ ->
-            State.do (State.instantiateAnnotation (TypeI.closeOver annotationType_)) <| \freshAnnotationType ->
-            State.pure
-                (TypeEquation.single
-                    ( TypeI.id_ declId
-                    , freshAnnotationType
-                    , "Binding must be consistent with its annotation"
-                    )
+                        Nothing ->
+                            var
                 )
+                annotationMono
+    in
+    Forall
+        (TypeI.monoTypeVars scoped
+            |> TypeVar.deduplicate
+            |> List.filter TypeVar.isNamedVar
+        )
+        scoped
+
+
+{-| Bring rigid vars into scope for decl body -> nested `let` annotations
+mentioning the same names use them.
+-}
+withRigidTypeVars : List ( TypeVar, TypeVar ) -> Ctx -> Ctx
+withRigidTypeVars renaming ctx =
+    case renaming of
+        [] ->
+            ctx
+
+        _ ->
+            { ctx
+                | rigidTypeVars =
+                    List.foldl
+                        (\( bound, fresh ) acc -> Dict.insert (TypeVar.toString bound) fresh acc)
+                        ctx.rigidTypeVars
+                        renaming
+            }
 
 
 {-| Shared body of `topLevelMember` and `letFunctionMember`.
@@ -360,18 +379,34 @@ functionMember ctx declNode fn installFor =
         varName : VarName
         varName =
             Node.value impl.name
+
+        maybeScheme : Maybe Type
+        maybeScheme =
+            Maybe.map (annotationScheme ctx) maybeAnnotationType
     in
     State.pure
         { id = declId
-        , annotation = Maybe.map TypeI.closeOver maybeAnnotationType
+        , annotation = maybeScheme
         , install = installFor varName
         , equations =
-            State.map2
-                (\sigEquations implEquations ->
-                    TypeEquation.toList (TypeEquation.append sigEquations implEquations)
-                )
-                (signatureEquations declId maybeAnnotationType)
-                (inferFnImplementation ctx declId impl)
+            case maybeScheme of
+                Nothing ->
+                    State.map TypeEquation.toList (inferFnImplementation ctx declId impl)
+
+                Just scheme ->
+                    State.do (State.instantiateAnnotation scheme) <| \( freshAnnotationType, renaming ) ->
+                    State.map
+                        (\implEquations ->
+                            TypeEquation.toList
+                                (TypeEquation.cons
+                                    ( TypeI.id_ declId
+                                    , freshAnnotationType
+                                    , "Binding must be consistent with its annotation"
+                                    )
+                                    implEquations
+                                )
+                        )
+                        (inferFnImplementation (withRigidTypeVars renaming ctx) declId impl)
         }
 
 
@@ -1007,7 +1042,7 @@ solveLetDeclarations ctx declarations =
                                                 State.pureUnit
 
                                             Just mono ->
-                                                State.addBinding (functionName fn) (TypeI.closeOver mono)
+                                                State.addBinding (functionName fn) (annotationScheme ctx mono)
 
                             LetDestructuring _ _ ->
                                 State.pureUnit

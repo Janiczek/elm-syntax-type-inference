@@ -1684,6 +1684,7 @@ solveModule ctx typeAliases file =
             , allowKernel = ctx.allowKernel
             , moduleMapping = ctx.moduleMapping
             , resolvedVars = resolvedVars
+            , rigidTypeVars = Dict.empty
             }
     in
     sccs

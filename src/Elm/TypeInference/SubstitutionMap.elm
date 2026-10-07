@@ -7,6 +7,7 @@ module Elm.TypeInference.SubstitutionMap exposing
     , empty
     , forLookup
     , hintOf
+    , isRigid
     , letRankOf
     , linkTo
     , setHint
@@ -435,6 +436,24 @@ carryHint ( childStyle, childSuper ) ( parentStyle, parentSuper ) store =
 hintOf : Id -> SubstitutionMap -> Maybe NameHint
 hintOf id store =
     Dict.get id store.hints
+
+
+{-| Rigid variables are skolems: `Unify` only binds them to flexible variables.
+Only generated vars can be rigid.
+-}
+isRigid : TypeVar -> SubstitutionMap -> Bool
+isRigid ( style, _ ) store =
+    case style of
+        Generated theId ->
+            case Dict.get theId store.hints of
+                Just hint ->
+                    hint.rigid
+
+                Nothing ->
+                    False
+
+        Named _ ->
+            False
 
 
 setHint : Id -> NameHint -> SubstitutionMap -> SubstitutionMap

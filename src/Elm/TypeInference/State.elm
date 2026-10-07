@@ -25,7 +25,6 @@ module Elm.TypeInference.State exposing
     , lookupEnv
     , lookupGlobalEnv
     , map
-    , map2
     , modifySubst
     , okUnit
     , pure
@@ -147,22 +146,6 @@ map userFn stateFn =
                 Err err
         , state2
         )
-
-
-map2 : (a -> b -> c) -> StateM a -> StateM b -> StateM c
-map2 userFn aM bM =
-    \state ->
-        case aM state of
-            ( Err err, aState ) ->
-                ( Err err, aState )
-
-            ( Ok a, aState ) ->
-                case bM aState of
-                    ( Err err, bState ) ->
-                        ( Err err, bState )
-
-                    ( Ok b, bState ) ->
-                        ( Ok (userFn a b), bState )
 
 
 andThen : (a -> StateM b) -> StateM a -> StateM b
@@ -600,12 +583,34 @@ instantiate =
     instantiateHelp { rigid = False }
 
 
-{-| Like `instantiate`, but the annotation typevar names win over what they get
-unified with.
+{-| Like `instantiate`, but the fresh vars are rigid: they can only become non-rigid variables.
+Used to catch eg.
+
+    f : a -> a
+    f x =
+        x + 1
+
+Also returns which fresh var each annotation var became (useful for nested `let`).
+
 -}
-instantiateAnnotation : Type -> StateM MonoType
-instantiateAnnotation =
-    instantiateHelp { rigid = True }
+instantiateAnnotation : Type -> StateM ( MonoType, List ( TypeVar, TypeVar ) )
+instantiateAnnotation (Forall boundVars monoType) =
+    case boundVars of
+        [] ->
+            pure ( monoType, [] )
+
+        _ ->
+            \state0 ->
+                let
+                    ( renaming, state1 ) =
+                        freshRenaming { rigid = True } boundVars [] state0
+                in
+                ( Ok
+                    ( TypeI.mapVarsMono (\var -> lookupRenaming var renaming) monoType
+                    , renaming
+                    )
+                , state1
+                )
 
 
 instantiateHelp : { rigid : Bool } -> Type -> StateM MonoType

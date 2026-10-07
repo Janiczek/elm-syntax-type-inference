@@ -24,6 +24,7 @@ core =
         , platformCmd
         , char
         , dict
+        , string
         ]
     }
 
@@ -53,6 +54,7 @@ basics =
     , values =
         [ { name = "identity", comment = "", tipe = Lambda (Var "a") (Var "a") }
         , { name = "e", comment = "", tipe = Type "Basics.Float" [] }
+        , { name = "toFloat", comment = "", tipe = Lambda (Type "Basics.Int" []) (Type "Basics.Float" []) }
         ]
     , binops =
         [ { name = "+"
@@ -84,6 +86,24 @@ basics =
           , tipe = Lambda (Var "comparable") (Lambda (Var "comparable") (Type "Basics.Bool" []))
           , associativity = Elm.Docs.None
           , precedence = 4
+          }
+        , { name = "*"
+          , comment = ""
+          , tipe = Lambda (Var "number") (Lambda (Var "number") (Var "number"))
+          , associativity = Elm.Docs.Left
+          , precedence = 7
+          }
+        , { name = "++"
+          , comment = ""
+          , tipe = Lambda (Var "appendable") (Lambda (Var "appendable") (Var "appendable"))
+          , associativity = Elm.Docs.Right
+          , precedence = 5
+          }
+        , { name = "||"
+          , comment = ""
+          , tipe = Lambda (Type "Basics.Bool" []) (Lambda (Type "Basics.Bool" []) (Type "Basics.Bool" []))
+          , associativity = Elm.Docs.Right
+          , precedence = 2
           }
         ]
     }
@@ -218,6 +238,26 @@ dict =
                         (Type "Dict.Dict" [ Var "k", Var "v2" ])
                     )
           }
+        ]
+    , binops = []
+    }
+
+
+string : Elm.Docs.Module
+string =
+    { name = "String"
+    , comment = ""
+    , unions =
+        [ { name = "String"
+          , comment = ""
+          , args = []
+          , tags = [] -- opaque, matching real elm/core docs.json
+          }
+        ]
+    , aliases = []
+    , values =
+        [ { name = "fromInt", comment = "", tipe = Lambda (Type "Basics.Int" []) (Type "String.String" []) }
+        , { name = "length", comment = "", tipe = Lambda (Type "String.String" []) (Type "Basics.Int" []) }
         ]
     , binops = []
     }
