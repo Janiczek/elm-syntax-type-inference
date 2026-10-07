@@ -761,10 +761,6 @@ qualifierCandidates moduleMapping thisModule qualifier =
 typeResolverFor : ModuleIds.Mapping -> Index -> Dict ModuleId ModuleIndex -> ModuleIndex -> TypeResolver
 typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule qualifier typeName actualArity =
     let
-        usedIn : ModuleName
-        usedIn =
-            FullModuleName.toModuleName thisModule.moduleName
-
         candidates : List ModuleId
         candidates =
             qualifierCandidates moduleMapping thisModule qualifier
@@ -835,6 +831,11 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
             Err (InternalError.AmbiguousModuleName ambiguity)
 
         Ok resolved ->
+            let
+                usedIn : ModuleName
+                usedIn =
+                    FullModuleName.toModuleName thisModule.moduleName
+            in
             case
                 case resolved of
                     Just _ ->

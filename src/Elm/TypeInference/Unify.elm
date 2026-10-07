@@ -1,7 +1,6 @@
 module Elm.TypeInference.Unify exposing
     ( TypeAlias
     , UnifyConfig
-    , aliasCycle
     , expandAliasDeep
     , firstAliasCycle
     , unifyMany
@@ -690,8 +689,9 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
                 combined =
                     Dict.union er.fields extFields
             in
-            State.do (unifyMany cfg overlapEqs) <| \() ->
-            recordBindings cfg t1 t2 combined recordFields
+            State.do (unifyMany cfg overlapEqs) <|
+                \() ->
+                    recordBindings cfg t1 t2 combined recordFields
 
         ExtensibleRecord extEr ->
             let
@@ -709,14 +709,15 @@ unifyRecordVsExtensible cfg t1 t2 recordFields er =
                 merged =
                     Dict.union er.fields extEr.fields
             in
-            State.do (unifyMany cfg overlapEqs) <| \() ->
-            unifyRecordVsExtensible cfg
-                t1
-                t2
-                recordFields
-                { extensionTypevar = extEr.extensionTypevar
-                , fields = merged
-                }
+            State.do (unifyMany cfg overlapEqs) <|
+                \() ->
+                    unifyRecordVsExtensible cfg
+                        t1
+                        t2
+                        recordFields
+                        { extensionTypevar = extEr.extensionTypevar
+                        , fields = merged
+                        }
 
         _ ->
             let
@@ -1043,28 +1044,29 @@ unifyExpanded cfg t1 t2 =
                         unifyMany cfg (( r1.extensionTypevar, r2.extensionTypevar ) :: sharedEqs)
 
                     else
-                        State.do State.getNextIdAndTick <| \tailId ->
-                        let
-                            tail : MonoType
-                            tail =
-                                TypeI.id_ tailId
-                        in
-                        unifyMany
-                            cfg
-                            (( r1.extensionTypevar
-                             , ExtensibleRecord
-                                { extensionTypevar = tail
-                                , fields = onlyIn2
-                                }
-                             )
-                                :: ( r2.extensionTypevar
-                                   , ExtensibleRecord
+                        State.do State.getNextIdAndTick <|
+                            \tailId ->
+                                let
+                                    tail : MonoType
+                                    tail =
+                                        TypeI.id_ tailId
+                                in
+                                unifyMany
+                                    cfg
+                                    (( r1.extensionTypevar
+                                     , ExtensibleRecord
                                         { extensionTypevar = tail
-                                        , fields = onlyIn1
+                                        , fields = onlyIn2
                                         }
-                                   )
-                                :: sharedEqs
-                            )
+                                     )
+                                        :: ( r2.extensionTypevar
+                                           , ExtensibleRecord
+                                                { extensionTypevar = tail
+                                                , fields = onlyIn1
+                                                }
+                                           )
+                                        :: sharedEqs
+                                    )
 
                 Record r2 ->
                     unifyRecordVsExtensible cfg t1 t2 r2 r1
@@ -1159,37 +1161,40 @@ unifyExpanded cfg t1 t2 =
                                 typeMismatch cfg t1 t2
 
                             else
-                                State.do State.getNextIdAndTick <| \tailId ->
-                                let
-                                    tail : MonoType
-                                    tail =
-                                        TypeI.id_ tailId
+                                State.do State.getNextIdAndTick <|
+                                    \tailId ->
+                                        let
+                                            tail : MonoType
+                                            tail =
+                                                TypeI.id_ tailId
 
-                                    absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
-                                    absorb extensionTypevar fields =
-                                        [ ( extensionTypevar
-                                          , ExtensibleRecord
-                                                { extensionTypevar = tail
-                                                , fields = fields
-                                                }
-                                          )
-                                        ]
-                                in
-                                if not closed1 && not closed2 then
-                                    unifyMany cfg (absorb set1.extensionTypevar only2 ++ absorb set2.extensionTypevar only1 ++ sharedEqs)
+                                            absorb : MonoType -> Dict VarName MonoType -> List ( MonoType, MonoType )
+                                            absorb extensionTypevar fields =
+                                                [ ( extensionTypevar
+                                                  , ExtensibleRecord
+                                                        { extensionTypevar = tail
+                                                        , fields = fields
+                                                        }
+                                                  )
+                                                ]
+                                        in
+                                        if not closed1 && not closed2 then
+                                            unifyMany cfg (absorb set1.extensionTypevar only2 ++ absorb set2.extensionTypevar only1 ++ sharedEqs)
 
-                                else if not closed1 then
-                                    unifyMany cfg (absorb set1.extensionTypevar only2 ++ sharedEqs)
+                                        else if not closed1 then
+                                            unifyMany cfg (absorb set1.extensionTypevar only2 ++ sharedEqs)
 
-                                else if not closed2 then
-                                    unifyMany cfg (absorb set2.extensionTypevar only1 ++ sharedEqs)
+                                        else if not closed2 then
+                                            unifyMany cfg (absorb set2.extensionTypevar only1 ++ sharedEqs)
 
-                                else
-                                    unifyMany cfg sharedEqs
+                                        else
+                                            unifyMany cfg sharedEqs
                     in
-                    State.do (webglSet webgl1.attributes webgl2.attributes) <| \() ->
-                    State.do (webglSet webgl1.uniforms webgl2.uniforms) <| \() ->
-                    webglSet webgl1.varyings webgl2.varyings
+                    State.do (webglSet webgl1.attributes webgl2.attributes) <|
+                        \() ->
+                            State.do (webglSet webgl1.uniforms webgl2.uniforms) <|
+                                \() ->
+                                    webglSet webgl1.varyings webgl2.varyings
 
                 _ ->
                     typeMismatch cfg t1 t2
@@ -1290,23 +1295,24 @@ bindFlexVars cfg (( typeVarStyle, super ) as typeVar) (( otherStyle, otherSuper 
             if m == super && m == otherSuper then
                 -- Either could be chosen as then parent (linked to),
                 -- but we prefer Generated ids as they can't collide.
-                State.modifySubst <| \subst ->
-                case typeVarStyle of
-                    Named _ ->
-                        case otherStyle of
-                            Generated _ ->
-                                subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
-
+                State.modifySubst <|
+                    \subst ->
+                        case typeVarStyle of
                             Named _ ->
-                                subst |> SubstitutionMap.union typeVar otherVar
+                                case otherStyle of
+                                    Generated _ ->
+                                        subst |> SubstitutionMap.linkTo { child = typeVar, parent = otherVar }
 
-                    Generated _ ->
-                        case otherStyle of
-                            Named _ ->
-                                subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
+                                    Named _ ->
+                                        subst |> SubstitutionMap.union typeVar otherVar
 
                             Generated _ ->
-                                subst |> SubstitutionMap.union typeVar otherVar
+                                case otherStyle of
+                                    Named _ ->
+                                        subst |> SubstitutionMap.linkTo { child = otherVar, parent = typeVar }
+
+                                    Generated _ ->
+                                        subst |> SubstitutionMap.union typeVar otherVar
 
             else if m == otherSuper then
                 -- otherVar is more constrained -> it will be the `parent` representative.
@@ -1319,18 +1325,19 @@ bindFlexVars cfg (( typeVarStyle, super ) as typeVar) (( otherStyle, otherSuper 
                 -- eg. Comparable and Appendable
                 -- introduce fresh var with combined constraint
                 -- point both at it
-                State.do State.getNextIdAndTick <| \freshId ->
-                let
-                    fresh : TypeVar
-                    fresh =
-                        ( Generated freshId, m )
-                in
-                State.modifySubst
-                    (\subst ->
-                        subst
-                            |> SubstitutionMap.linkTo { child = typeVar, parent = fresh }
-                            |> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
-                    )
+                State.do State.getNextIdAndTick <|
+                    \freshId ->
+                        let
+                            fresh : TypeVar
+                            fresh =
+                                ( Generated freshId, m )
+                        in
+                        State.modifySubst
+                            (\subst ->
+                                subst
+                                    |> SubstitutionMap.linkTo { child = typeVar, parent = fresh }
+                                    |> SubstitutionMap.linkTo { child = otherVar, parent = fresh }
+                            )
 
 
 {-| The most specific supertype that satisfies both constraints, if any.

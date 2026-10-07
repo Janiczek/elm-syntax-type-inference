@@ -4,7 +4,6 @@ import Dict exposing (Dict)
 import Elm.Parser
 import Elm.Syntax.Declaration as Declaration
 import Elm.Syntax.File exposing (File)
-import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference exposing (Dependency)

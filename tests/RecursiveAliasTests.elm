@@ -246,18 +246,19 @@ expandDoesntCrash =
                             c : Comment
                             c = { message = "a", responses = [] }
                             """)
-
-                type_ : Type
-                type_ =
-                    Type.Named
-                        { package = ""
-                        , moduleName = [ "Main" ]
-                        , name = "Comment"
-                        , arguments = []
-                        }
             in
             case parseModules files |> Result.andThen (Dict.values >> buildProject Nothing [ "elm/core" ] [ CoreFixture.core ]) of
                 Ok proj ->
+                    let
+                        type_ : Type
+                        type_ =
+                            Type.Named
+                                { package = ""
+                                , moduleName = [ "Main" ]
+                                , name = "Comment"
+                                , arguments = []
+                                }
+                    in
                     Elm.TypeInference.expand proj type_
                         |> Type.toString
                         |> Expect.equal "Main.Comment"
@@ -282,19 +283,19 @@ infer declName body =
 
 expectRecursiveAlias : List ( ModuleName, String ) -> Result TestError a -> Expect.Expectation
 expectRecursiveAlias cycle result =
-    let
-        ( expectedModule, expectedDeclarations ) =
-            case cycle of
-                ( firstModule, firstName ) :: _ ->
-                    ( firstModule, [ firstName ] )
-
-                [] ->
-                    ( [], [] )
-    in
     case result of
         Err (CouldntInfer err) ->
             case err.details of
                 RecursiveAlias r ->
+                    let
+                        ( expectedModule, expectedDeclarations ) =
+                            case cycle of
+                                ( firstModule, firstName ) :: _ ->
+                                    ( firstModule, [ firstName ] )
+
+                                [] ->
+                                    ( [], [] )
+                    in
                     { errorIn = err.moduleName
                     , declarationNames = err.declarationNames
                     , cycle = r.aliases

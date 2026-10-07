@@ -159,47 +159,49 @@ init { directDependencies, allDependencies, sourcesToResolveAmbiguity, projectPa
                         )
                         ( [], False, dep.moduleMapping )
                         projectFiles
-
-                duplicateModule : Maybe ModuleName
-                duplicateModule =
-                    firstDuplicateModule modulesReversed Set.empty
             in
             if missingModuleName then
                 Err ProjectError.MissingModuleName
 
-            else if duplicateModule /= Nothing then
-                Err (ProjectError.DuplicateModule (Maybe.withDefault [] duplicateModule))
-
             else
                 let
-                    modulesById : Dict ModuleId ProjectModule
-                    modulesById =
-                        modulesReversed
-                            |> List.foldl
-                                (\m acc -> Dict.insert m.index.moduleId m acc)
-                                Dict.empty
-
-                    importedBy : Dict ModuleId (Set ModuleId)
-                    importedBy =
-                        modulesReversed
-                            |> List.foldl (\m acc -> addReverseEdges m.index acc) Dict.empty
+                    duplicateModule : Maybe ModuleName
+                    duplicateModule =
+                        firstDuplicateModule modulesReversed Set.empty
                 in
-                Ok
-                    (Project
-                        { currentPackage = projectPackageName
-                        , depEnv = dep
-                        , moduleMapping = moduleMapping
-                        , modulesById = modulesById
-                        , importedBy = importedBy
-                        , acc =
-                            { tables = Dict.empty
-                            , interfaces = Dict.empty
-                            , sccsInTopoOrder = Nothing
-                            , values = dep.globalEnv
-                            , aliases = dep.typeAliases
+                if duplicateModule /= Nothing then
+                    Err (ProjectError.DuplicateModule (Maybe.withDefault [] duplicateModule))
+
+                else
+                    let
+                        modulesById : Dict ModuleId ProjectModule
+                        modulesById =
+                            modulesReversed
+                                |> List.foldl
+                                    (\m acc -> Dict.insert m.index.moduleId m acc)
+                                    Dict.empty
+
+                        importedBy : Dict ModuleId (Set ModuleId)
+                        importedBy =
+                            modulesReversed
+                                |> List.foldl (\m acc -> addReverseEdges m.index acc) Dict.empty
+                    in
+                    Ok
+                        (Project
+                            { currentPackage = projectPackageName
+                            , depEnv = dep
+                            , moduleMapping = moduleMapping
+                            , modulesById = modulesById
+                            , importedBy = importedBy
+                            , acc =
+                                { tables = Dict.empty
+                                , interfaces = Dict.empty
+                                , sccsInTopoOrder = Nothing
+                                , values = dep.globalEnv
+                                , aliases = dep.typeAliases
+                                }
                             }
-                        }
-                    )
+                        )
 
 
 firstDuplicateModule : List ProjectModule -> Set ModuleId -> Maybe ModuleName
@@ -1454,18 +1456,23 @@ inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfac
                 importedInterfaces
                 thisIndex
     in
-    (State.do (gatherTypeAliases ctx file) <| \outgoingAliases ->
-    let
-        -- `outgoingAliases` are only this module's own (small)
-        typeAliases : Dict GlobalKey TypeAlias
-        typeAliases =
-            Dict.union outgoingAliases ctx.aliases
-    in
-    State.do (registerConstructorsAndPorts ctx file) <| \() ->
-    State.do (registerEffectMagic ctx) <| \() ->
-    State.do (solveModule ctx typeAliases file) <| \() ->
-    State.do (moduleResult ctx outgoingAliases file) <| \result ->
-    State.pure result
+    (State.do (gatherTypeAliases ctx file) <|
+        \outgoingAliases ->
+            let
+                -- `outgoingAliases` are only this module's own (small)
+                typeAliases : Dict GlobalKey TypeAlias
+                typeAliases =
+                    Dict.union outgoingAliases ctx.aliases
+            in
+            State.do (registerConstructorsAndPorts ctx file) <|
+                \() ->
+                    State.do (registerEffectMagic ctx) <|
+                        \() ->
+                            State.do (solveModule ctx typeAliases file) <|
+                                \() ->
+                                    State.do (moduleResult ctx outgoingAliases file) <|
+                                        \result ->
+                                            State.pure result
     )
         |> State.run (State.init ctx.values)
         |> Tuple.first
@@ -1481,56 +1488,60 @@ moduleResult :
             , interface : ModuleInterface
             }
 moduleResult ctx outgoingAliases file =
-    State.do State.createdIdCount <| \nextId ->
-    State.do State.getNodeIds <| \nodeIds ->
-    State.do State.getSubst <| \substitutionMap ->
-    State.do State.getGlobalEnv <| \globalEnv ->
-    let
-        byDeclaration :
-            { declOfId : Dict TypeI.Id Int
-            , declIds : Array.Array (List TypeI.Id)
-            }
-        byDeclaration =
-            groupByDeclaration
-                (List.map (\(Node range _) -> RangeLike.fromRange range) file.declarations)
-                nodeIds
+    State.do State.createdIdCount <|
+        \nextId ->
+            State.do State.getNodeIds <|
+                \nodeIds ->
+                    State.do State.getSubst <|
+                        \substitutionMap ->
+                            State.do State.getGlobalEnv <|
+                                \globalEnv ->
+                                    let
+                                        byDeclaration :
+                                            { declOfId : Dict TypeI.Id Int
+                                            , declIds : Array.Array (List TypeI.Id)
+                                            }
+                                        byDeclaration =
+                                            groupByDeclaration
+                                                (List.map (\(Node range _) -> RangeLike.fromRange range) file.declarations)
+                                                nodeIds
 
-        exposedValues : Dict VarName TypeI.Type
-        exposedValues =
-            ctx.thisIndex.exposedValues
-                |> Set.foldl
-                    (\name acc ->
-                        case Dict.get ( ctx.thisIndex.moduleId, "", name ) globalEnv of
-                            Just scheme ->
-                                Dict.insert name
-                                    (scheme
-                                        |> TypeI.applyNameHints (hintFor substitutionMap)
-                                        |> TypeI.normalize
-                                    )
-                                    acc
+                                        exposedValues : Dict VarName TypeI.Type
+                                        exposedValues =
+                                            ctx.thisIndex.exposedValues
+                                                |> Set.foldl
+                                                    (\name acc ->
+                                                        case Dict.get ( ctx.thisIndex.moduleId, "", name ) globalEnv of
+                                                            Just scheme ->
+                                                                Dict.insert name
+                                                                    (scheme
+                                                                        |> TypeI.applyNameHints (hintFor substitutionMap)
+                                                                        |> TypeI.normalize
+                                                                    )
+                                                                    acc
 
-                            Nothing ->
-                                acc
-                    )
-                    Dict.empty
-    in
-    State.pure
-        { table =
-            { nodeIds = nodeIds
-            , declOfId = byDeclaration.declOfId
-            , declIds = byDeclaration.declIds
-            , subst = SubstitutionMap.forLookup substitutionMap
-            , moduleMapping = ctx.moduleMapping
-            , -- We preallocate so `getAllTypes` never needs to grow the array.
-              cache = Array.repeat nextId Nothing
-            , pool = Dict.empty
-            }
-        , interface =
-            { moduleIndex = ctx.thisIndex
-            , exposedValues = exposedValues
-            , ownTypeAliases = outgoingAliases
-            }
-        }
+                                                            Nothing ->
+                                                                acc
+                                                    )
+                                                    Dict.empty
+                                    in
+                                    State.pure
+                                        { table =
+                                            { nodeIds = nodeIds
+                                            , declOfId = byDeclaration.declOfId
+                                            , declIds = byDeclaration.declIds
+                                            , subst = SubstitutionMap.forLookup substitutionMap
+                                            , moduleMapping = ctx.moduleMapping
+                                            , -- We preallocate so `getAllTypes` never needs to grow the array.
+                                              cache = Array.repeat nextId Nothing
+                                            , pool = Dict.empty
+                                            }
+                                        , interface =
+                                            { moduleIndex = ctx.thisIndex
+                                            , exposedValues = exposedValues
+                                            , ownTypeAliases = outgoingAliases
+                                            }
+                                        }
 
 
 groupByDeclaration :
@@ -1861,15 +1872,17 @@ gatherTypeAliases ctx file =
                                     _ ->
                                         State.pureUnit
                         in
-                        State.do type_ <| \type__ ->
-                        State.do (registerConstructor type__) <| \() ->
-                        State.pure <|
-                            Dict.insert
-                                ( moduleId, "", Node.value typeAlias.name )
-                                { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
-                                , type_ = type__
-                                }
-                                accAcrossDeclarations
+                        State.do type_ <|
+                            \type__ ->
+                                State.do (registerConstructor type__) <|
+                                    \() ->
+                                        State.pure <|
+                                            Dict.insert
+                                                ( moduleId, "", Node.value typeAlias.name )
+                                                { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
+                                                , type_ = type__
+                                                }
+                                                accAcrossDeclarations
 
                     _ ->
                         State.pure accAcrossDeclarations
@@ -1945,21 +1958,6 @@ registerCustomType resolver moduleId moduleName customType =
         typeName =
             Node.value customType.name
 
-        resultType : MonoType
-        resultType =
-            UserDefinedType
-                { package = ""
-                , moduleId = moduleId
-                , name = typeName
-                , args =
-                    customType.generics
-                        |> List.map
-                            (\(Node _ g) ->
-                                TypeVar
-                                    (TypeVar.parse g)
-                            )
-                }
-
         toError : InferErrorDetails -> InferError
         toError details =
             { moduleName = FullModuleName.toModuleName moduleName
@@ -1984,6 +1982,22 @@ registerCustomType resolver moduleId moduleName customType =
                 )
 
         Nothing ->
+            let
+                resultType : MonoType
+                resultType =
+                    UserDefinedType
+                        { package = ""
+                        , moduleId = moduleId
+                        , name = typeName
+                        , args =
+                            customType.generics
+                                |> List.map
+                                    (\(Node _ g) ->
+                                        TypeVar
+                                            (TypeVar.parse g)
+                                    )
+                        }
+            in
             customType.constructors
                 |> State.traverseUnit
                     (\(Node _ { arguments, name }) ->
@@ -2102,8 +2116,9 @@ The Elm compiler magically provides:
 registerEffectMagic : ModuleCtx -> StateM ()
 registerEffectMagic ctx =
     if ctx.allowKernel then
-        State.do (registerEffectCommand ctx) <| \() ->
-        registerEffectSubscription ctx
+        State.do (registerEffectCommand ctx) <|
+            \() ->
+                registerEffectSubscription ctx
 
     else
         State.pureUnit

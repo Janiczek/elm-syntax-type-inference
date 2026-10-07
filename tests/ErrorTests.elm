@@ -1,6 +1,6 @@
 module ErrorTests exposing (suite)
 
-import Dict exposing (Dict)
+import Dict
 import Elm.Docs
 import Elm.Parser
 import Elm.Syntax.File exposing (File)
