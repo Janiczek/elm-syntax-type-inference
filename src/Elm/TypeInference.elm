@@ -60,6 +60,7 @@ import Elm.TypeInference.Type exposing (PackageName, Type, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (MonoType(..), TypeResolver)
 import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
+import List.Extra
 import List.ExtraExtra
 import RangeLike
 import Result.Extra
@@ -1784,16 +1785,28 @@ gatherTypeAliases ctx file =
 
                             type_ : StateM MonoType
                             type_ =
-                                case
-                                    typeAlias.typeAnnotation
-                                        |> Node.value
-                                        |> TypeI.fromTypeAnnotation resolver
-                                of
-                                    Err fromTypeAnnotationError ->
-                                        State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+                                case unboundTypeVar typeAlias.generics [ Node.value typeAlias.typeAnnotation ] of
+                                    Just typeVar ->
+                                        State.error
+                                            (toError
+                                                (UnboundTypeVariable
+                                                    { typeName = Node.value typeAlias.name
+                                                    , typeVar = typeVar
+                                                    }
+                                                )
+                                            )
 
-                                    Ok aliasedType ->
-                                        State.pure aliasedType
+                                    Nothing ->
+                                        case
+                                            typeAlias.typeAnnotation
+                                                |> Node.value
+                                                |> TypeI.fromTypeAnnotation resolver
+                                        of
+                                            Err fromTypeAnnotationError ->
+                                                State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+
+                                            Ok aliasedType ->
+                                                State.pure aliasedType
 
                             -- A record type alias also gets a constructor function
                             -- (eg. `type alias Foo = { a : Int }` lets you write `Foo 1`).
@@ -1924,33 +1937,109 @@ registerCustomType resolver moduleId moduleName customType =
                                     (TypeVar.parse g)
                             )
                 }
-    in
-    customType.constructors
-        |> State.traverseUnit
-            (\(Node _ { arguments, name }) ->
-                let
-                    argTypes : Result FromTypeAnnotationError (List MonoType)
-                    argTypes =
-                        arguments
-                            |> Result.Extra.combineMap
-                                (\(Node.Node _ arg) -> TypeI.fromTypeAnnotation resolver arg)
-                in
-                case argTypes of
-                    Err fromTypeAnnotationError ->
-                        State.error
-                            { moduleName = FullModuleName.toModuleName moduleName
-                            , declarationNames = [ typeName ]
-                            , details = TypeI.fromTypeAnnotationError fromTypeAnnotationError
-                            }
 
-                    Ok args ->
+        toError : InferErrorDetails -> InferError
+        toError details =
+            { moduleName = FullModuleName.toModuleName moduleName
+            , declarationNames = [ typeName ]
+            , details = details
+            }
+
+        allArguments : List TypeAnnotation.TypeAnnotation
+        allArguments =
+            customType.constructors
+                |> List.ExtraExtra.fastConcatMap (\(Node _ ctor) -> List.map Node.value ctor.arguments)
+    in
+    case unboundTypeVar customType.generics allArguments of
+        Just typeVar ->
+            State.error
+                (toError
+                    (UnboundTypeVariable
+                        { typeName = typeName
+                        , typeVar = typeVar
+                        }
+                    )
+                )
+
+        Nothing ->
+            customType.constructors
+                |> State.traverseUnit
+                    (\(Node _ { arguments, name }) ->
                         let
-                            ctorType : MonoType
-                            ctorType =
-                                List.foldr (\argT acc -> Function { from = argT, to = acc }) resultType args
+                            argTypes : Result FromTypeAnnotationError (List MonoType)
+                            argTypes =
+                                arguments
+                                    |> Result.Extra.combineMap
+                                        (\(Node.Node _ arg) -> TypeI.fromTypeAnnotation resolver arg)
                         in
-                        State.addGlobalBinding ( moduleId, "", Node.value name ) (TypeI.closeOver ctorType)
-            )
+                        case argTypes of
+                            Err fromTypeAnnotationError ->
+                                State.error (toError (TypeI.fromTypeAnnotationError fromTypeAnnotationError))
+
+                            Ok args ->
+                                let
+                                    ctorType : MonoType
+                                    ctorType =
+                                        List.foldr
+                                            (\argT acc ->
+                                                Function
+                                                    { from = argT
+                                                    , to = acc
+                                                    }
+                                            )
+                                            resultType
+                                            args
+                                in
+                                State.addGlobalBinding
+                                    ( moduleId, "", Node.value name )
+                                    (TypeI.closeOver ctorType)
+                    )
+
+
+unboundTypeVar : List (Node String) -> List TypeAnnotation.TypeAnnotation -> Maybe String
+unboundTypeVar generics annotations =
+    let
+        declared : Set String
+        declared =
+            Set.fromList (List.map Node.value generics)
+    in
+    annotations
+        |> List.ExtraExtra.fastConcatMap typeVarsInAnnotation
+        |> List.Extra.find (\typeVar -> not (Set.member typeVar declared))
+
+
+typeVarsInAnnotation : TypeAnnotation.TypeAnnotation -> List String
+typeVarsInAnnotation annotation =
+    let
+        inNodes : List (Node TypeAnnotation.TypeAnnotation) -> List String
+        inNodes nodes =
+            List.ExtraExtra.fastConcatMap (\(Node _ inner) -> typeVarsInAnnotation inner) nodes
+
+        inFields : List (Node ( Node String, Node TypeAnnotation.TypeAnnotation )) -> List String
+        inFields fields =
+            List.ExtraExtra.fastConcatMap (\(Node _ ( _, Node _ fieldType )) -> typeVarsInAnnotation fieldType) fields
+    in
+    case annotation of
+        TypeAnnotation.GenericType name ->
+            [ name ]
+
+        TypeAnnotation.Typed _ args ->
+            inNodes args
+
+        TypeAnnotation.Unit ->
+            []
+
+        TypeAnnotation.Tupled items ->
+            inNodes items
+
+        TypeAnnotation.Record fields ->
+            inFields fields
+
+        TypeAnnotation.GenericRecord (Node _ extension) (Node _ fields) ->
+            extension :: inFields fields
+
+        TypeAnnotation.FunctionTypeAnnotation from to ->
+            inNodes [ from, to ]
 
 
 registerPort : TypeResolver -> ModuleId -> FullModuleName -> Signature -> StateM ()
@@ -2005,7 +2094,7 @@ registerEffectCommand ctx =
             State.pureUnit
 
         Just myCmdName ->
-            case ctx.resolver [] "Cmd" of
+            case ctx.resolver [] "Cmd" 1 of
                 Err _ ->
                     State.pureUnit
 
@@ -2046,7 +2135,7 @@ registerEffectSubscription ctx =
             State.pureUnit
 
         Just mySubName ->
-            case ctx.resolver [] "Sub" of
+            case ctx.resolver [] "Sub" 1 of
                 Err _ ->
                     State.pureUnit
 

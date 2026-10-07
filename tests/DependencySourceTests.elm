@@ -161,6 +161,55 @@ suite =
 
                     _ ->
                         Expect.fail "Regression source did not parse"
+        , Test.test "`init` asks for unexposed sibling modules the provided sources import" <|
+            \() ->
+                case
+                    ( Elm.Parser.parseToFile importingHiddenSource
+                    , Elm.Parser.parseToFile unitsSource
+                    , Elm.Parser.parseToFile mainSource
+                    )
+                of
+                    ( Ok hidden, Ok units, Ok main ) ->
+                        let
+                            mainFiles : Dict ModuleName File
+                            mainFiles =
+                                Dict.singleton [ "Main" ] main
+                        in
+                        case
+                            projectWith
+                                [ "example/css", "elm/core" ]
+                                [ cssDependency, CoreFixture.core ]
+                                (Dict.singleton "example/css" [ hidden ])
+                                mainFiles
+                        of
+                            Ok _ ->
+                                Expect.fail "Second pass should request the sibling module"
+
+                            Err err ->
+                                case err of
+                                    NeedPackageSources needed ->
+                                        if needed /= Dict.singleton "example/css" [ "src/Css/Internal/Units.elm" ] then
+                                            Expect.fail ("Should request Css.Internal.Units only, requested: " ++ Debug.toString needed)
+
+                                        else
+                                            case
+                                                projectWith
+                                                    [ "example/css", "elm/core" ]
+                                                    [ cssDependency, CoreFixture.core ]
+                                                    (Dict.singleton "example/css" [ hidden, units ])
+                                                    mainFiles
+                                            of
+                                                Err thirdErr ->
+                                                    Expect.fail ("Third pass should succeed, got: " ++ Debug.toString thirdErr)
+
+                                                Ok proj ->
+                                                    mainHasNoErrors proj mainFiles
+
+                                    _ ->
+                                        Expect.fail ("Second pass should request sources, not fail: " ++ Debug.toString err)
+
+                    _ ->
+                        Expect.fail "Regression source did not parse"
         , Test.test "`init` rejects a recursive alias in the provided sources" <|
             \() ->
                 case ( Elm.Parser.parseToFile recursiveHiddenSource, Elm.Parser.parseToFile mainSource ) of
@@ -183,6 +232,26 @@ suite =
                     _ ->
                         Expect.fail "Regression source did not parse"
         ]
+
+
+importingHiddenSource : String
+importingHiddenSource =
+    """module Css.Internal exposing (ExplicitLength)
+
+import Css.Internal.Units as Units
+import Elm.Kernel.Css
+
+type alias ExplicitLength =
+    { value : Int, unit : Units.Unit }
+"""
+
+
+unitsSource : String
+unitsSource =
+    """module Css.Internal.Units exposing (Unit)
+
+type Unit = Px | Pct
+"""
 
 
 recursiveHiddenSource : String

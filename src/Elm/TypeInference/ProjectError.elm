@@ -56,10 +56,13 @@ type alias Location =
     `docs.json` or sources refers to a module (`moduleName`) exposed by more
     than one package visible to that dependency.
 
-  - **`RecursiveAlias`:** Raised when a type alias in
-    `sourcesToResolveAmbiguity` refers to itself. This is rejected by Elm
-    compiler when publishing a package, so it only happens with hand-written
-    `sourcesToResolveAmbiguity` or `docs.json` files.
+  - **`TypeNotFound`, `WrongTypeArity`, `RecursiveAlias`:** Raised when a
+    type alias in `sourcesToResolveAmbiguity` mentions a type that can't be
+    found (eg. because the `docs.json` of the package defining it wasn't
+    provided), applies a type to the wrong number of arguments, or refers to
+    itself. The Elm compiler rejects all of these when publishing a package,
+    so they only happen with hand-written `sourcesToResolveAmbiguity` or
+    `docs.json` files, or with incomplete dependency information.
 
 -}
 type ProjectError
@@ -68,6 +71,8 @@ type ProjectError
     | ImpossibleDocsType { location : Location, type_ : Elm.Type.Type }
     | ImpossibleType { location : Location, typeAnnotation : TypeAnnotation }
     | AmbiguousModuleOwner { location : Location, moduleName : String, possiblePackages : List PackageName }
+    | TypeNotFound { location : Location, qualifier : ModuleName, typeName : VarName }
+    | WrongTypeArity { location : Location, moduleName : ModuleName, typeName : VarName, expected : Int, actual : Int }
     | RecursiveAlias { location : Location, aliases : List { moduleName : ModuleName, name : VarName } }
 
 
@@ -105,6 +110,21 @@ toString error =
                 ++ record
                     [ ( "moduleName", r.moduleName )
                     , ( "possiblePackages", list r.possiblePackages )
+                    ]
+                ++ locationToString r.location
+
+        TypeNotFound r ->
+            "Type not found "
+                ++ record
+                    [ ( "typeName", Elm.Syntax.ModuleName.Extra.qualifiedName r.qualifier r.typeName ) ]
+                ++ locationToString r.location
+
+        WrongTypeArity r ->
+            "Wrong type arity "
+                ++ record
+                    [ ( "typeName", Elm.Syntax.ModuleName.Extra.qualifiedName r.moduleName r.typeName )
+                    , ( "expected", String.fromInt r.expected )
+                    , ( "actual", String.fromInt r.actual )
                     ]
                 ++ locationToString r.location
 

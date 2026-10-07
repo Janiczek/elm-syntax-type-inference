@@ -14,7 +14,7 @@ import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Syntax.Node as Node
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
-import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..))
+import Elm.TypeInference.Error.Internal as InternalError exposing (FromTypeAnnotationError)
 import Elm.TypeInference.ModuleIds as ModuleIds
 import Elm.TypeInference.ModuleIndex as ModuleIndex
 import Elm.TypeInference.ModuleLookup as ModuleLookup
@@ -126,6 +126,10 @@ neededSources deps sources =
                     supplied =
                         suppliedModuleNames package sources
 
+                    isAvailable : String -> Bool
+                    isAvailable m =
+                        Dict.member m docsTypes || Set.member m supplied
+
                     remaining : Set String
                     remaining =
                         docsModuleRefs pkg.modules
@@ -138,6 +142,25 @@ neededSources deps sources =
                                         Set.insert m acc
                                 )
                                 Set.empty
+                            |> (\fromDocs ->
+                                    Dict.get package sources
+                                        |> Maybe.withDefault []
+                                        |> List.ExtraExtra.fastConcatMap .imports
+                                        |> List.foldl
+                                            (\(Node.Node _ import_) acc ->
+                                                let
+                                                    m : String
+                                                    m =
+                                                        ModuleNameExtra.toString (Node.value import_.moduleName)
+                                                in
+                                                if isAvailable m || isKernelModule m then
+                                                    acc
+
+                                                else
+                                                    Set.insert m acc
+                                            )
+                                            fromDocs
+                               )
                 in
                 if Set.isEmpty remaining then
                     needsSourcesAcc
@@ -149,6 +172,13 @@ neededSources deps sources =
                         :: needsSourcesAcc
             )
             []
+
+
+{-| `Elm.Kernel.*` modules are JavaScript; there is no Elm source to ask for.
+-}
+isKernelModule : String -> Bool
+isKernelModule dotted =
+    String.startsWith "Elm.Kernel." dotted
 
 
 suppliedModuleNames : PackageName -> Dict PackageName (List File) -> Set String
@@ -312,8 +342,15 @@ packageAliases moduleMapping deps package files =
             (\( file, thisModule ) dictAcrossFiles ->
                 let
                     resolver : TypeI.TypeResolver
-                    resolver qualifier name =
-                        ModuleLookup.typeResolverFor moduleMappingAfterIndexing index modules thisModule qualifier name
+                    resolver qualifier name arity =
+                        ModuleLookup.typeResolverFor
+                            moduleMappingAfterIndexing
+                            index
+                            modules
+                            thisModule
+                            qualifier
+                            name
+                            arity
                             |> Result.map
                                 (\( owner, moduleId ) ->
                                     ( if owner == "" then
@@ -360,15 +397,31 @@ packageAliases moduleMapping deps package files =
 fromTypeAnnotationError : Location -> FromTypeAnnotationError -> ProjectError
 fromTypeAnnotationError location err =
     case err of
-        ImpossibleAnnotation typeAnnotation ->
+        InternalError.ImpossibleAnnotation typeAnnotation ->
             ImpossibleType
                 { location = location
                 , typeAnnotation = typeAnnotation
                 }
 
-        AmbiguousModuleName ambiguity ->
+        InternalError.AmbiguousModuleName ambiguity ->
             AmbiguousModuleOwner
                 { location = location
                 , moduleName = ambiguity.moduleName
                 , possiblePackages = ambiguity.possiblePackages
+                }
+
+        InternalError.TypeNotFound r ->
+            TypeNotFound
+                { location = location
+                , qualifier = r.qualifier
+                , typeName = r.typeName
+                }
+
+        InternalError.WrongTypeArity r ->
+            WrongTypeArity
+                { location = location
+                , moduleName = r.moduleName
+                , typeName = r.typeName
+                , expected = r.expected
+                , actual = r.actual
                 }

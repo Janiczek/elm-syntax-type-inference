@@ -1,4 +1,7 @@
-module Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity, list, record)
+module Elm.TypeInference.Error.Internal exposing
+    ( FromTypeAnnotationError(..), ResolverAmbiguity
+    , list, record
+    )
 
 {-| Shared error types for type-annotation resolution.
 
@@ -14,6 +17,7 @@ Type errors themselves carry only the public `Elm.TypeInference.Type`, so
 
 -}
 
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.TypeAnnotation exposing (TypeAnnotation)
 
 
@@ -39,6 +43,18 @@ type FromTypeAnnotationError
 
       -}
       AmbiguousModuleName ResolverAmbiguity
+    | TypeNotFound
+        { usedIn : ModuleName
+        , qualifier : ModuleName
+        , typeName : String
+        }
+    | WrongTypeArity
+        { usedIn : ModuleName
+        , moduleName : ModuleName
+        , typeName : String
+        , expected : Int
+        , actual : Int
+        }
 
 
 {-| Renders `{ key = value, ... }` for diagnostic output.

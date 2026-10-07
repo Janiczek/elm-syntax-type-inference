@@ -2,7 +2,7 @@ module Elm.TypeInference.ImplicitImports exposing
     ( elmCorePackage
     , unaliasModuleId
     , implicitValueHomeId
-    , moduleExposingTypeId
+    , moduleExposingType
     , isImplicitlyImportedModule
     )
 
@@ -29,7 +29,7 @@ otherwise-unknown unqualified value can only come from `Basics`.
 @docs elmCorePackage
 @docs unaliasModuleId
 @docs implicitValueHomeId
-@docs moduleExposingTypeId
+@docs moduleExposingType
 @docs isImplicitlyImportedModule
 
 -}
@@ -103,53 +103,54 @@ implicitValueHomeId varName =
             ModuleIds.basicsId
 
 
-{-| Which implicit module exposes this type unqualified?
+{-| Which implicit module exposes this type unqualified, and how many
+arguments does the type take?
 (`Tuple` and `Debug` don't expose anything.)
 
 Module names are interned `Int`s: stable ids, no string building on the hot path.
 
 -}
-moduleExposingTypeId : String -> Maybe ModuleId
-moduleExposingTypeId typeName =
+moduleExposingType : String -> Maybe { moduleId : ModuleId, arity : Int }
+moduleExposingType typeName =
     case typeName of
         "Int" ->
-            Just ModuleIds.basicsId
+            Just { moduleId = ModuleIds.basicsId, arity = 0 }
 
         "Float" ->
-            Just ModuleIds.basicsId
+            Just { moduleId = ModuleIds.basicsId, arity = 0 }
 
         "Bool" ->
-            Just ModuleIds.basicsId
+            Just { moduleId = ModuleIds.basicsId, arity = 0 }
 
         "Never" ->
-            Just ModuleIds.basicsId
+            Just { moduleId = ModuleIds.basicsId, arity = 0 }
 
         "Order" ->
-            Just ModuleIds.basicsId
+            Just { moduleId = ModuleIds.basicsId, arity = 0 }
 
         "List" ->
-            Just ModuleIds.listId
+            Just { moduleId = ModuleIds.listId, arity = 1 }
 
         "Maybe" ->
-            Just ModuleIds.maybeId
+            Just { moduleId = ModuleIds.maybeId, arity = 1 }
 
         "Result" ->
-            Just ModuleIds.resultId
+            Just { moduleId = ModuleIds.resultId, arity = 2 }
 
         "String" ->
-            Just ModuleIds.stringId
+            Just { moduleId = ModuleIds.stringId, arity = 0 }
 
         "Char" ->
-            Just ModuleIds.charId
+            Just { moduleId = ModuleIds.charId, arity = 0 }
 
         "Program" ->
-            Just ModuleIds.platformId
+            Just { moduleId = ModuleIds.platformId, arity = 3 }
 
         "Cmd" ->
-            Just ModuleIds.platformCmdId
+            Just { moduleId = ModuleIds.platformCmdId, arity = 1 }
 
         "Sub" ->
-            Just ModuleIds.platformSubId
+            Just { moduleId = ModuleIds.platformSubId, arity = 1 }
 
         _ ->
             Nothing

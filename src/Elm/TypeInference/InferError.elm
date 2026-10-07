@@ -96,6 +96,78 @@ type alias InferError =
         --        ]
         --    }
 
+  - **`TypeNotFound`:**
+
+        module Main exposing (foo)
+
+        foo : Strng -> Int
+        foo _ =
+            1
+
+        --> TypeNotFound
+        --    { usedIn = [ "Main" ]
+        --    , qualifier = []
+        --    , typeName = "Strng"
+        --    }
+
+    Qualified names need the module to be imported:
+
+        module Main exposing (foo)
+
+        foo : Dict.Dict String Int -> Int
+        foo _ =
+            1
+
+        --> TypeNotFound
+        --    { usedIn = [ "Main" ]
+        --    , qualifier = [ "Dict" ]
+        --    , typeName = "Dict"
+        --    }
+
+    and the type to be exposed from it:
+
+        module Main exposing (foo)
+
+        import Other -- `module Other exposing (publicThing)`
+
+        foo : Other.Hidden -> Int
+        foo _ =
+            1
+
+        --> TypeNotFound
+        --    { usedIn = [ "Main" ]
+        --    , qualifier = [ "Other" ]
+        --    , typeName = "Hidden"
+        --    }
+
+  - **`WrongTypeArity`:**
+
+        module Main exposing (foo)
+
+        foo : Maybe Int Int -> Int
+        foo _ =
+            1
+
+        --> WrongTypeArity
+        --    { usedIn = [ "Main" ]
+        --    , moduleName = [ "Maybe" ]
+        --    , typeName = "Maybe"
+        --    , expected = 1
+        --    , actual = 2
+        --    }
+
+  - **`UnboundTypeVariable`:**
+
+        module Main exposing (Foo)
+
+        type alias Foo =
+            { x : a }
+
+        --> UnboundTypeVariable
+        --    { typeName = "Foo"
+        --    , typeVar = "a"
+        --    }
+
   - **`TypeMismatch`:**
 
         module Main exposing (foo)
@@ -156,12 +228,16 @@ type InferErrorDetails
     | VarNotFound { usedIn : ModuleName, varName : VarName }
     | AmbiguousName { usedIn : ModuleName, varName : VarName, possibleModules : List ModuleName }
     | AmbiguousModuleOwner { moduleName : String, possiblePackages : List String }
+      -- Type qualification errors
+    | TypeNotFound { usedIn : ModuleName, qualifier : ModuleName, typeName : VarName }
+    | WrongTypeArity { usedIn : ModuleName, moduleName : ModuleName, typeName : VarName, expected : Int, actual : Int }
       -- Type errors
     | TypeMismatch Type Type
     | InfiniteType Type Type
     | ConstraintMismatch Type Type
       -- Declaration errors
     | RecursiveAlias { aliases : List { moduleName : ModuleName, name : VarName } }
+    | UnboundTypeVariable { typeName : VarName, typeVar : VarName }
 
 
 {-| Render an error for diagnostic output.
@@ -231,6 +307,22 @@ detailsToString details =
                     , ( "possiblePackages", list r.possiblePackages )
                     ]
 
+        TypeNotFound r ->
+            "Type not found "
+                ++ record
+                    [ ( "usedIn", Elm.Syntax.ModuleName.Extra.toString r.usedIn )
+                    , ( "typeName", Elm.Syntax.ModuleName.Extra.qualifiedName r.qualifier r.typeName )
+                    ]
+
+        WrongTypeArity r ->
+            "Wrong type arity "
+                ++ record
+                    [ ( "usedIn", Elm.Syntax.ModuleName.Extra.toString r.usedIn )
+                    , ( "typeName", Elm.Syntax.ModuleName.Extra.qualifiedName r.moduleName r.typeName )
+                    , ( "expected", String.fromInt r.expected )
+                    , ( "actual", String.fromInt r.actual )
+                    ]
+
         TypeMismatch t1 t2 ->
             String.join " "
                 [ "Type mismatch"
@@ -258,6 +350,13 @@ detailsToString details =
                     [ ( "aliases"
                       , list (List.map (\alias_ -> Elm.Syntax.ModuleName.Extra.qualifiedName alias_.moduleName alias_.name) r.aliases)
                       )
+                    ]
+
+        UnboundTypeVariable r ->
+            "Unbound type variable "
+                ++ record
+                    [ ( "typeName", r.typeName )
+                    , ( "typeVar", r.typeVar )
                     ]
 
 

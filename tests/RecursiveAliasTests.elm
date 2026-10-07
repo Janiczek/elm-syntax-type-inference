@@ -59,7 +59,7 @@ rejectedCases =
         x = 1
         """, [ "T" ] )
     , ( "x", """
-        type alias R = { r | x : Int }
+        type alias R r = { r | x : Int }
         type alias Ext = { x : Int, next : R Ext }
 
         x : Int
@@ -173,10 +173,21 @@ crossModuleTests =
 
                 other ->
                     Expect.fail ("Expected an inference error, got: " ++ Debug.toString other)
-    , Test.test "a cycle through mutually importing modules names each alias's module" <|
+    , Test.test "in an import cycle, the module inferred first can't see the other's types" <|
         \() ->
-            getDeclTypeWithDeps [ CoreFixture.core ] importCycleWithAliasCycle [ "A" ] "a"
-                |> expectRecursiveAlias [ ( [ "A" ], "Outer" ), ( [ "B" ], "Inner" ) ]
+            case getDeclTypeWithDeps [ CoreFixture.core ] importCycleWithAliasCycle [ "B" ] "b" of
+                Err (CouldntInfer err) ->
+                    err.details
+                        |> Expect.equal
+                            (TypeNotFound
+                                { usedIn = [ "B" ]
+                                , qualifier = [ "A" ]
+                                , typeName = "Outer"
+                                }
+                            )
+
+                other ->
+                    Expect.fail ("Expected an inference error, got: " ++ Debug.toString other)
     ]
 
 

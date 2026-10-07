@@ -13,12 +13,11 @@ import Dict exposing (Dict)
 import Elm.Docs
 import Elm.Syntax.FullModuleName as FullModuleName exposing (FullModuleName)
 import Elm.Syntax.ModuleName exposing (ModuleName)
-import Elm.Syntax.ModuleName.Extra as ModuleNameExtra
 import Elm.Type
 import Elm.TypeInference.Dependencies exposing (Dependencies)
-import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
-import Elm.TypeInference.Error.Internal exposing (ResolverAmbiguity)
+import Elm.TypeInference.Error.Internal as InternalError exposing (ResolverAmbiguity)
 import Elm.TypeInference.ImplicitImports as ImplicitImports
+import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ImportIndex, ModuleIndex)
 import Elm.TypeInference.State as State exposing (StateM)
@@ -36,6 +35,7 @@ type Index
     = Index
         { values : NameIndex
         , types : NameIndex
+        , typeArities : Dict ModuleId (Dict VarName Int)
         , ctorParents : Dict ModuleId (Dict VarName VarName)
         , recordAliases : Dict ModuleId (Set VarName)
         }
@@ -67,6 +67,7 @@ addModule packageName mod ( Index idx, moduleMapping ) =
     ( Index
         { values = List.foldl (\name acc -> addName moduleId packageName name acc) idx.values (valueNamesOf mod)
         , types = List.foldl (\name acc -> addName moduleId packageName name acc) idx.types (typeNamesOf mod)
+        , typeArities = addTypeArities moduleId mod idx.typeArities
         , ctorParents = addCtorParents moduleId mod idx.ctorParents
         , recordAliases = addRecordAliases moduleId mod idx.recordAliases
         }
@@ -93,6 +94,23 @@ valueNamesOf mod =
 typeNamesOf : Elm.Docs.Module -> List VarName
 typeNamesOf mod =
     List.map .name mod.unions ++ List.map .name mod.aliases
+
+
+addTypeArities : ModuleId -> Elm.Docs.Module -> Dict ModuleId (Dict VarName Int) -> Dict ModuleId (Dict VarName Int)
+addTypeArities moduleId mod acc =
+    let
+        arities : Dict VarName Int
+        arities =
+            Dict.fromList
+                (List.map (\union -> ( union.name, List.length union.args )) mod.unions
+                    ++ List.map (\alias_ -> ( alias_.name, List.length alias_.args )) mod.aliases
+                )
+    in
+    Dict.update moduleId
+        (\existing ->
+            Just (Dict.union arities (Maybe.withDefault Dict.empty existing))
+        )
+        acc
 
 
 addCtorParents : ModuleId -> Elm.Docs.Module -> Dict ModuleId (Dict VarName VarName) -> Dict ModuleId (Dict VarName VarName)
@@ -174,6 +192,7 @@ emptyIndex =
     Index
         { values = Dict.empty
         , types = Dict.empty
+        , typeArities = Dict.empty
         , ctorParents = Dict.empty
         , recordAliases = Dict.empty
         }
@@ -611,24 +630,51 @@ isRecordAlias alias_ =
             False
 
 
-dependencyModuleDefinesType : Index -> ModuleId -> VarName -> Maybe ( PackageName, ModuleId )
-dependencyModuleDefinesType (Index index) moduleId typeName =
+type alias FoundType =
+    { package : PackageName
+    , moduleId : ModuleId
+    , arity : Int
+    }
+
+
+dependencyTypeArity : Index -> ModuleId -> VarName -> Maybe Int
+dependencyTypeArity (Index index) moduleId typeName =
+    Dict.get moduleId index.typeArities
+        |> Maybe.andThen (Dict.get typeName)
+
+
+dependencyType : Index -> PackageName -> ModuleId -> VarName -> FoundType
+dependencyType index packageName moduleId typeName =
+    { package = packageName
+    , moduleId = moduleId
+    , arity = Maybe.withDefault 0 (dependencyTypeArity index moduleId typeName)
+    }
+
+
+dependencyModuleDefinesType : Index -> ModuleId -> VarName -> Maybe FoundType
+dependencyModuleDefinesType ((Index index) as wrappedIndex) moduleId typeName =
     case ownersOf index.types moduleId typeName of
         [] ->
             Nothing
 
         packageName :: _ ->
-            Just ( packageName, moduleId )
+            Just (dependencyType wrappedIndex packageName moduleId typeName)
 
 
-implicitTypeModule : ModuleName -> VarName -> Maybe ( PackageName, ModuleId )
-implicitTypeModule qualifier typeName =
+implicitTypeModule : Index -> ModuleName -> VarName -> Maybe FoundType
+implicitTypeModule index qualifier typeName =
     if not (List.isEmpty qualifier) then
         Nothing
 
     else
-        ImplicitImports.moduleExposingTypeId typeName
-            |> Maybe.map (\id -> ( ImplicitImports.elmCorePackage, id ))
+        ImplicitImports.moduleExposingType typeName
+            |> Maybe.map
+                (\implicit ->
+                    { package = ImplicitImports.elmCorePackage
+                    , moduleId = implicit.moduleId
+                    , arity = Maybe.withDefault implicit.arity (dependencyTypeArity index implicit.moduleId typeName)
+                    }
+                )
 
 
 {-| A qualifier like `Parser.` can mean two different modules at once:
@@ -713,17 +759,26 @@ qualifierCandidates moduleMapping thisModule qualifier =
 
 
 typeResolverFor : ModuleIds.Mapping -> Index -> Dict ModuleId ModuleIndex -> ModuleIndex -> TypeResolver
-typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule qualifier typeName =
+typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule qualifier typeName actualArity =
     let
+        usedIn : ModuleName
+        usedIn =
+            FullModuleName.toModuleName thisModule.moduleName
+
         candidates : List ModuleId
         candidates =
             qualifierCandidates moduleMapping thisModule qualifier
 
-        firstParty : ModuleId -> Maybe ( PackageName, ModuleId )
+        projectType : ModuleIndex -> Maybe FoundType
+        projectType moduleIndex =
+            Dict.get typeName moduleIndex.typeArities
+                |> Maybe.map (\arity -> { package = "", moduleId = moduleIndex.moduleId, arity = arity })
+
+        firstParty : ModuleId -> Maybe FoundType
         firstParty unaliasedId =
             if unaliasedId == thisModule.moduleId && List.isEmpty qualifier then
                 if Set.member typeName thisModule.declaredTypes then
-                    Just ( "", thisModule.moduleId )
+                    projectType thisModule
 
                 else
                     thisModule.imports
@@ -736,7 +791,7 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                                     case Dict.get import_.moduleId modules of
                                         Just importedModule ->
                                             if Set.member typeName importedModule.exposedTypes then
-                                                Just ( "", import_.moduleId )
+                                                projectType importedModule
 
                                             else
                                                 Nothing
@@ -750,85 +805,74 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                     |> Maybe.andThen
                         (\moduleIndex ->
                             if Set.member typeName moduleIndex.exposedTypes then
-                                Just ( "", unaliasedId )
+                                projectType moduleIndex
 
                             else
                                 Nothing
                         )
 
-        dependency : ModuleId -> Result ResolverAmbiguity (Maybe ( PackageName, ModuleId ))
+        dependency : ModuleId -> Result ResolverAmbiguity (Maybe FoundType)
         dependency unaliasedId =
             if unaliasedId == thisModule.moduleId && List.isEmpty qualifier then
                 Ok Nothing
 
             else
-                let
-                    matchingPackages : List PackageName
-                    matchingPackages =
-                        ownersOf index.types unaliasedId typeName
-                in
-                case matchingPackages of
+                case ownersOf index.types unaliasedId typeName of
                     [] ->
                         Ok Nothing
 
                     [ single ] ->
-                        Ok (Just ( single, unaliasedId ))
+                        Ok (Just (dependencyType wrappedIndex single unaliasedId typeName))
 
-                    _ :: _ :: _ ->
+                    matchingPackages ->
                         Err
                             { moduleName = moduleIdToString moduleMapping unaliasedId
                             , possiblePackages = matchingPackages
                             }
     in
-    firstJustInCandidates firstParty dependency candidates
-        |> Result.map
-            (\resolved ->
+    case firstJustInCandidates firstParty dependency candidates of
+        Err ambiguity ->
+            Err (InternalError.AmbiguousModuleName ambiguity)
+
+        Ok resolved ->
+            case
                 case resolved of
-                    (Just _) as justFound ->
-                        justFound
+                    Just _ ->
+                        resolved
 
                     Nothing ->
-                        implicitTypeModule qualifier typeName
-            )
-        |> Result.andThen
-            (\maybeFound ->
-                case maybeFound of
-                    Just found ->
-                        Ok found
+                        implicitTypeModule wrappedIndex qualifier typeName
+            of
+                Nothing ->
+                    Err
+                        (InternalError.TypeNotFound
+                            { usedIn = usedIn
+                            , qualifier = qualifier
+                            , typeName = typeName
+                            }
+                        )
 
-                    Nothing ->
-                        let
-                            defaultId : Result ResolverAmbiguity ModuleId
-                            defaultId =
-                                case candidates of
-                                    head :: _ ->
-                                        Ok head
+                Just found ->
+                    if found.arity == actualArity then
+                        Ok ( found.package, found.moduleId )
 
-                                    [] ->
-                                        if List.isEmpty qualifier then
-                                            Ok thisModule.moduleId
-
-                                        else
-                                            case ModuleIds.getId (FullModuleName.fromModuleName_ qualifier) moduleMapping of
-                                                Just lid ->
-                                                    Ok lid
-
-                                                Nothing ->
-                                                    -- Unknown qualifier (not imported/implicit/interned).
-                                                    Err
-                                                        { moduleName = ModuleNameExtra.toString qualifier
-                                                        , possiblePackages = []
-                                                        }
-                        in
-                        Result.map (\id -> ( "", id )) defaultId
-            )
+                    else
+                        Err
+                            (InternalError.WrongTypeArity
+                                { usedIn = usedIn
+                                , moduleName = moduleIdToModuleName moduleMapping found.moduleId
+                                , typeName = typeName
+                                , expected = found.arity
+                                , actual = actualArity
+                                }
+                            )
 
 
 firstJustInCandidates :
-    (ModuleId -> Maybe ( PackageName, ModuleId ))
-    -> (ModuleId -> Result ResolverAmbiguity (Maybe ( PackageName, ModuleId )))
+    (ModuleId -> Maybe FoundType)
+    -> (ModuleId -> Result ResolverAmbiguity (Maybe FoundType))
     -> List ModuleId
-    -> Result ResolverAmbiguity (Maybe ( PackageName, ModuleId ))
+    -> Result ResolverAmbiguity (Maybe FoundType)
 firstJustInCandidates firstParty dependency candidates =
     case candidates of
         [] ->

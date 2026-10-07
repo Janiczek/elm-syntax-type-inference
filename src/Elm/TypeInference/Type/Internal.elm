@@ -30,9 +30,10 @@ import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
-import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..), ResolverAmbiguity)
+import Elm.Syntax.ModuleName exposing (ModuleName)
+import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..))
 import Elm.TypeInference.ImplicitImports as ImplicitImports
-import Elm.TypeInference.InferError exposing (InferErrorDetails(..))
+import Elm.TypeInference.InferError as InferError exposing (InferErrorDetails)
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.Type as Public exposing (PackageName, Type, VarName)
 import Elm.TypeInference.TypeVar as TypeVar
@@ -50,8 +51,11 @@ type alias Id =
     Int
 
 
+{-| Finds the module defining a type, given the number of arguments it's
+applied to.
+-}
 type alias TypeResolver =
-    List String -> String -> Result ResolverAmbiguity ( PackageName, ModuleId )
+    ModuleName -> VarName -> Int -> Result FromTypeAnnotationError ( PackageName, ModuleId )
 
 
 id_ : Id -> MonoType
@@ -1045,8 +1049,7 @@ fromTypeAnnotation resolver typeAnnotation =
                             ( moduleName, typeName ) =
                                 Node.value name
                         in
-                        resolver moduleName typeName
-                            |> Result.mapError AmbiguousModuleName
+                        resolver moduleName typeName (List.length args_)
                             |> Result.map
                                 (\( package, moduleId ) ->
                                     case collapsePrimitive package moduleId typeName args_ of
@@ -1112,10 +1115,16 @@ fromTypeAnnotationError : FromTypeAnnotationError -> InferErrorDetails
 fromTypeAnnotationError err =
     case err of
         ImpossibleAnnotation typeAnnotation ->
-            ImpossibleType typeAnnotation
+            InferError.ImpossibleType typeAnnotation
 
         AmbiguousModuleName ambiguity ->
-            AmbiguousModuleOwner ambiguity
+            InferError.AmbiguousModuleOwner ambiguity
+
+        TypeNotFound r ->
+            InferError.TypeNotFound r
+
+        WrongTypeArity r ->
+            InferError.WrongTypeArity r
 
 
 fromPublicType : ModuleIds.Mapping -> Public.Type -> Maybe MonoType

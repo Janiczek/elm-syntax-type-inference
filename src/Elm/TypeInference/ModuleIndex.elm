@@ -43,6 +43,7 @@ type alias ModuleIndex =
     , dottedModuleName : String
     , declaredValues : Set VarName
     , declaredTypes : Set VarName
+    , typeArities : Dict VarName Int
     , exposedValues : Set VarName
     , exposedTypes : Set VarName
     , unionConstructors : Dict VarName (List VarName)
@@ -139,6 +140,7 @@ fromFile moduleMapping file =
                                 values
                    )
       , declaredTypes = decls.types
+      , typeArities = decls.typeArities
       , exposedValues = exposedValues exposing_ decls
       , exposedTypes = exposedTypes exposing_ decls
       , unionConstructors = decls.unionConstructors
@@ -197,6 +199,7 @@ effectTypes file =
 type alias Declarations =
     { values : Set VarName
     , types : Set VarName
+    , typeArities : Dict VarName Int
     , unionConstructors : Dict VarName (List VarName)
     , recordAliases : Set VarName
     , infixes : Dict VarName VarName
@@ -207,6 +210,7 @@ emptyDeclarations : Declarations
 emptyDeclarations =
     { values = Set.empty
     , types = Set.empty
+    , typeArities = Dict.empty
     , unionConstructors = Dict.empty
     , recordAliases = Set.empty
     , infixes = Dict.empty
@@ -219,6 +223,7 @@ addDeclaration decl acc =
         FunctionDeclaration fn ->
             { values = Set.insert (Elm.Syntax.Expression.Extra.functionName fn) acc.values
             , types = acc.types
+            , typeArities = acc.typeArities
             , unionConstructors = acc.unionConstructors
             , recordAliases = acc.recordAliases
             , infixes = acc.infixes
@@ -246,6 +251,7 @@ addDeclaration decl acc =
                 else
                     acc.values
             , types = Set.insert name acc.types
+            , typeArities = Dict.insert name (List.length typeAlias.generics) acc.typeArities
             , unionConstructors = acc.unionConstructors
             , recordAliases =
                 if isRecord then
@@ -268,6 +274,7 @@ addDeclaration decl acc =
             in
             { values = List.foldl Set.insert acc.values ctorNames
             , types = Set.insert typeName acc.types
+            , typeArities = Dict.insert typeName (List.length customType.generics) acc.typeArities
             , unionConstructors =
                 if Dict.member typeName acc.unionConstructors then
                     acc.unionConstructors
@@ -281,6 +288,7 @@ addDeclaration decl acc =
         PortDeclaration signature ->
             { values = Set.insert (Node.value signature.name) acc.values
             , types = acc.types
+            , typeArities = acc.typeArities
             , unionConstructors = acc.unionConstructors
             , recordAliases = acc.recordAliases
             , infixes = acc.infixes
@@ -294,6 +302,7 @@ addDeclaration decl acc =
             in
             { values = Set.insert operator acc.values
             , types = acc.types
+            , typeArities = acc.typeArities
             , unionConstructors = acc.unionConstructors
             , recordAliases = acc.recordAliases
             , infixes =
@@ -307,6 +316,7 @@ addDeclaration decl acc =
         Destructuring pattern _ ->
             { values = Elm.Syntax.Pattern.Extra.insertVarNamesIntoSet (Node.value pattern) acc.values
             , types = acc.types
+            , typeArities = acc.typeArities
             , unionConstructors = acc.unionConstructors
             , recordAliases = acc.recordAliases
             , infixes = acc.infixes
