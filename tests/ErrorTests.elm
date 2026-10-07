@@ -285,19 +285,32 @@ withEmptyModuleName file =
         emptyName =
             Node.empty []
     in
-    { file
-        | moduleDefinition =
-            Node.Node range
-                (case oldModule of
-                    Module.NormalModule data ->
-                        Module.NormalModule { data | moduleName = emptyName }
+    { moduleDefinition =
+        Node.Node range
+            (case oldModule of
+                Module.NormalModule data ->
+                    Module.NormalModule
+                        { moduleName = emptyName
+                        , exposingList = data.exposingList
+                        }
 
-                    Module.PortModule data ->
-                        Module.PortModule { data | moduleName = emptyName }
+                Module.PortModule data ->
+                    Module.PortModule
+                        { moduleName = emptyName
+                        , exposingList = data.exposingList
+                        }
 
-                    Module.EffectModule data ->
-                        Module.EffectModule { data | moduleName = emptyName }
-                )
+                Module.EffectModule data ->
+                    Module.EffectModule
+                        { moduleName = emptyName
+                        , exposingList = data.exposingList
+                        , command = data.command
+                        , subscription = data.subscription
+                        }
+            )
+    , imports = file.imports
+    , declarations = file.declarations
+    , comments = file.comments
     }
 
 

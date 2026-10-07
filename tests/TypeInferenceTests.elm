@@ -69,6 +69,7 @@ suite =
         , unionConstructorReexposeRegression
         , recordConstructorReexposeRegression
         , unexposedUnionConstructorIsntFound
+        , letErrorsNameTheEnclosingDeclaration
         , unionConstructorShadowedByAliasRegression
         , selectiveUnionImportRegression
         , importWithSpecificExposes
@@ -1021,7 +1022,7 @@ texture =
 
 attr : List ( String, Type ) -> ShaderFields
 attr attributes =
-    { emptyShader | attributes = attributes }
+    { attributes = attributes, uniforms = [], varyings = [] }
 
 
 glslSuite : Test
@@ -1030,13 +1031,13 @@ glslSuite =
         [ Test.describe "storage qualifiers"
             (List.map testExpr
                 [ ( "[glsl|attribute vec3 a_position;|]"
-                  , isShader { emptyShader | attributes = [ ( "a_position", vec3 ) ] }
+                  , isShader { attributes = [ ( "a_position", vec3 ) ], uniforms = [], varyings = [] }
                   )
                 , ( "[glsl|uniform mat4 u_view;|]"
-                  , isShader { emptyShader | uniforms = [ ( "u_view", mat4 ) ] }
+                  , isShader { attributes = [], uniforms = [ ( "u_view", mat4 ) ], varyings = [] }
                   )
                 , ( "[glsl|varying vec2 v_texcoord;|]"
-                  , isShader { emptyShader | varyings = [ ( "v_texcoord", vec2 ) ] }
+                  , isShader { attributes = [], uniforms = [], varyings = [ ( "v_texcoord", vec2 ) ] }
                   )
                 ]
             )
@@ -1100,7 +1101,7 @@ glslSuite =
         , Test.describe "comments"
             (List.map testExpr
                 [ ( "[glsl|uniform /* hello */ mat4 u_x;|]"
-                  , isShader { emptyShader | uniforms = [ ( "u_x", mat4 ) ] }
+                  , isShader { attributes = [], uniforms = [ ( "u_x", mat4 ) ], varyings = [] }
                   )
                 , ( """
                     [glsl|
@@ -1133,22 +1134,24 @@ glslSuite =
             (List.map testExpr
                 [ ( "[glsl|uniform mat4 u_x, u_y, u_z;|]"
                   , isShader
-                        { emptyShader
-                            | uniforms =
-                                [ ( "u_x", mat4 )
-                                , ( "u_y", mat4 )
-                                , ( "u_z", mat4 )
-                                ]
+                        { attributes = []
+                        , uniforms =
+                            [ ( "u_x", mat4 )
+                            , ( "u_y", mat4 )
+                            , ( "u_z", mat4 )
+                            ]
+                        , varyings = []
                         }
                   )
                 , ( "[glsl|uniform /* hello */ mat4 u_x, u_y, u_z;|]"
                   , isShader
-                        { emptyShader
-                            | uniforms =
-                                [ ( "u_x", mat4 )
-                                , ( "u_y", mat4 )
-                                , ( "u_z", mat4 )
-                                ]
+                        { attributes = []
+                        , uniforms =
+                            [ ( "u_x", mat4 )
+                            , ( "u_y", mat4 )
+                            , ( "u_z", mat4 )
+                            ]
+                        , varyings = []
                         }
                   )
                 ]
@@ -1156,11 +1159,11 @@ glslSuite =
         , Test.describe "precision qualifiers"
             (List.map testExpr
                 [ ( "[glsl|uniform lowp float x;|]"
-                  , isShader { emptyShader | uniforms = [ ( "x", Float ) ] }
+                  , isShader { attributes = [], uniforms = [ ( "x", Float ) ], varyings = [] }
                   )
                 , ( "[glsl|attribute mediump vec3 x;|]", isShader (attr [ ( "x", vec3 ) ]) )
                 , ( "[glsl|uniform highp sampler2D x;|]"
-                  , isShader { emptyShader | uniforms = [ ( "x", texture ) ] }
+                  , isShader { attributes = [], uniforms = [ ( "x", texture ) ], varyings = [] }
                   )
                 ]
             )
@@ -1182,15 +1185,15 @@ glslSuite =
                 , -- The record sets are extensible, so shaders with different
                   -- fields unify too (their sets merge).
                   ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec3 y;|] ]"
-                  , isList (isShader { emptyShader | attributes = [ ( "x", vec3 ), ( "y", vec3 ) ] })
+                  , isList (isShader { attributes = [ ( "x", vec3 ), ( "y", vec3 ) ], uniforms = [], varyings = [] })
                   )
                 , ( "[ [glsl|attribute vec3 x;|], [glsl|attribute vec2 x;|] ]", fails )
                 , ( "[ [glsl|attribute vec3 x;|], [glsl|uniform vec3 x;|] ]"
                   , isList
                         (isShader
-                            { emptyShader
-                                | attributes = [ ( "x", vec3 ) ]
-                                , uniforms = [ ( "x", vec3 ) ]
+                            { attributes = [ ( "x", vec3 ) ]
+                            , uniforms = [ ( "x", vec3 ) ]
+                            , varyings = []
                             }
                         )
                   )
@@ -1204,10 +1207,10 @@ glslSuite =
                   , isShader (attr [ ( "x", vec3 ) ])
                   )
                 , ( "[glsl|uniform mat4 u;|]"
-                  , isShader { emptyShader | uniforms = [ ( "u", mat4 ) ] }
+                  , isShader { attributes = [], uniforms = [ ( "u", mat4 ) ], varyings = [] }
                   )
                 , ( "[glsl|varying vec2 v;|]"
-                  , isShader { emptyShader | varyings = [ ( "v", vec2 ) ] }
+                  , isShader { attributes = [], uniforms = [], varyings = [ ( "v", vec2 ) ] }
                   )
                 , ( """
                     [glsl|
@@ -4068,6 +4071,100 @@ unexposedUnionConstructorIsntFound =
                     )
 
 
+letErrorsNameTheEnclosingDeclaration : Test
+letErrorsNameTheEnclosingDeclaration =
+    Test.describe "type errors inside `let` name the enclosing top-level declaration"
+        [ Test.test "let function" <|
+            \() ->
+                getDeclTypeWithDeps [ CoreFixture.core ]
+                    (Dict.fromList
+                        [ ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (outer)
+
+        outer : Int
+        outer =
+            let
+                inner = 1 + "a"
+            in
+            inner
+        """
+                          )
+                        ]
+                    )
+                    [ "Main" ]
+                    "outer"
+                    |> Expect.equal
+                        (Err
+                            (CouldntInfer
+                                { moduleName = [ "Main" ]
+                                , declarationNames = [ "outer" ]
+                                , details = ConstraintMismatch (TypeVar "number") String
+                                }
+                            )
+                        )
+        , Test.test "let destructuring" <|
+            \() ->
+                getDeclTypeWithDeps [ CoreFixture.core ]
+                    (Dict.fromList
+                        [ ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (outer)
+
+        outer : Int
+        outer =
+            let
+                ( a, b ) = 1 + "a"
+            in
+            a
+        """
+                          )
+                        ]
+                    )
+                    [ "Main" ]
+                    "outer"
+                    |> Expect.equal
+                        (Err
+                            (CouldntInfer
+                                { moduleName = [ "Main" ]
+                                , declarationNames = [ "outer" ]
+                                , details = ConstraintMismatch (TypeVar "number") String
+                                }
+                            )
+                        )
+        , Test.test "mutually recursive group lists every member" <|
+            \() ->
+                getDeclTypeWithDeps [ CoreFixture.core ]
+                    (Dict.fromList
+                        [ ( [ "Main" ]
+                          , String.ExtraExtra.multilineInput """
+        module Main exposing (ping, pong)
+
+        ping n =
+            let
+                bad = 1 + "a"
+            in
+            pong n
+
+        pong n =
+            ping n
+        """
+                          )
+                        ]
+                    )
+                    [ "Main" ]
+                    "ping"
+                    |> Expect.equal
+                        (Err
+                            (CouldntInfer
+                                { moduleName = [ "Main" ]
+                                , declarationNames = [ "pong", "ping" ]
+                                , details = ConstraintMismatch (TypeVar "number") String
+                                }
+                            )
+                        )
+        ]
+
 unionConstructorShadowedByAliasRegression : Test
 unionConstructorShadowedByAliasRegression =
     Test.test "a union constructor sharing its name with a type alias in the same exposing list still resolves (MackeyRMS-elm-ui-with-context Internal.Attr/Attribute)" <|
@@ -5480,17 +5577,30 @@ withEmptyModuleName file =
         emptyName =
             Node.empty []
     in
-    { file
-        | moduleDefinition =
-            Node.Node range
-                (case oldModule of
-                    Module.NormalModule data ->
-                        Module.NormalModule { data | moduleName = emptyName }
+    { moduleDefinition =
+        Node.Node range
+            (case oldModule of
+                Module.NormalModule data ->
+                    Module.NormalModule
+                        { moduleName = emptyName
+                        , exposingList = data.exposingList
+                        }
 
-                    Module.PortModule data ->
-                        Module.PortModule { data | moduleName = emptyName }
+                Module.PortModule data ->
+                    Module.PortModule
+                        { moduleName = emptyName
+                        , exposingList = data.exposingList
+                        }
 
-                    Module.EffectModule data ->
-                        Module.EffectModule { data | moduleName = emptyName }
-                )
+                Module.EffectModule data ->
+                    Module.EffectModule
+                        { moduleName = emptyName
+                        , exposingList = data.exposingList
+                        , command = data.command
+                        , subscription = data.subscription
+                        }
+            )
+    , imports = file.imports
+    , declarations = file.declarations
+    , comments = file.comments
     }

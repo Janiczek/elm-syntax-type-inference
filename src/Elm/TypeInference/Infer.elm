@@ -1,7 +1,7 @@
 module Elm.TypeInference.Infer exposing
     ( Ctx
     , topLevelMember
-    , unifyConfigForGroup
+    , unifyConfig
     )
 
 {-| A traversal over elm-syntax AST
@@ -58,6 +58,8 @@ type alias Ctx =
     , resolvedVars : Dict ( {- written -} ModuleName, VarName ) (Result InferErrorDetails (Maybe ( PackageName, ModuleId )))
     , -- Keyed by source name (eg. `"a"`, `"comparable1"`).
       rigidTypeVars : Dict String TypeVar
+    , -- The top-level binding group being inferred, for error messages
+      declarationNames : List VarName
     }
 
 
@@ -79,14 +81,9 @@ resolveVar ctx qualifier name =
 
 unifyConfig : Ctx -> Unify.UnifyConfig
 unifyConfig ctx =
-    unifyConfigForGroup ctx []
-
-
-unifyConfigForGroup : Ctx -> List VarName -> Unify.UnifyConfig
-unifyConfigForGroup ctx declarationNames =
     { typeAliases = ctx.typeAliases
     , moduleName = ctx.thisModule.moduleName
-    , declarationNames = declarationNames
+    , declarationNames = ctx.declarationNames
     , moduleMapping = ctx.moduleMapping
     }
 
@@ -352,12 +349,19 @@ withRigidTypeVars renaming ctx =
             ctx
 
         _ ->
-            { ctx
-                | rigidTypeVars =
-                    List.foldl
-                        (\( bound, fresh ) acc -> Dict.insert (TypeVar.toString bound) fresh acc)
-                        ctx.rigidTypeVars
-                        renaming
+            { modules = ctx.modules
+            , thisModule = ctx.thisModule
+            , typeAliases = ctx.typeAliases
+            , index = ctx.index
+            , allowKernel = ctx.allowKernel
+            , moduleMapping = ctx.moduleMapping
+            , resolvedVars = ctx.resolvedVars
+            , rigidTypeVars =
+                List.foldl
+                    (\( bound, fresh ) acc -> Dict.insert (TypeVar.toString bound) fresh acc)
+                    ctx.rigidTypeVars
+                    renaming
+            , declarationNames = ctx.declarationNames
             }
 
 

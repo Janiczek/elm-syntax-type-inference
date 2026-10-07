@@ -1724,8 +1724,8 @@ solveModule ctx typeAliases file =
         sccs =
             SCC.stronglyConnectedComponents (Dict.keys topLevelFunctions) edges
 
-        inferCtx : Infer.Ctx
-        inferCtx =
+        inferCtx : List VarName -> Infer.Ctx
+        inferCtx group =
             { modules = ctx.modules
             , thisModule = ctx.thisIndex
             , typeAliases = typeAliases
@@ -1734,19 +1734,24 @@ solveModule ctx typeAliases file =
             , moduleMapping = ctx.moduleMapping
             , resolvedVars = resolvedVars
             , rigidTypeVars = Dict.empty
+            , declarationNames = group
             }
     in
     sccs
         |> State.traverseUnit
             (\group ->
+                let
+                    groupCtx : Infer.Ctx
+                    groupCtx =
+                        inferCtx group
+                in
                 group
                     |> List.filterMap (\key -> Dict.get key topLevelFunctions)
-                    |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember inferCtx declNode fn)
+                    |> State.traverse (\( declNode, fn ) -> Infer.topLevelMember groupCtx declNode fn)
                     |> State.andThen
                         (\inferredMembers ->
                             inferredMembers
-                                |> BindingGroup.solveGroup
-                                    (Infer.unifyConfigForGroup inferCtx group)
+                                |> BindingGroup.solveGroup (Infer.unifyConfig groupCtx)
                         )
             )
 
