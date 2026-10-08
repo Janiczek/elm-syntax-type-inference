@@ -835,15 +835,17 @@ typeResolverFor moduleMapping ((Index index) as wrappedIndex) modules thisModule
                 usedIn : ModuleName
                 usedIn =
                     FullModuleName.toModuleName thisModule.moduleName
-            in
-            case
-                case resolved of
-                    Just _ ->
-                        resolved
 
-                    Nothing ->
-                        implicitTypeModule wrappedIndex qualifier typeName
-            of
+                maybeFound : Maybe FoundType
+                maybeFound =
+                    case resolved of
+                        Nothing ->
+                            implicitTypeModule wrappedIndex qualifier typeName
+
+                        Just _ ->
+                            resolved
+            in
+            case maybeFound of
                 Nothing ->
                     Err
                         (InternalError.TypeNotFound

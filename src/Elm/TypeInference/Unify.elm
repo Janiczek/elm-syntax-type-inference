@@ -71,6 +71,7 @@ unifyManyHelp cfg eqs state =
                     , globalEnv = state.globalEnv
                     , subst = subst2
                     , letRank = state.letRank
+                    , naming = state.naming
                     }
             in
             case

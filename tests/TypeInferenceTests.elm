@@ -65,6 +65,8 @@ suite =
         , aliasParamNameCollisionRegression
         , preferredTypeVarNamesFromTypeDeclarations
         , letBoundTypeVarNamesMatchEnclosingDeclarationRegression
+        , letBoundTypeVarReusesNonInterferingNamesRegression
+        , letBoundTypeVarNamesAreValidAnnotationsRegression
         , recordConstructorFunctionRegression
         , unionConstructorReexposeRegression
         , recordConstructorReexposeRegression
@@ -3932,6 +3934,291 @@ merge leftStep bothStep rightStep leftDict rightDict initialResult =
                             )
 
 
+{-| Type of the first `name = ...` or `name arg = ...` let binding's name in `source`.
+-}
+letBindingType : String -> String -> Result String String
+letBindingType source name =
+    parseModules (Dict.singleton [ "Main" ] source)
+        |> Result.andThen (Dict.values >> buildProject Nothing [ CoreFixture.core.name ] [ CoreFixture.core ])
+        |> Result.mapError Debug.toString
+        |> Result.andThen
+            (\proj ->
+                let
+                    range : Range
+                    range =
+                        String.lines source
+                            |> List.indexedMap Tuple.pair
+                            |> List.filter (\( _, line ) -> String.startsWith (name ++ " ") (String.trimLeft line) && String.contains "=" line)
+                            |> List.head
+                            |> Maybe.map
+                                (\( index, line ) ->
+                                    let
+                                        column : Int
+                                        column =
+                                            String.length line - String.length (String.trimLeft line) + 1
+                                    in
+                                    { start = { row = index + 1, column = column }
+                                    , end = { row = index + 1, column = column + String.length name }
+                                    }
+                                )
+                            |> Maybe.withDefault
+                                { start = { row = -1, column = -1 }
+                                , end = { row = -1, column = -1 }
+                                }
+                in
+                Elm.TypeInference.getType [ "Main" ] range proj
+                    |> Tuple.first
+                    |> Result.mapError Debug.toString
+                    |> Result.map Type.toString
+            )
+
+
+topLevelType : String -> String -> Result String String
+topLevelType source name =
+    getDeclTypeWithDeps [ CoreFixture.core ] (Dict.singleton [ "Main" ] source) [ "Main" ] name
+        |> Result.mapError Debug.toString
+        |> Result.map Type.toString
+
+
+letBoundTypeVarReusesNonInterferingNamesRegression : Test
+letBoundTypeVarReusesNonInterferingNamesRegression =
+    let
+        source : String
+        source =
+            String.ExtraExtra.multilineInput """
+module Main exposing (a, b)
+
+a : number
+a =
+    let
+        x = 1
+        y = ""
+        z = ( x, 2 )
+    in
+    2
+
+b =
+    let
+        w = 1
+    in
+    ( w, 2 )
+"""
+    in
+    Test.describe "a let-bound typevar reuses a name already used elsewhere in the declaration if the two never appear in the same type"
+        [ Test.test "`number` taken by the annotation" <|
+            \() ->
+                letBindingType source "x"
+                    |> Expect.equal (Ok "number")
+        , Test.test "unrelated let binding is unaffected" <|
+            \() ->
+                letBindingType source "y"
+                    |> Expect.equal (Ok "String")
+        , Test.test "typevars in the same type still get distinct names" <|
+            \() ->
+                letBindingType source "z"
+                    |> Expect.equal (Ok "( number, number1 )")
+        , Test.test "`number` taken by the unannotated declaration's own type" <|
+            \() ->
+                ( topLevelType source "b"
+                , letBindingType source "w"
+                )
+                    |> Expect.equal
+                        ( Ok "( number, number1 )"
+                        , Ok "number"
+                        )
+        ]
+
+
+{-| Elm scopes `let` annotation typevars to the enclosing annotations:
+
+    f : a -> a
+    f x =
+        let
+            y : a
+            -- the same `a` as in `f`
+            y =
+                x
+        in
+        y
+
+So the names we show must be ones that would compile if written as annotations.
+
+-}
+letBoundTypeVarNamesAreValidAnnotationsRegression : Test
+letBoundTypeVarNamesAreValidAnnotationsRegression =
+    Test.describe "let-bound typevar names are valid under Elm's annotation typevar scoping"
+        [ Test.test "let-polymorphic binding used at another type than the enclosing annotation's var can't borrow its name" <|
+            \() ->
+                -- `id : a -> a` would scope `a` to `f`'s and make `id 1` fail.
+                letBindingType
+                    (String.ExtraExtra.multilineInput """
+module Main exposing (f)
+
+f : a -> ( number, a )
+f v =
+    let
+        id w = w
+    in
+    ( id 1, id v )
+""")
+                    "id"
+                    |> Expect.equal (Ok "b -> b")
+        , Test.test "let-polymorphic binding used only at the enclosing annotation's var can borrow its name" <|
+            \() ->
+                letBindingType
+                    (String.ExtraExtra.multilineInput """
+module Main exposing (f)
+
+f : a -> a
+f v =
+    let
+        id w = w
+    in
+    id v
+""")
+                    "id"
+                    |> Expect.equal (Ok "a -> a")
+        , Test.test "unannotated declaration can't borrow an inner annotation's name if that would change the inner binding's meaning" <|
+            \() ->
+                -- `m : number -> ( number, Float )` would scope `x`'s `number` to `m`'s and make `x + 1.5` fail.
+                let
+                    source : String
+                    source =
+                        String.ExtraExtra.multilineInput """
+module Main exposing (m)
+
+m n =
+    let
+        x : number
+        x = 1
+    in
+    ( n + 1, x + 1.5 )
+"""
+                in
+                ( topLevelType source "m"
+                , letBindingType source "x"
+                )
+                    |> Expect.equal
+                        ( Ok "number1 -> ( number1, Float )"
+                        , Ok "number"
+                        )
+        , Test.test "unannotated declaration can borrow an inner annotation's name if the inner binding is only used at that var" <|
+            \() ->
+                let
+                    source : String
+                    source =
+                        String.ExtraExtra.multilineInput """
+module Main exposing (m)
+
+m n =
+    let
+        x : number
+        x = 1
+    in
+    n + x
+"""
+                in
+                ( topLevelType source "m"
+                , letBindingType source "x"
+                )
+                    |> Expect.equal
+                        ( Ok "number -> number"
+                        , Ok "number"
+                        )
+        , Test.test "sibling lets don't scope over each other" <|
+            \() ->
+                -- Annotating `z : number` is fine: `x`'s let doesn't enclose `z`'s.
+                let
+                    source : String
+                    source =
+                        String.ExtraExtra.multilineInput """
+module Main exposing (f)
+
+f : Int
+f =
+    let
+        x = 1
+
+        y =
+            let
+                z = 2
+            in
+            z + 1.5
+    in
+    0
+"""
+                in
+                ( letBindingType source "x"
+                , letBindingType source "y"
+                , letBindingType source "z"
+                )
+                    |> Expect.equal
+                        ( Ok "number"
+                        , Ok "Float"
+                        , Ok "number"
+                        )
+        , Test.test "the unannotated declaration's own type scopes over nested lets too" <|
+            \() ->
+                -- `f : number` + `z : number` would make `z + 1.5` fail.
+                let
+                    source : String
+                    source =
+                        String.ExtraExtra.multilineInput """
+module Main exposing (f)
+
+f =
+    let
+        x = 1
+
+        y =
+            let
+                z = 2
+            in
+            z + 1.5
+    in
+    x
+"""
+                in
+                ( topLevelType source "f"
+                , letBindingType source "x"
+                , letBindingType source "z"
+                )
+                    |> Expect.equal
+                        ( Ok "number"
+                        , Ok "number"
+                        , Ok "number1"
+                        )
+        , Test.test "nested let under the enclosing annotation's var" <|
+            \() ->
+                -- `z : number` would scope to `f`'s `number`, and `z + 1.5` would fail.
+                let
+                    source : String
+                    source =
+                        String.ExtraExtra.multilineInput """
+module Main exposing (f)
+
+f : number -> number
+f n =
+    let
+        y =
+            let
+                z = 2
+            in
+            z + 1.5
+    in
+    n
+"""
+                in
+                ( letBindingType source "y"
+                , letBindingType source "z"
+                )
+                    |> Expect.equal
+                        ( Ok "Float"
+                        , Ok "number1"
+                        )
+        ]
+
+
 recordConstructorFunctionRegression : Test
 recordConstructorFunctionRegression =
     Test.test "a record type alias's own module can call it as a constructor function" <|
@@ -4164,6 +4451,7 @@ letErrorsNameTheEnclosingDeclaration =
                             )
                         )
         ]
+
 
 unionConstructorShadowedByAliasRegression : Test
 unionConstructorShadowedByAliasRegression =

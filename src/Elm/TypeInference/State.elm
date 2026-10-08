@@ -15,6 +15,7 @@ module Elm.TypeInference.State exposing
     , generalize
     , generalizeBinding
     , getGlobalEnv
+    , getNaming
     , getNextIdAndTick
     , getNodeIds
     , getSubst
@@ -29,6 +30,7 @@ module Elm.TypeInference.State exposing
     , okUnit
     , pure
     , pureUnit
+    , rememberQuantifiedByLet
     , run
     , setIdToCurrentLetRank
     , test_initFull
@@ -47,6 +49,7 @@ import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.Range exposing (Range)
 import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
+import Elm.TypeInference.Naming as Naming exposing (Naming)
 import Elm.TypeInference.SubstitutionMap as SubstitutionMap exposing (LetRank, SubstitutionMap)
 import Elm.TypeInference.Type exposing (PackageName, VarName)
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, MonoType, Type(..))
@@ -91,6 +94,24 @@ type alias State =
       subst : SubstitutionMap
     , -- Enclosing let-rank.
       letRank : LetRank
+    , naming : Naming
+    }
+
+
+getNaming : StateM Naming
+getNaming =
+    \state -> ( Ok state.naming, state )
+
+
+setNaming : Naming -> State -> State
+setNaming naming state =
+    { nextId = state.nextId
+    , nodeIds = state.nodeIds
+    , lexicalEnv = state.lexicalEnv
+    , globalEnv = state.globalEnv
+    , subst = state.subst
+    , letRank = state.letRank
+    , naming = naming
     }
 
 
@@ -249,6 +270,7 @@ empty =
     , globalEnv = Dict.empty
     , subst = SubstitutionMap.empty
     , letRank = 0
+    , naming = Naming.empty
     }
 
 
@@ -260,6 +282,7 @@ init globalEnv =
     , globalEnv = globalEnv
     , subst = SubstitutionMap.empty
     , letRank = 0
+    , naming = Naming.empty
     }
 
 
@@ -275,6 +298,7 @@ test_initFull env =
     , globalEnv = env.globalEnv
     , subst = SubstitutionMap.empty
     , letRank = 0
+    , naming = Naming.empty
     }
 
 
@@ -291,6 +315,7 @@ tickNextId state =
     , globalEnv = state.globalEnv
     , subst = SubstitutionMap.stampIdAtLetRank state.nextId state.letRank state.subst
     , letRank = state.letRank
+    , naming = state.naming
     }
 
 
@@ -308,6 +333,7 @@ withDeeperLetRank action =
                     , globalEnv = state.globalEnv
                     , subst = state.subst
                     , letRank = state.letRank + 1
+                    , naming = state.naming
                     }
         in
         ( result
@@ -317,6 +343,7 @@ withDeeperLetRank action =
           , globalEnv = newState.globalEnv
           , subst = newState.subst
           , letRank = state.letRank
+          , naming = newState.naming
           }
         )
 
@@ -371,6 +398,7 @@ aliasNodeId range theId =
             , globalEnv = state.globalEnv
             , subst = state.subst
             , letRank = state.letRank
+            , naming = state.naming
             }
         )
 
@@ -394,6 +422,7 @@ modifySubst fn =
             , globalEnv = state.globalEnv
             , subst = fn state.subst
             , letRank = state.letRank
+            , naming = state.naming
             }
         )
 
@@ -415,6 +444,7 @@ substituteMono monoType state =
       , globalEnv = state.globalEnv
       , subst = subst1
       , letRank = state.letRank
+      , naming = state.naming
       }
     )
 
@@ -435,6 +465,7 @@ substitute type_ =
           , globalEnv = state.globalEnv
           , subst = subst1
           , letRank = state.letRank
+          , naming = state.naming
           }
         )
 
@@ -451,6 +482,7 @@ stateAddBinding var type_ state =
     , globalEnv = state.globalEnv
     , subst = state.subst
     , letRank = state.letRank
+    , naming = state.naming
     }
 
 
@@ -476,6 +508,7 @@ withScopedEnv action =
           , globalEnv = newState.globalEnv
           , subst = newState.subst
           , letRank = newState.letRank
+          , naming = newState.naming
           }
         )
 
@@ -513,7 +546,7 @@ lookupEnv thisModule var =
                     ( substituted, state1 ) =
                         substitute type_ state0
                 in
-                instantiate substituted state1
+                instantiateLexical substituted state1
 
 
 
@@ -535,6 +568,7 @@ addGlobalBinding key type_ =
             , globalEnv = Dict.insert key type_ state.globalEnv
             , subst = state.subst
             , letRank = state.letRank
+            , naming = state.naming
             }
         )
 
@@ -583,6 +617,13 @@ instantiate =
     instantiateHelp { rigid = False }
 
 
+instantiateLexical : Type -> StateM MonoType
+instantiateLexical scheme =
+    do (instantiateWithRenaming { rigid = False } scheme) <| \( monoType, renaming ) ->
+    do (modify (\state -> setNaming (Naming.addInstantiated renaming state.naming) state)) <| \() ->
+    pure monoType
+
+
 {-| Like `instantiate`, but the fresh vars are rigid: they can only become non-rigid variables.
 Used to catch eg.
 
@@ -594,7 +635,12 @@ Also returns which fresh var each annotation var became (useful for nested `let`
 
 -}
 instantiateAnnotation : Type -> StateM ( MonoType, List ( TypeVar, TypeVar ) )
-instantiateAnnotation (Forall boundVars monoType) =
+instantiateAnnotation =
+    instantiateWithRenaming { rigid = True }
+
+
+instantiateWithRenaming : { rigid : Bool } -> Type -> StateM ( MonoType, List ( TypeVar, TypeVar ) )
+instantiateWithRenaming rigid (Forall boundVars monoType) =
     case boundVars of
         [] ->
             pure ( monoType, [] )
@@ -603,7 +649,7 @@ instantiateAnnotation (Forall boundVars monoType) =
             \state0 ->
                 let
                     ( renaming, state1 ) =
-                        freshRenaming { rigid = True } boundVars [] state0
+                        freshRenaming rigid boundVars [] state0
                 in
                 ( Ok
                     ( TypeI.mapVarsMono (\var -> lookupRenaming var renaming) monoType
@@ -649,8 +695,8 @@ freshRenaming rigid vars acc state =
                 freshId =
                     state.nextId
 
-                hint : Maybe SubstitutionMap.NameHint
-                hint =
+                preferredName : Maybe SubstitutionMap.PreferredName
+                preferredName =
                     case style of
                         Named name ->
                             Just
@@ -660,7 +706,7 @@ freshRenaming rigid vars acc state =
                                 }
 
                         Generated id ->
-                            case SubstitutionMap.hintOf id state.subst of
+                            case SubstitutionMap.preferredNameOf id state.subst of
                                 Just h ->
                                     Just
                                         { name = h.name
@@ -678,14 +724,15 @@ freshRenaming rigid vars acc state =
             freshRenaming rigid
                 rest
                 (( var, ( Generated freshId, super ) ) :: acc)
-                (case hint of
+                (case preferredName of
                     Just h ->
                         { nextId = ticked.nextId
                         , nodeIds = ticked.nodeIds
                         , lexicalEnv = ticked.lexicalEnv
                         , globalEnv = ticked.globalEnv
-                        , subst = SubstitutionMap.setHint freshId h ticked.subst
+                        , subst = SubstitutionMap.setPreferredName freshId h ticked.subst
                         , letRank = ticked.letRank
+                        , naming = ticked.naming
                         }
 
                     Nothing ->
@@ -729,8 +776,8 @@ sameTypeVar ( style1, super1 ) ( style2, super2 ) =
                     False
 
 
-generalize : MonoType -> StateM Type
-generalize monoType =
+generalize : Maybe RangeLike -> MonoType -> StateM Type
+generalize letDeclaration monoType =
     \state0 ->
         let
             ( substitutedMono, state1 ) =
@@ -742,8 +789,22 @@ generalize monoType =
                     |> TypeVar.deduplicate
                     |> List.filter
                         (\var -> SubstitutionMap.letRankOf var state1.subst > state1.letRank)
+
+            state2 : State
+            state2 =
+                case letDeclaration of
+                    Just range ->
+                        setNaming (Naming.addQuantifiedByLet range boundIds state1.naming) state1
+
+                    Nothing ->
+                        state1
         in
-        ( Ok (Forall boundIds substitutedMono), state1 )
+        ( Ok (Forall boundIds substitutedMono), state2 )
+
+
+rememberQuantifiedByLet : RangeLike -> List TypeVar -> StateM ()
+rememberQuantifiedByLet range vars =
+    modify (\state -> setNaming (Naming.addQuantifiedByLet range vars state.naming) state)
 
 
 {-| Generalize a lexical binding in place (for `let` destructurings).
@@ -751,8 +812,8 @@ generalize monoType =
 Each name gets its own scheme - they are independent.
 
 -}
-generalizeBinding : VarName -> StateM ()
-generalizeBinding var =
+generalizeBinding : Maybe RangeLike -> VarName -> StateM ()
+generalizeBinding letDeclaration var =
     \state0 ->
         case Dict.get var state0.lexicalEnv of
             Nothing ->
@@ -761,7 +822,7 @@ generalizeBinding var =
             Just (Forall _ mono) ->
                 let
                     ( schemeResult, state1 ) =
-                        generalize mono state0
+                        generalize letDeclaration mono state0
                 in
                 case schemeResult of
                     Err err ->

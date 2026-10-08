@@ -45,6 +45,7 @@ import Elm.TypeInference.Type.Internal as TypeI
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (Equations)
 import Elm.TypeInference.TypeVar as TypeVar exposing (TypeVar)
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
+import RangeLike exposing (RangeLike)
 import Regex exposing (Regex)
 
 
@@ -365,52 +366,79 @@ withRigidTypeVars renaming ctx =
             }
 
 
+type alias Annotated =
+    { scheme : Type
+    , rigidType : MonoType
+    , renaming : List ( TypeVar, TypeVar )
+    }
+
+
+annotated : Ctx -> Expression.Function -> StateM (Maybe Annotated)
+annotated ctx fn =
+    State.do (annotationType ctx fn.signature) <| \maybeAnnotationType ->
+    case maybeAnnotationType of
+        Nothing ->
+            State.pure Nothing
+
+        Just annotationMono ->
+            let
+                scheme : Type
+                scheme =
+                    annotationScheme ctx annotationMono
+            in
+            State.do (State.instantiateAnnotation scheme) <| \( rigidType, renaming ) ->
+            State.pure
+                (Just
+                    { scheme = scheme
+                    , rigidType = rigidType
+                    , renaming = renaming
+                    }
+                )
+
+
 {-| Shared body of `topLevelMember` and `letFunctionMember`.
-Only the install step differs: `globalEnv` vs lexical env.
+Only the install step and the annotation handling differ.
 -}
 functionMember :
     Ctx
     -> Node a
     -> Expression.Function
+    -> Maybe RangeLike
+    -> Maybe Annotated
     -> (VarName -> Type -> StateM ())
     -> StateM BindingGroup.Member
-functionMember ctx declNode fn installFor =
+functionMember ctx declNode fn letDeclaration maybeAnnotated installFor =
     State.do (State.idForNode declNode) <| \declId ->
     State.do (aliasImplementation declId fn.declaration) <| \impl ->
     State.do (aliasSignature declId fn.signature) <| \() ->
-    State.do (annotationType ctx fn.signature) <| \maybeAnnotationType ->
     let
         varName : VarName
         varName =
             Node.value impl.name
-
-        maybeScheme : Maybe Type
-        maybeScheme =
-            Maybe.map (annotationScheme ctx) maybeAnnotationType
     in
     State.pure
         { id = declId
-        , annotation = maybeScheme
+        , letDeclaration = letDeclaration
+        , annotation = Maybe.map .scheme maybeAnnotated
         , install = installFor varName
         , equations =
-            case maybeScheme of
+            case maybeAnnotated of
                 Nothing ->
                     State.map TypeEquation.toList (inferFnImplementation ctx declId impl)
 
-                Just scheme ->
-                    State.do (State.instantiateAnnotation scheme) <| \( freshAnnotationType, renaming ) ->
+                Just ann ->
                     State.map
                         (\implEquations ->
                             TypeEquation.toList
                                 (TypeEquation.cons
                                     ( TypeI.id_ declId
-                                    , freshAnnotationType
+                                    , ann.rigidType
                                     , "Binding must be consistent with its annotation"
                                     )
                                     implEquations
                                 )
                         )
-                        (inferFnImplementation (withRigidTypeVars renaming ctx) declId impl)
+                        (inferFnImplementation (withRigidTypeVars ann.renaming ctx) declId impl)
         }
 
 
@@ -418,23 +446,33 @@ functionMember ctx declNode fn installFor =
 -}
 topLevelMember : Ctx -> Node Declaration -> Expression.Function -> StateM BindingGroup.Member
 topLevelMember ctx declNode fn =
+    State.do (annotated ctx fn) <| \maybeAnnotated ->
     functionMember
         ctx
         declNode
         fn
+        Nothing
+        maybeAnnotated
         (\varName varType ->
             State.addGlobalBinding ( ctx.thisModule.moduleId, "", varName ) varType
         )
 
 
+letDeclarationRange : Node LetDeclaration -> RangeLike
+letDeclarationRange declNode =
+    RangeLike.fromRange (Node.range declNode)
+
+
 {-| A `let..in` function declaration. Adds a binding to lexical `lexicalEnv`
 -}
-letFunctionMember : Ctx -> Node LetDeclaration -> Expression.Function -> StateM BindingGroup.Member
-letFunctionMember ctx declNode fn =
+letFunctionMember : Ctx -> Dict VarName Annotated -> Node LetDeclaration -> Expression.Function -> StateM BindingGroup.Member
+letFunctionMember ctx annotatedByName declNode fn =
     functionMember
         ctx
         declNode
         fn
+        (Just (letDeclarationRange declNode))
+        (Dict.get (functionName fn) annotatedByName)
         State.addBinding
 
 
@@ -993,10 +1031,10 @@ solveLetDeclarations ctx declarations =
             in
             State.do (State.withDeeperLetRank inferAndUnify) <| \() ->
             boundVars
-                |> State.traverseUnit State.generalizeBinding
+                |> State.traverseUnit (State.generalizeBinding (Just (letDeclarationRange declNode)))
 
-        solveGroup : List Int -> StateM ()
-        solveGroup groupIndices =
+        solveGroup : Dict VarName Annotated -> List Int -> StateM ()
+        solveGroup annotatedByName groupIndices =
             let
                 ( functions, destructurings ) =
                     List.foldr
@@ -1018,7 +1056,7 @@ solveLetDeclarations ctx declarations =
             in
             State.do
                 (functions
-                    |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx declNode fn)
+                    |> State.traverse (\( declNode, fn ) -> letFunctionMember ctx annotatedByName declNode fn)
                     |> State.andThen (\members -> BindingGroup.solveGroup (unifyConfig ctx) members)
                 )
             <| \() ->
@@ -1028,33 +1066,43 @@ solveLetDeclarations ctx declarations =
                         inferDestructuring declNode patternNode exprNode
                     )
 
-        preinstallAnnotated : StateM ()
-        preinstallAnnotated =
-            declarations
-                |> State.traverseUnit
-                    (\declNode ->
-                        case Node.value declNode of
-                            LetFunction fn ->
-                                case fn.signature of
-                                    Nothing ->
-                                        State.pureUnit
+        preinstallAnnotated : Node LetDeclaration -> StateM (Maybe ( VarName, Annotated ))
+        preinstallAnnotated declNode =
+            case Node.value declNode of
+                LetFunction fn ->
+                    State.do (annotated ctx fn) <| \maybeAnnotated ->
+                    case maybeAnnotated of
+                        Nothing ->
+                            State.pure Nothing
 
-                                    Just _ ->
-                                        State.do (annotationType ctx fn.signature) <| \maybeMono ->
-                                        case maybeMono of
-                                            Nothing ->
-                                                State.pureUnit
+                        Just ann ->
+                            let
+                                rigidVars : List TypeVar
+                                rigidVars =
+                                    List.map Tuple.second ann.renaming
 
-                                            Just mono ->
-                                                State.addBinding (functionName fn) (annotationScheme ctx mono)
+                                installed : Annotated
+                                installed =
+                                    { scheme = TypeI.Forall rigidVars ann.rigidType
+                                    , rigidType = ann.rigidType
+                                    , renaming = ann.renaming
+                                    }
+                            in
+                            State.do (State.addBinding (functionName fn) installed.scheme) <| \() ->
+                            State.do (State.rememberQuantifiedByLet (letDeclarationRange declNode) rigidVars) <| \() ->
+                            State.pure (Just ( functionName fn, installed ))
 
-                            LetDestructuring _ _ ->
-                                State.pureUnit
-                    )
+                LetDestructuring _ _ ->
+                    State.pure Nothing
     in
-    State.do preinstallAnnotated <| \() ->
+    State.do (State.traverse preinstallAnnotated declarations) <| \preinstalled ->
+    let
+        annotatedByName : Dict VarName Annotated
+        annotatedByName =
+            Dict.fromList (List.filterMap identity preinstalled)
+    in
     sccs
-        |> State.traverseUnit solveGroup
+        |> State.traverseUnit (solveGroup annotatedByName)
 
 
 

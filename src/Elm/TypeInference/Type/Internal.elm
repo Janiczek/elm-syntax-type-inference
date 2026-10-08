@@ -1,9 +1,10 @@
 module Elm.TypeInference.Type.Internal exposing
     ( Id
     , MonoType(..)
+    , NamingConfig
     , Type(..)
     , TypeResolver
-    , applyNameHints
+    , applyPreferredNames
     , closeOver
     , collapseExtensible
     , collapsePrimitive
@@ -28,9 +29,9 @@ module Elm.TypeInference.Type.Internal exposing
 
 import Dict exposing (Dict)
 import Elm.Syntax.FullModuleName as FullModuleName
+import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.Syntax.Node as Node exposing (Node)
 import Elm.Syntax.TypeAnnotation as TypeAnnotation exposing (TypeAnnotation)
-import Elm.Syntax.ModuleName exposing (ModuleName)
 import Elm.TypeInference.Error.Internal exposing (FromTypeAnnotationError(..))
 import Elm.TypeInference.ImplicitImports as ImplicitImports
 import Elm.TypeInference.InferError as InferError exposing (InferErrorDetails)
@@ -43,6 +44,9 @@ import Elm.TypeInference.TypeVar as TypeVar
         , TypeVarStyle(..)
         , superTypeTag
         )
+import List.ExtraExtra
+import Maybe.Extra
+import RangeLike exposing (RangeLike)
 import Result.Extra
 import Set exposing (Set)
 
@@ -705,17 +709,17 @@ normalize ((Forall boundVars monoType) as type_) =
             )
 
 
-{-| Name generated vars after their name hints:
+{-| Name generated vars after their preferred names:
 
-    Dict #1 #2 (with hints k, v)
+    Dict #1 #2 (with preferred names k, v)
     --> Dict k v
 
-Already taken hint gets a numeric suffix: `k`, `k1`, `k2`, ...
-Vars without a hint are left for `normalize`.
+Already taken preferred name gets a numeric suffix: `k`, `k1`, `k2`, ...
+Vars without a preferred name are left for `normalize`.
 
 -}
-applyNameHints : (Id -> SuperType -> Maybe String) -> Type -> Type
-applyNameHints hintFor ((Forall boundVars monoType) as type_) =
+applyPreferredNames : (Id -> SuperType -> Maybe String) -> Type -> Type
+applyPreferredNames preferredNameFor ((Forall boundVars monoType) as type_) =
     let
         allVars : List TypeVar
         allVars =
@@ -746,15 +750,15 @@ applyNameHints hintFor ((Forall boundVars monoType) as type_) =
                                 acc
 
                             Generated theId ->
-                                case hintFor theId super of
+                                case preferredNameFor theId super of
                                     Nothing ->
                                         acc
 
-                                    Just hint ->
+                                    Just preferredName ->
                                         let
                                             name : String
                                             name =
-                                                freeHintName super hint 0 takenAcc
+                                                freePreferredName super preferredName 0 takenAcc
                                         in
                                         ( Dict.insert (TypeVar.genKeyFrom theId super) ( Named name, super ) mappingAcc
                                         , Set.insert (TypeVar.namedKeyFrom name super) takenAcc
@@ -783,106 +787,241 @@ applyNameHints hintFor ((Forall boundVars monoType) as type_) =
             type_
 
 
+type alias NamingConfig =
+    { preferredNameFor : Id -> SuperType -> Maybe { name : String, rigid : Bool }
+    , quantifiedByLet : Id -> Maybe RangeLike
+    , instancesOf : Id -> SuperType -> Maybe (List TypeVar)
+    }
+
+
 {-| Used for all types inside a top-level declaration.
-
-See test letBoundTypeVarNamesMatchEnclosingDeclarationRegression.
-
 -}
-nameVarsTogether : (Id -> SuperType -> Maybe String) -> List MonoType -> List MonoType
-nameVarsTogether hintFor types =
+nameVarsTogether : NamingConfig -> List MonoType -> List MonoType
+nameVarsTogether cfg types =
     let
-        varsPerType : List (List TypeVar)
+        varsPerType : List ( Int, List TypeVar )
         varsPerType =
-            List.map (\t -> TypeVar.deduplicate (monoTypeVars t)) types
+            List.indexedMap (\index t -> ( index, TypeVar.deduplicate (monoTypeVars t) )) types
 
-        namedTaken : Set TypeVar.NamedKey
-        namedTaken =
+        indexedVars : List ( Int, TypeVar )
+        indexedVars =
             varsPerType
-                |> List.concat
-                |> List.foldl
-                    (\( style, super ) acc ->
-                        case style of
-                            Named name ->
-                                Set.insert (TypeVar.namedKeyFrom name super) acc
+                |> List.ExtraExtra.fastConcatMap (\( index, vars ) -> List.map (Tuple.pair index) vars)
 
-                            Generated _ ->
-                                acc
-                    )
-                    Set.empty
-
-        nameNew :
-            (Id -> SuperType -> Dict Int Int -> Set TypeVar.NamedKey -> ( String, Dict Int Int ))
-            -> List TypeVar
-            -> ( Dict TypeVar.GenKey TypeVar, Set TypeVar.NamedKey )
-            -> ( Dict TypeVar.GenKey TypeVar, Set TypeVar.NamedKey )
-        nameNew pickName vars acc0 =
-            vars
+        -- Which types does each generated var appear in?
+        occurrences : Dict TypeVar.GenKey (List Int)
+        occurrences =
+            indexedVars
                 |> List.foldl
-                    (\( style, super ) (( ( mappingAcc, takenAcc ), slotsAcc ) as acc) ->
+                    (\( index, ( style, super ) ) acc ->
                         case style of
                             Named _ ->
                                 acc
 
                             Generated theId ->
-                                let
-                                    key : TypeVar.GenKey
-                                    key =
-                                        TypeVar.genKeyFrom theId super
-                                in
-                                if Dict.member key mappingAcc then
+                                consAt (TypeVar.genKeyFrom theId super) index acc
+                    )
+                    Dict.empty
+
+        indexesOf : Id -> SuperType -> List Int
+        indexesOf theId super =
+            Dict.get (TypeVar.genKeyFrom theId super) occurrences
+                |> Maybe.withDefault []
+
+        -- Names already present in each type: the named vars.
+        taken0 : Set ( Int, TypeVar.NamedKey )
+        taken0 =
+            indexedVars
+                |> List.filterMap
+                    (\( index, ( style, super ) ) ->
+                        case style of
+                            Named name ->
+                                Just ( index, TypeVar.namedKeyFrom name super )
+
+                            Generated _ ->
+                                Nothing
+                    )
+                |> Set.fromList
+
+        isRigid : Id -> SuperType -> Bool
+        isRigid theId super =
+            cfg.preferredNameFor theId super
+                |> Maybe.map .rigid
+                |> Maybe.withDefault False
+
+        -- Would making the `pending` vars same as `target` still typecheck?
+        mergeableInto : ( Id, SuperType ) -> List ( Id, SuperType ) -> Set TypeVar.GenKey -> Bool
+        mergeableInto (( targetId, targetSuper ) as target) pending visited =
+            case pending of
+                [] ->
+                    True
+
+                ( theId, super ) :: rest ->
+                    let
+                        key : TypeVar.GenKey
+                        key =
+                            TypeVar.genKeyFrom theId super
+
+                        -- `Nothing` if `target` couldn't be unified with the use.
+                        flexibleUse : TypeVar -> Maybe ( Id, SuperType )
+                        flexibleUse ( useStyle, useSuper ) =
+                            case useStyle of
+                                Generated useId ->
+                                    if useSuper == targetSuper && not (isRigid useId useSuper) then
+                                        Just ( useId, useSuper )
+
+                                    else
+                                        Nothing
+
+                                Named _ ->
+                                    Nothing
+                    in
+                    if Set.member key visited then
+                        mergeableInto target rest visited
+
+                    else
+                        case
+                            cfg.instancesOf theId super
+                                |> Maybe.andThen
+                                    (List.filter ((/=) ( Generated targetId, targetSuper ))
+                                        >> Maybe.Extra.combineMap flexibleUse
+                                    )
+                        of
+                            Nothing ->
+                                False
+
+                            Just uses ->
+                                mergeableInto target (uses ++ rest) (Set.insert key visited)
+
+        -- Is it OK for `v` to be named like `w` (which doesn't share a type with it)?
+        compatible : ( Id, SuperType ) -> ( Id, SuperType ) -> Bool
+        compatible (( vId, _ ) as v) (( wId, _ ) as w) =
+            let
+                vSite : Maybe RangeLike
+                vSite =
+                    cfg.quantifiedByLet vId
+
+                wSite : Maybe RangeLike
+                wSite =
+                    cfg.quantifiedByLet wId
+            in
+            if vSite == wSite then
+                -- siblings, or both top-level
+                True
+
+            else if encloses wSite vSite then
+                mergeableInto w [ v ] Set.empty
+
+            else if encloses vSite wSite then
+                mergeableInto v [ w ] Set.empty
+
+            else
+                True
+
+        mayUse : Id -> SuperType -> TypeVar.NamedKey -> Acc -> Bool
+        mayUse theId super key acc =
+            List.all (\index -> not (Set.member ( index, key ) acc.taken)) (indexesOf theId super)
+                && List.all (compatible ( theId, super )) (Maybe.withDefault [] (Dict.get key acc.holders))
+
+        assign : Id -> SuperType -> String -> Acc -> Acc
+        assign theId super name acc =
+            let
+                key : TypeVar.NamedKey
+                key =
+                    TypeVar.namedKeyFrom name super
+            in
+            { mapping = Dict.insert (TypeVar.genKeyFrom theId super) ( Named name, super ) acc.mapping
+            , taken = List.foldl (\index -> Set.insert ( index, key )) acc.taken (indexesOf theId super)
+            , holders = consAt key ( theId, super ) acc.holders
+            }
+
+        -- Name the not-yet-named vars that `pick` has a name for.
+        namePass : (Id -> SuperType -> Acc -> Maybe String) -> List TypeVar -> Acc -> Acc
+        namePass pick vars acc0 =
+            vars
+                |> List.foldl
+                    (\( style, super ) acc ->
+                        case style of
+                            Named _ ->
+                                acc
+
+                            Generated theId ->
+                                if Dict.member (TypeVar.genKeyFrom theId super) acc.mapping then
                                     acc
 
                                 else
-                                    let
-                                        ( name, newSlots ) =
-                                            pickName theId super slotsAcc takenAcc
-                                    in
-                                    ( ( Dict.insert key ( Named name, super ) mappingAcc
-                                      , Set.insert (TypeVar.namedKeyFrom name super) takenAcc
-                                      )
-                                    , newSlots
-                                    )
-                    )
-                    ( acc0, Dict.empty )
-                |> Tuple.first
+                                    case pick theId super acc of
+                                        Nothing ->
+                                            acc
 
-        ( mapping, _ ) =
+                                        Just name ->
+                                            assign theId super name acc
+                    )
+                    acc0
+
+        -- The first candidate the var may use.
+        firstFree : Id -> SuperType -> (Int -> String) -> Acc -> String
+        firstFree theId super candidate acc =
+            let
+                go : Int -> String
+                go attempt =
+                    let
+                        name : String
+                        name =
+                            candidate attempt
+                    in
+                    if mayUse theId super (TypeVar.namedKeyFrom name super) acc then
+                        name
+
+                    else
+                        go (attempt + 1)
+            in
+            go 0
+
+        -- Annotation vars keep their names, no questions asked.
+        rigidName : Id -> SuperType -> Acc -> Maybe String
+        rigidName theId super _ =
+            cfg.preferredNameFor theId super
+                |> Maybe.Extra.filter .rigid
+                |> Maybe.map .name
+
+        withPreferredName : Id -> SuperType -> Acc -> Maybe String
+        withPreferredName theId super acc =
+            cfg.preferredNameFor theId super
+                |> Maybe.map (\preferredName -> firstFree theId super (numberedName preferredName.name) acc)
+
+        slottedName : Id -> SuperType -> Acc -> Maybe String
+        slottedName theId super acc =
+            Just (firstFree theId super (slotName super) acc)
+
+        rigidNamed : Acc
+        rigidNamed =
+            varsPerType
+                |> List.foldl (\( _, vars ) -> namePass rigidName vars)
+                    { mapping = Dict.empty
+                    , taken = taken0
+                    , holders = Dict.empty
+                    }
+
+        allNamed : Acc
+        allNamed =
             varsPerType
                 |> List.foldl
-                    (\vars acc ->
+                    (\( _, vars ) acc ->
                         acc
-                            -- hinted vars first, like `applyNameHints`
-                            |> nameNew
-                                (\theId super slots taken ->
-                                    ( freeHintName super (Maybe.withDefault "" (hintFor theId super)) 0 taken
-                                    , slots
-                                    )
-                                )
-                                (List.filter (isHinted hintFor) vars)
+                            -- vars with a preferred name first, like `applyPreferredNames`
+                            |> namePass withPreferredName vars
                             -- then the rest, like `normalize`
-                            |> nameNew
-                                (\_ super slots taken ->
-                                    let
-                                        tag : Int
-                                        tag =
-                                            TypeVar.superTypeTag super
-
-                                        slot : Int
-                                        slot =
-                                            freeSlot super (Maybe.withDefault 0 (Dict.get tag slots)) taken
-                                    in
-                                    ( slotName super slot, Dict.insert tag (slot + 1) slots )
-                                )
-                                vars
+                            |> namePass slottedName vars
                     )
-                    ( Dict.empty, namedTaken )
+                    rigidNamed
     in
     List.map
         (mapVarsMono
             (\(( style, super ) as var) ->
                 case style of
                     Generated theId ->
-                        Dict.get (TypeVar.genKeyFrom theId super) mapping
+                        Dict.get (TypeVar.genKeyFrom theId super) allNamed.mapping
                             |> Maybe.withDefault var
 
                     Named _ ->
@@ -892,14 +1031,44 @@ nameVarsTogether hintFor types =
         types
 
 
-isHinted : (Id -> SuperType -> Maybe String) -> TypeVar -> Bool
-isHinted hintFor ( style, super ) =
-    case style of
-        Generated theId ->
-            hintFor theId super /= Nothing
+type alias Acc =
+    { mapping : Dict TypeVar.GenKey TypeVar
+    , taken : Set ( Int, TypeVar.NamedKey )
 
-        Named _ ->
+    -- eg. (2, "a") says the type #2 already has "a"
+    , holders : Dict TypeVar.NamedKey (List ( Id, SuperType ))
+
+    -- eg. "a" -> [#5, #9]
+    }
+
+
+consAt : comparable -> v -> Dict comparable (List v) -> Dict comparable (List v)
+consAt key value =
+    Dict.update key (Maybe.withDefault [] >> (::) value >> Just)
+
+
+encloses : Maybe RangeLike -> Maybe RangeLike -> Bool
+encloses outer inner =
+    case ( outer, inner ) of
+        ( Nothing, _ ) ->
+            True
+
+        ( Just _, Nothing ) ->
             False
+
+        ( Just ( outerStart, outerEnd ), Just ( innerStart, innerEnd ) ) ->
+            outerStart <= innerStart && innerEnd <= outerEnd
+
+
+{-| `name`, `name1`, `name2`, ...
+-}
+numberedName : String -> Int -> String
+numberedName preferredName attempt =
+    if attempt == 0 then
+        preferredName
+
+    else
+        preferredName ++ String.fromInt attempt
 
 
 {-| Same naming scheme as `normalize`
@@ -918,31 +1087,13 @@ slotName super slot =
                 String.fromInt slot
 
 
-freeSlot : SuperType -> Int -> Set TypeVar.NamedKey -> Int
-freeSlot super slot taken =
-    if Set.member (TypeVar.namedKeyFrom (slotName super slot) super) taken then
-        freeSlot super (slot + 1) taken
+freePreferredName : SuperType -> String -> Int -> Set TypeVar.NamedKey -> String
+freePreferredName super preferredName attempt taken =
+    if Set.member (TypeVar.namedKeyFrom (numberedName preferredName attempt) super) taken then
+        freePreferredName super preferredName (attempt + 1) taken
 
     else
-        slot
-
-
-freeHintName : SuperType -> String -> Int -> Set TypeVar.NamedKey -> String
-freeHintName super hint suffix taken =
-    let
-        candidate : String
-        candidate =
-            if suffix == 0 then
-                hint
-
-            else
-                hint ++ String.fromInt suffix
-    in
-    if Set.member (TypeVar.namedKeyFrom candidate super) taken then
-        freeHintName super hint (suffix + 1) taken
-
-    else
-        candidate
+        numberedName preferredName attempt
 
 
 mapVars : (TypeVar -> TypeVar) -> Type -> Type

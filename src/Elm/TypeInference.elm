@@ -52,6 +52,7 @@ import Elm.TypeInference.InferError exposing (InferError, InferErrorDetails(..))
 import Elm.TypeInference.ModuleIds as ModuleIds exposing (ModuleId)
 import Elm.TypeInference.ModuleIndex as ModuleIndex exposing (ModuleIndex)
 import Elm.TypeInference.ModuleLookup as ModuleLookup
+import Elm.TypeInference.Naming exposing (Naming)
 import Elm.TypeInference.ProjectError as ProjectError exposing (ProjectError)
 import Elm.TypeInference.SCC as SCC
 import Elm.TypeInference.State as State exposing (GlobalKey, StateM)
@@ -62,6 +63,7 @@ import Elm.TypeInference.TypeVar as TypeVar
 import Elm.TypeInference.Unify as Unify exposing (TypeAlias)
 import List.Extra
 import List.ExtraExtra
+import Maybe.Extra
 import RangeLike
 import Result.Extra
 import Set exposing (Set)
@@ -98,6 +100,7 @@ type alias LookupTable =
     , moduleMapping : ModuleIds.Mapping
     , cache : Array.Array (Maybe Type)
     , pool : Dict String Type
+    , naming : Naming
     }
 
 
@@ -674,7 +677,7 @@ resolveDeclaration ids tlt =
         ( cache1, pool1 ) =
             List.map2 Tuple.pair
                 ids
-                (TypeI.nameVarsTogether (hintFor subst1) (List.reverse monoTypesRev))
+                (TypeI.nameVarsTogether (namingConfig subst1 tlt.naming) (List.reverse monoTypesRev))
                 |> List.foldl
                     (\( id, monoType ) ( cache, pool ) ->
                         let
@@ -708,6 +711,7 @@ resolveDeclaration ids tlt =
     , moduleMapping = tlt.moduleMapping
     , cache = cache1
     , pool = pool1
+    , naming = tlt.naming
     }
 
 
@@ -719,9 +723,9 @@ resolveSingleIdToPublicType id tlt =
 
         monoType : MonoType
         monoType =
-            case TypeI.applyNameHints (hintFor tlt.subst) (TypeI.mono monoType0) of
-                TypeI.Forall _ hinted ->
-                    hinted
+            case TypeI.applyPreferredNames (preferredNameFor tlt.subst) (TypeI.mono monoType0) of
+                TypeI.Forall _ named ->
+                    named
 
         key : String
         key =
@@ -748,22 +752,45 @@ resolveSingleIdToPublicType id tlt =
       , moduleMapping = tlt.moduleMapping
       , cache = arraySetGrowing Nothing id (Just pubType) tlt.cache
       , pool = pool1
+      , naming = tlt.naming
       }
     )
 
 
-hintFor : SubstitutionMap.SubstitutionMap -> TypeI.Id -> TypeVar.SuperType -> Maybe String
-hintFor subst id super =
-    case SubstitutionMap.hintOf id subst of
-        Just hint ->
-            if hint.super == super then
-                Just hint.name
+namingConfig : SubstitutionMap.SubstitutionMap -> Naming -> TypeI.NamingConfig
+namingConfig subst naming =
+    { preferredNameFor =
+        \id super ->
+            preferredNameOf subst id super
+                |> Maybe.map
+                    (\preferredName ->
+                        { name = preferredName.name
+                        , rigid = preferredName.rigid
+                        }
+                    )
+    , quantifiedByLet = \id -> Dict.get id naming.quantifiedByLet
+    , instancesOf =
+        \id super ->
+            Dict.get id naming.freshInstances
+                |> Maybe.withDefault []
+                |> Maybe.Extra.combineMap
+                    (\instanceId ->
+                        SubstitutionMap.resolveVar
+                            subst
+                            ( TypeVar.Generated instanceId, super )
+                    )
+    }
 
-            else
-                Nothing
 
-        Nothing ->
-            Nothing
+preferredNameFor : SubstitutionMap.SubstitutionMap -> TypeI.Id -> TypeVar.SuperType -> Maybe String
+preferredNameFor subst id super =
+    Maybe.map .name (preferredNameOf subst id super)
+
+
+preferredNameOf : SubstitutionMap.SubstitutionMap -> TypeI.Id -> TypeVar.SuperType -> Maybe SubstitutionMap.PreferredName
+preferredNameOf subst id super =
+    SubstitutionMap.preferredNameOf id subst
+        |> Maybe.Extra.filter (\preferredName -> preferredName.super == super)
 
 
 {-| Look up one range in an already-inferred project, caching the resolved type.
@@ -1456,23 +1483,18 @@ inferModule_ currentPackage depEnv moduleMapping values aliases importedInterfac
                 importedInterfaces
                 thisIndex
     in
-    (State.do (gatherTypeAliases ctx file) <|
-        \outgoingAliases ->
-            let
-                -- `outgoingAliases` are only this module's own (small)
-                typeAliases : Dict GlobalKey TypeAlias
-                typeAliases =
-                    Dict.union outgoingAliases ctx.aliases
-            in
-            State.do (registerConstructorsAndPorts ctx file) <|
-                \() ->
-                    State.do (registerEffectMagic ctx) <|
-                        \() ->
-                            State.do (solveModule ctx typeAliases file) <|
-                                \() ->
-                                    State.do (moduleResult ctx outgoingAliases file) <|
-                                        \result ->
-                                            State.pure result
+    (State.do (gatherTypeAliases ctx file) <| \outgoingAliases ->
+    let
+        -- `outgoingAliases` are only this module's own (small)
+        typeAliases : Dict GlobalKey TypeAlias
+        typeAliases =
+            Dict.union outgoingAliases ctx.aliases
+    in
+    State.do (registerConstructorsAndPorts ctx file) <| \() ->
+    State.do (registerEffectMagic ctx) <| \() ->
+    State.do (solveModule ctx typeAliases file) <| \() ->
+    State.do (moduleResult ctx outgoingAliases file) <| \result ->
+    State.pure result
     )
         |> State.run (State.init ctx.values)
         |> Tuple.first
@@ -1488,60 +1510,58 @@ moduleResult :
             , interface : ModuleInterface
             }
 moduleResult ctx outgoingAliases file =
-    State.do State.createdIdCount <|
-        \nextId ->
-            State.do State.getNodeIds <|
-                \nodeIds ->
-                    State.do State.getSubst <|
-                        \substitutionMap ->
-                            State.do State.getGlobalEnv <|
-                                \globalEnv ->
-                                    let
-                                        byDeclaration :
-                                            { declOfId : Dict TypeI.Id Int
-                                            , declIds : Array.Array (List TypeI.Id)
-                                            }
-                                        byDeclaration =
-                                            groupByDeclaration
-                                                (List.map (\(Node range _) -> RangeLike.fromRange range) file.declarations)
-                                                nodeIds
+    State.do State.createdIdCount <| \nextId ->
+    State.do State.getNodeIds <| \nodeIds ->
+    State.do State.getSubst <| \substitutionMap ->
+    State.do State.getNaming <| \naming ->
+    State.do State.getGlobalEnv <| \globalEnv ->
+    let
+        byDeclaration :
+            { declOfId : Dict TypeI.Id Int
+            , declIds : Array.Array (List TypeI.Id)
+            }
+        byDeclaration =
+            groupByDeclaration
+                (List.map (\(Node range _) -> RangeLike.fromRange range) file.declarations)
+                nodeIds
 
-                                        exposedValues : Dict VarName TypeI.Type
-                                        exposedValues =
-                                            ctx.thisIndex.exposedValues
-                                                |> Set.foldl
-                                                    (\name acc ->
-                                                        case Dict.get ( ctx.thisIndex.moduleId, "", name ) globalEnv of
-                                                            Just scheme ->
-                                                                Dict.insert name
-                                                                    (scheme
-                                                                        |> TypeI.applyNameHints (hintFor substitutionMap)
-                                                                        |> TypeI.normalize
-                                                                    )
-                                                                    acc
+        exposedValues : Dict VarName TypeI.Type
+        exposedValues =
+            ctx.thisIndex.exposedValues
+                |> Set.foldl
+                    (\name acc ->
+                        case Dict.get ( ctx.thisIndex.moduleId, "", name ) globalEnv of
+                            Just scheme ->
+                                Dict.insert name
+                                    (scheme
+                                        |> TypeI.applyPreferredNames (preferredNameFor substitutionMap)
+                                        |> TypeI.normalize
+                                    )
+                                    acc
 
-                                                            Nothing ->
-                                                                acc
-                                                    )
-                                                    Dict.empty
-                                    in
-                                    State.pure
-                                        { table =
-                                            { nodeIds = nodeIds
-                                            , declOfId = byDeclaration.declOfId
-                                            , declIds = byDeclaration.declIds
-                                            , subst = SubstitutionMap.forLookup substitutionMap
-                                            , moduleMapping = ctx.moduleMapping
-                                            , -- We preallocate so `getAllTypes` never needs to grow the array.
-                                              cache = Array.repeat nextId Nothing
-                                            , pool = Dict.empty
-                                            }
-                                        , interface =
-                                            { moduleIndex = ctx.thisIndex
-                                            , exposedValues = exposedValues
-                                            , ownTypeAliases = outgoingAliases
-                                            }
-                                        }
+                            Nothing ->
+                                acc
+                    )
+                    Dict.empty
+    in
+    State.pure
+        { table =
+            { nodeIds = nodeIds
+            , declOfId = byDeclaration.declOfId
+            , declIds = byDeclaration.declIds
+            , subst = SubstitutionMap.forLookup substitutionMap
+            , moduleMapping = ctx.moduleMapping
+            , -- We preallocate so `getAllTypes` never needs to grow the array.
+              cache = Array.repeat nextId Nothing
+            , pool = Dict.empty
+            , naming = naming
+            }
+        , interface =
+            { moduleIndex = ctx.thisIndex
+            , exposedValues = exposedValues
+            , ownTypeAliases = outgoingAliases
+            }
+        }
 
 
 groupByDeclaration :
@@ -1872,17 +1892,15 @@ gatherTypeAliases ctx file =
                                     _ ->
                                         State.pureUnit
                         in
-                        State.do type_ <|
-                            \type__ ->
-                                State.do (registerConstructor type__) <|
-                                    \() ->
-                                        State.pure <|
-                                            Dict.insert
-                                                ( moduleId, "", Node.value typeAlias.name )
-                                                { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
-                                                , type_ = type__
-                                                }
-                                                accAcrossDeclarations
+                        State.do type_ <| \type__ ->
+                        State.do (registerConstructor type__) <| \() ->
+                        State.pure <|
+                            Dict.insert
+                                ( moduleId, "", Node.value typeAlias.name )
+                                { args = List.map (\(Node.Node _ generic) -> TypeVar.parse generic) typeAlias.generics
+                                , type_ = type__
+                                }
+                                accAcrossDeclarations
 
                     _ ->
                         State.pure accAcrossDeclarations
@@ -2116,9 +2134,8 @@ The Elm compiler magically provides:
 registerEffectMagic : ModuleCtx -> StateM ()
 registerEffectMagic ctx =
     if ctx.allowKernel then
-        State.do (registerEffectCommand ctx) <|
-            \() ->
-                registerEffectSubscription ctx
+        State.do (registerEffectCommand ctx) <| \() ->
+        registerEffectSubscription ctx
 
     else
         State.pureUnit

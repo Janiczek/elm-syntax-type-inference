@@ -7,6 +7,7 @@ import Elm.TypeInference.State as State exposing (StateM)
 import Elm.TypeInference.Type.Internal as TypeI exposing (Id, Type)
 import Elm.TypeInference.TypeEquation as TypeEquation exposing (TypeEquation)
 import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
+import RangeLike exposing (RangeLike)
 
 
 {-| One binding in the binding group.
@@ -14,6 +15,7 @@ import Elm.TypeInference.Unify as Unify exposing (UnifyConfig)
 type alias Member =
     { -- fresh type ID, registered against the declaration Range
       id : Id
+    , letDeclaration : Maybe RangeLike
     , annotation : Maybe Type
     , -- top-level decls get installed into `globalEnv`
       -- let..in bindings get installed into `lexicalEnv`
@@ -73,7 +75,7 @@ solveGroup cfg members =
                     State.pureUnit
 
                 Nothing ->
-                    State.do (State.generalize (TypeI.id_ member.id)) <| \scheme ->
+                    State.do (State.generalize member.letDeclaration (TypeI.id_ member.id)) <| \scheme ->
                     member.install scheme
         )
         members

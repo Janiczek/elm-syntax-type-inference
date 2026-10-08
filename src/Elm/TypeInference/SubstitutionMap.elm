@@ -1,16 +1,17 @@
 module Elm.TypeInference.SubstitutionMap exposing
     ( Flags
     , LetRank
-    , NameHint
+    , PreferredName
     , SubstitutionMap
     , bindRoot
     , empty
     , forLookup
-    , hintOf
+    , preferredNameOf
     , isRigid
     , letRankOf
     , linkTo
-    , setHint
+    , resolveVar
+    , setPreferredName
     , setIdLetRank
     , stampIdAtLetRank
     , substitute
@@ -53,13 +54,13 @@ type alias SubstitutionMap =
       -- Important for "business logic": `State.generalize` quantifies vars above current let-rank.
       letRanks : Array LetRank
     , -- Preferred display name of a generated typevar ID
-      hints : Dict Id NameHint
+      preferredNames : Dict Id PreferredName
     }
 
 
 {-| User-visible name for a generated var (eg. `k` from `type Dict k v`).
 -}
-type alias NameHint =
+type alias PreferredName =
     { name : String
     , super : SuperType
     , rigid : Bool
@@ -73,7 +74,7 @@ empty =
     , unionFindRanksGen = Array.empty
     , unionFindRanksNamed = Dict.empty
     , letRanks = Array.empty
-    , hints = Dict.empty
+    , preferredNames = Dict.empty
     }
 
 
@@ -86,7 +87,7 @@ forLookup store =
     , unionFindRanksGen = Array.empty
     , unionFindRanksNamed = Dict.empty
     , letRanks = Array.empty
-    , hints = store.hints
+    , preferredNames = store.preferredNames
     }
 
 
@@ -131,7 +132,7 @@ insertSlot ( style, super ) slot store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
-            , hints = store.hints
+            , preferredNames = store.preferredNames
             }
 
         Named name ->
@@ -140,7 +141,7 @@ insertSlot ( style, super ) slot store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
-            , hints = store.hints
+            , preferredNames = store.preferredNames
             }
 
 
@@ -153,7 +154,7 @@ removeSlot ( style, super ) store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
-            , hints = store.hints
+            , preferredNames = store.preferredNames
             }
 
         Named name ->
@@ -162,7 +163,7 @@ removeSlot ( style, super ) store =
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
-            , hints = store.hints
+            , preferredNames = store.preferredNames
             }
 
 
@@ -210,7 +211,7 @@ insertRank ( style, super ) rank store =
             , slotsNamed = store.slotsNamed
             , unionFindRanksNamed = store.unionFindRanksNamed
             , letRanks = store.letRanks
-            , hints = store.hints
+            , preferredNames = store.preferredNames
             }
 
         Named name ->
@@ -219,7 +220,7 @@ insertRank ( style, super ) rank store =
             , slotsNamed = store.slotsNamed
             , unionFindRanksGen = store.unionFindRanksGen
             , letRanks = store.letRanks
-            , hints = store.hints
+            , preferredNames = store.preferredNames
             }
 
 
@@ -331,6 +332,28 @@ findRoot store var =
     go [] var
 
 
+resolveVar : SubstitutionMap -> TypeVar -> Maybe TypeVar
+resolveVar store var =
+    case getSlot var store of
+        Nothing ->
+            Just var
+
+        Just (Link next) ->
+            resolveVar store next
+
+        Just (Bound (TypeVar next)) ->
+            resolveVar store next
+
+        Just (Bound _) ->
+            Nothing
+
+        Just (Ground (TypeVar next)) ->
+            resolveVar store next
+
+        Just (Ground _) ->
+            Nothing
+
+
 {-| Bind a root variable to a non-variable type.
 
 The caller must have run the occurs check first (`Unify.bind` does).
@@ -352,7 +375,7 @@ linkTo : { child : TypeVar, parent : TypeVar } -> SubstitutionMap -> Substitutio
 linkTo { child, parent } store =
     insertSlot child (Link parent) store
         |> setVarLetRank parent (min (letRankOf child store) (letRankOf parent store))
-        |> carryHint child parent
+        |> carryPreferredName child parent
 
 
 {-| Merge two distinct unbound roots, letting union-find rank pick the representative.
@@ -375,35 +398,35 @@ union a b store =
     if unionFindRankA < unionFindRankB then
         insertSlot a (Link b) store
             |> setVarLetRank b mergedLetRank
-            |> carryHint a b
+            |> carryPreferredName a b
 
     else if unionFindRankB < unionFindRankA then
         insertSlot b (Link a) store
             |> setVarLetRank a mergedLetRank
-            |> carryHint b a
+            |> carryPreferredName b a
 
     else
         insertSlot b (Link a) store
             |> insertRank a (unionFindRankA + 1)
             |> setVarLetRank a mergedLetRank
-            |> carryHint b a
+            |> carryPreferredName b a
 
 
-{-| After linking `child` to `parent`, let the parent keep the better hint.
+{-| After linking `child` to `parent`, let the parent keep the better preferredName.
 -}
-carryHint : TypeVar -> TypeVar -> SubstitutionMap -> SubstitutionMap
-carryHint ( childStyle, childSuper ) ( parentStyle, parentSuper ) store =
+carryPreferredName : TypeVar -> TypeVar -> SubstitutionMap -> SubstitutionMap
+carryPreferredName ( childStyle, childSuper ) ( parentStyle, parentSuper ) store =
     case parentStyle of
         Named _ ->
             store
 
         Generated parentId ->
             let
-                childHint : Maybe NameHint
-                childHint =
+                childPreferredName : Maybe PreferredName
+                childPreferredName =
                     case childStyle of
                         Generated childId ->
-                            Dict.get childId store.hints
+                            Dict.get childId store.preferredNames
 
                         Named name ->
                             Just
@@ -412,30 +435,30 @@ carryHint ( childStyle, childSuper ) ( parentStyle, parentSuper ) store =
                                 , rigid = False
                                 }
             in
-            case childHint of
+            case childPreferredName of
                 Nothing ->
                     store
 
-                Just hint ->
-                    if hint.super /= parentSuper then
+                Just preferredName ->
+                    if preferredName.super /= parentSuper then
                         store
 
                     else
-                        case Dict.get parentId store.hints of
+                        case Dict.get parentId store.preferredNames of
                             Nothing ->
-                                setHint parentId hint store
+                                setPreferredName parentId preferredName store
 
-                            Just parentHint ->
-                                if hint.rigid && not parentHint.rigid then
-                                    setHint parentId hint store
+                            Just parentPreferredName ->
+                                if preferredName.rigid && not parentPreferredName.rigid then
+                                    setPreferredName parentId preferredName store
 
                                 else
                                     store
 
 
-hintOf : Id -> SubstitutionMap -> Maybe NameHint
-hintOf id store =
-    Dict.get id store.hints
+preferredNameOf : Id -> SubstitutionMap -> Maybe PreferredName
+preferredNameOf id store =
+    Dict.get id store.preferredNames
 
 
 {-| Rigid variables are skolems: `Unify` only binds them to flexible variables.
@@ -445,9 +468,9 @@ isRigid : TypeVar -> SubstitutionMap -> Bool
 isRigid ( style, _ ) store =
     case style of
         Generated theId ->
-            case Dict.get theId store.hints of
-                Just hint ->
-                    hint.rigid
+            case Dict.get theId store.preferredNames of
+                Just preferredName ->
+                    preferredName.rigid
 
                 Nothing ->
                     False
@@ -456,9 +479,9 @@ isRigid ( style, _ ) store =
             False
 
 
-setHint : Id -> NameHint -> SubstitutionMap -> SubstitutionMap
-setHint id hint store =
-    { hints = Dict.insert id hint store.hints
+setPreferredName : Id -> PreferredName -> SubstitutionMap -> SubstitutionMap
+setPreferredName id preferredName store =
+    { preferredNames = Dict.insert id preferredName store.preferredNames
     , slotsGen = store.slotsGen
     , slotsNamed = store.slotsNamed
     , unionFindRanksGen = store.unionFindRanksGen
@@ -483,7 +506,7 @@ stampIdAtLetRank id letRank store =
     , slotsNamed = store.slotsNamed
     , unionFindRanksGen = store.unionFindRanksGen
     , unionFindRanksNamed = store.unionFindRanksNamed
-    , hints = store.hints
+    , preferredNames = store.preferredNames
     }
 
 
@@ -519,7 +542,7 @@ setVarLetRank ( var, _ ) letRank store =
             , slotsNamed = store.slotsNamed
             , unionFindRanksGen = store.unionFindRanksGen
             , unionFindRanksNamed = store.unionFindRanksNamed
-            , hints = store.hints
+            , preferredNames = store.preferredNames
             }
 
         TypeVar.Named _ ->
